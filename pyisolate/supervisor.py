@@ -59,7 +59,6 @@ class Supervisor:
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
 
-
     def spawn(
         self,
         name: str,
