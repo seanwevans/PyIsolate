@@ -43,7 +43,21 @@ does `BPFManager.hot_reload()` install a new set of maps.  The previous
 policy remains active until the swap completes so running sandboxes
 never observe partial state.
 
-## 4  Extending the schema
+## 4  Fallback YAML parser
+If the optional **PyYAML** dependency is missing, `pyisolate.policy` falls
+back to a very small parser.  It understands only two constructs:
+
+1. `key: value` pairs on a single line (values are treated as raw strings).
+2. A key followed by a list of one-level mappings:
+
+   ```yaml
+   net:
+     - connect: "127.0.0.1:6379"
+   ```
+
+Anything more complex results in a `ValueError` during `refresh()`.
+
+## 5  Extending the schema
 Add custom keys by shipping a new eBPF object and registering a
 `PolicyPlugin`:
 
