@@ -29,3 +29,11 @@ def test_reload_policy_delegates(tmp_path, monkeypatch):
     p.write_text("{}")
     iso.reload_policy(str(p))
     assert called["path"] == str(p)
+
+
+def test_shutdown_joins_threads():
+    sup = iso.Supervisor()
+    sb = sup.spawn("sd")
+    sup.shutdown()
+    assert not sup._watchdog.is_alive()
+    assert not sb._thread.is_alive()

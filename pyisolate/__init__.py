@@ -10,7 +10,14 @@ from .errors import (
     SandboxError,
     TimeoutError,
 )
-from .supervisor import Sandbox, Supervisor, list_active, reload_policy, spawn
+from .supervisor import (
+    Sandbox,
+    Supervisor,
+    list_active,
+    reload_policy,
+    shutdown,
+    spawn,
+)
 
 __all__ = [
     "spawn",
@@ -18,6 +25,7 @@ __all__ = [
     "Sandbox",
     "Supervisor",
     "reload_policy",
+    "shutdown",
     "SandboxError",
     "PolicyError",
     "TimeoutError",
