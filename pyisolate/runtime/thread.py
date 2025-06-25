@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import queue
 import threading
-from types import ModuleType
 from typing import Any, Optional
 
 from .. import errors
