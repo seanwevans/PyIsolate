@@ -1,5 +1,6 @@
 """Exception hierarchy for PyIsolate."""
 
+
 class SandboxError(Exception):
     """Base class for all sandbox related errors."""
 
@@ -13,6 +14,7 @@ import builtins as _builtins
 
 class TimeoutError(SandboxError, _builtins.TimeoutError):
     """Raised when a sandbox operation times out."""
+
     pass
 
 

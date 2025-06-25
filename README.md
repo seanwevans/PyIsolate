@@ -1,5 +1,9 @@
 # PyIsolate
 
+[![Black](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=black)](https://github.com/your/pyisolate/actions/workflows/ci.yml)
+[![Flake8](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=flake8)](https://github.com/your/pyisolate/actions/workflows/ci.yml)
+[![Pylint](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=pylint)](https://github.com/your/pyisolate/actions/workflows/ci.yml)
+
 **Light‑weight, eBPF‑hardened sub‑interpreter sandbox for CPython 3.13 (no‑GIL)**
 
 > Docker‑class isolation, thread‑level granularity.
@@ -20,7 +24,7 @@
 ```bash
 git clone https://github.com/<you>/pyisolate.git
 cd pyisolate
-python -m pip install -e .  # install package for development
+python -m pip install -e .[dev]  # install package for development and tooling
 pytest -q          # run the test‑suite
 python examples/echo.py
 ```
@@ -99,7 +103,7 @@ See **SECURITY.md** for a full threat‑model walkthrough.
 
 1. Fork & create a feature branch.
 2. Enable `pre‑commit` hooks (`pre‑commit install`).
-3. Run `make test` and ensure CI passes.
+3. Run `pre-commit run --all-files` and ensure CI passes.
 4. Submit a PR with docs & tests.
 
 ### Community
