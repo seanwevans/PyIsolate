@@ -73,12 +73,13 @@ def test_memory_quota_exceeded():
         sb.close()
 
 
-def test_policy_refresh_parses_yaml(tmp_path):
+def test_policy_refresh_parses_yaml(tmp_path, monkeypatch):
     policy_file = tmp_path / "p.yml"
     policy_file.write_text("version: 0.1\n")
 
-    # Should not raise for valid YAML
     import pyisolate.policy as policy
+
+    monkeypatch.setattr("pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None)
 
     policy.refresh(str(policy_file))
 
