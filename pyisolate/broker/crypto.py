@@ -42,11 +42,24 @@ class CryptoBroker:
 
     def unframe(self, data: bytes) -> bytes:
         """Validate counter, decrypt, and return plaintext."""
+        # Maintain constant-time failure handling by always invoking ``decrypt``
+        # even when the frame is malformed or the counter is unexpected.
         if len(data) < 12:
+            nonce = b"\x00" * 12
+            try:
+                self._aead.decrypt(nonce, b"\x00" * 16, b"")
+            except Exception:
+                pass
             raise ValueError("invalid frame")
+
         nonce = data[:12]
         ctr = int.from_bytes(nonce, "little")
         if ctr != self._rx_ctr:
+            try:
+                self._aead.decrypt(nonce, data[12:], b"")
+            except Exception:
+                pass
             raise ValueError("replay detected")
+
         self._rx_ctr += 1
         return self._aead.decrypt(nonce, data[12:], b"")
