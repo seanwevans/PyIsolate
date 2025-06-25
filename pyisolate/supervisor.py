@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 from typing import Dict, Optional
 
+from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
 
 
@@ -45,9 +46,12 @@ class Supervisor:
     def __init__(self):
         self._sandboxes: Dict[str, SandboxThread] = {}
         self._lock = threading.Lock()
+        self._bpf = BPFManager()
+        self._bpf.load()
 
     def spawn(self, name: str, policy=None) -> Sandbox:
         """Create and start a sandbox thread."""
+        self._cleanup()
         thread = SandboxThread(name=name, policy=policy)
         thread.start()
         with self._lock:
@@ -61,6 +65,10 @@ class Supervisor:
         self._cleanup()
         with self._lock:
             return {name: Sandbox(t) for name, t in self._sandboxes.items() if t.is_alive()}
+
+    def reload_policy(self, policy_path: str) -> None:
+        """Hot-reload policy via the BPF manager."""
+        self._bpf.hot_reload(policy_path)
 
     def _cleanup(self) -> None:
         """Remove dead sandboxes from the registry."""
@@ -76,4 +84,5 @@ _supervisor = Supervisor()
 # Public API
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
+reload_policy = _supervisor.reload_policy
 
