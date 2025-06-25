@@ -43,3 +43,12 @@ def test_recv_timeout_raises():
             sb.recv(timeout=0.1)
     finally:
         sb.close()
+
+
+def test_call_raises_exception():
+    sb = iso.spawn("t5")
+    try:
+        with pytest.raises(iso.SandboxError):
+            sb.call("math.sqrt", -1)
+    finally:
+        sb.close()
