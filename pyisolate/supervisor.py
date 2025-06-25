@@ -64,7 +64,9 @@ class Supervisor:
         """Return currently active sandboxes."""
         self._cleanup()
         with self._lock:
-            return {name: Sandbox(t) for name, t in self._sandboxes.items() if t.is_alive()}
+            return {
+                name: Sandbox(t) for name, t in self._sandboxes.items() if t.is_alive()
+            }
 
     def reload_policy(self, policy_path: str) -> None:
         """Hot-reload policy via the BPF manager."""
@@ -85,4 +87,3 @@ _supervisor = Supervisor()
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
 reload_policy = _supervisor.reload_policy
-
