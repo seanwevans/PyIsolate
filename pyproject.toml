@@ -4,7 +4,11 @@ version = "0.0.1"
 description = "Minimal skeleton for PyIsolate sandbox"
 authors = [{ name = "PyIsolate" }]
 requires-python = ">=3.11"
+<<<<<<< codex/implement-cpu,-memory,-and-policy-metrics
 dependencies = ["prometheus_client>=0.17"]
+=======
+dependencies = ["pyyaml"]
+>>>>>>> main
 
 [build-system]
 requires = ["setuptools>=64"]

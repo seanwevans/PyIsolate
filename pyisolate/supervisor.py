@@ -14,6 +14,7 @@ from .observability.metrics import MetricsExporter
 
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
+from .watchdog import ResourceWatchdog
 
 
 class Sandbox:
@@ -50,6 +51,7 @@ class Supervisor:
         self._lock = threading.Lock()
         self._bpf = BPFManager()
         self._bpf.load()
+<<<<<<< codex/implement-cpu,-memory,-and-policy-metrics
         self._metrics: Optional[MetricsExporter] = None
         if metrics_port is not None:
             self._metrics = MetricsExporter(self, port=metrics_port)
@@ -59,9 +61,26 @@ class Supervisor:
         return self._metrics
 
     def spawn(self, name: str, policy=None) -> Sandbox:
+=======
+        self._watchdog = ResourceWatchdog(self)
+        self._watchdog.start()
+
+    def spawn(
+        self,
+        name: str,
+        policy=None,
+        cpu_ms: Optional[int] = None,
+        mem_bytes: Optional[int] = None,
+    ) -> Sandbox:
+>>>>>>> main
         """Create and start a sandbox thread."""
         self._cleanup()
-        thread = SandboxThread(name=name, policy=policy)
+        thread = SandboxThread(
+            name=name,
+            policy=policy,
+            cpu_ms=cpu_ms,
+            mem_bytes=mem_bytes,
+        )
         thread.start()
         with self._lock:
             self._sandboxes[name] = thread

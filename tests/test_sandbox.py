@@ -51,3 +51,34 @@ def test_call_raises_exception():
             sb.call("math.sqrt", -1)
     finally:
         sb.close()
+
+
+
+def test_cpu_quota_exceeded():
+    sb = iso.spawn("tcpu", cpu_ms=10)
+    try:
+        sb.exec("while True: pass")
+        with pytest.raises(iso.CPUExceeded):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
+def test_memory_quota_exceeded():
+    sb = iso.spawn("tmem", mem_bytes=1024 * 1024)
+    try:
+        sb.exec("x = ' ' * (2 * 1024 * 1024)")
+        with pytest.raises(iso.MemoryExceeded):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+def test_policy_refresh_parses_yaml(tmp_path):
+    policy_file = tmp_path / "p.yml"
+    policy_file.write_text("version: 0.1\n")
+
+    # Should not raise for valid YAML
+    import pyisolate.policy as policy
+
+    policy.refresh(str(policy_file))
+
