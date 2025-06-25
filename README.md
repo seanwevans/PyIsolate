@@ -61,9 +61,9 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
  │ ╭─────╮   ╭─────╮        ╭─────╮     │
  │ │ SB1 │   │ SB2 │  …     │ SBN │     │
  │ ╰─────╯   ╰─────╯        ╰─────╯     │
- │   ↑         ↑            ↑           │
- │   │channel  │            │           │
- └───│─────────│────────────│───────────┘
+ │   ↑         ↑              ↑         │
+ │   │channel  │              │         │
+ └───┴─────────┴──────────────┴─────────┘
        eBPF cgroups & LSM hooks per thread
 ```
 
