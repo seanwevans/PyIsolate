@@ -1,5 +1,7 @@
 """Exception hierarchy for PyIsolate."""
 
+import builtins as _builtins
+
 
 class SandboxError(Exception):
     """Base class for all sandbox related errors."""
@@ -7,9 +9,6 @@ class SandboxError(Exception):
 
 class PolicyError(SandboxError):
     """Raised when a policy violation occurs."""
-
-
-import builtins as _builtins
 
 
 class TimeoutError(SandboxError, _builtins.TimeoutError):
