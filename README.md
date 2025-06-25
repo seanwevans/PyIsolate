@@ -24,7 +24,7 @@
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/pyisolate.git
+git clone https://github.com/seanwevans/pyisolate.git
 cd pyisolate
 python -m pip install -e .[dev]  # install package for development and tooling
 pytest -q          # run the test‑suite
