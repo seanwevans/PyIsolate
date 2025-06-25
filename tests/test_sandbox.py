@@ -53,7 +53,6 @@ def test_call_raises_exception():
         sb.close()
 
 
-
 def test_cpu_quota_exceeded():
     sb = iso.spawn("tcpu", cpu_ms=10)
     try:
@@ -73,6 +72,7 @@ def test_memory_quota_exceeded():
     finally:
         sb.close()
 
+
 def test_policy_refresh_parses_yaml(tmp_path):
     policy_file = tmp_path / "p.yml"
     policy_file.write_text("version: 0.1\n")
@@ -81,4 +81,3 @@ def test_policy_refresh_parses_yaml(tmp_path):
     import pyisolate.policy as policy
 
     policy.refresh(str(policy_file))
-

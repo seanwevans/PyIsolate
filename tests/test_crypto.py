@@ -1,6 +1,6 @@
 import pytest
-from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519
 
 from pyisolate.broker.crypto import CryptoBroker
 

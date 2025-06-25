@@ -6,7 +6,6 @@ concept used by the tests.  ``bpftool`` and ``llvm-objdump`` may not be
 available on the test system; any missing executables are therefore ignored.
 """
 
-
 import json
 import subprocess
 from pathlib import Path
@@ -68,4 +67,3 @@ class BPFManager:
                     "any",
                 ]
             )
-
