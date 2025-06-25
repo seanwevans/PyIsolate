@@ -1,6 +1,7 @@
 # PyIsolate
 
 [![Black](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=black)](https://github.com/your/pyisolate/actions/workflows/ci.yml)
+[![Isort](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=isort)](https://github.com/your/pyisolate/actions/workflows/ci.yml)
 [![Flake8](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=flake8)](https://github.com/your/pyisolate/actions/workflows/ci.yml)
 [![Pylint](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=pylint)](https://github.com/your/pyisolate/actions/workflows/ci.yml)
 

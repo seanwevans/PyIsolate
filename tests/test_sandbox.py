@@ -5,8 +5,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import pyisolate as iso
 import pytest
+
+import pyisolate as iso
 
 
 def test_spawn_returns_sandbox():

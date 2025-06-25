@@ -3,15 +3,14 @@
 This module exposes the high-level API described in API.md.
 """
 
-from .supervisor import Supervisor, spawn, list_active, Sandbox, reload_policy
 from .errors import (
-    SandboxError,
-    PolicyError,
-    TimeoutError,
-    MemoryExceeded,
     CPUExceeded,
+    MemoryExceeded,
+    PolicyError,
+    SandboxError,
+    TimeoutError,
 )
-
+from .supervisor import Sandbox, Supervisor, list_active, reload_policy, spawn
 
 __all__ = [
     "spawn",

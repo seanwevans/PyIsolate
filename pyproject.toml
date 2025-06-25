@@ -16,4 +16,8 @@ dev = [
     "black",
     "flake8",
     "pylint",
+    "isort",
 ]
+
+[tool.isort]
+profile = "black"
