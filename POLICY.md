@@ -38,6 +38,10 @@ sandboxes:
 ## 3  Live reloading
 `pyisolate.policy.refresh(path)` calls `bpftool map update` for every
 changed row; new limits apply within µs—no guest restart required.
+The file is parsed and validated first.  Only after a successful parse
+does `BPFManager.hot_reload()` install a new set of maps.  The previous
+policy remains active until the swap completes so running sandboxes
+never observe partial state.
 
 ## 4  Extending the schema
 Add custom keys by shipping a new eBPF object and registering a
