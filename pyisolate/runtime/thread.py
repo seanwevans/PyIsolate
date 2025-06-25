@@ -41,7 +41,13 @@ class SandboxThread(threading.Thread):
             ]
         )
         self.exec(code)
-        return self.recv()
+        result = self.recv()
+        if isinstance(result, Exception):
+            # Propagate sandbox exceptions to the caller
+            if isinstance(result, errors.SandboxError):
+                raise result
+            raise errors.SandboxError(str(result)) from result
+        return result
 
     def recv(self, timeout: Optional[float] = None):
         try:
