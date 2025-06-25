@@ -22,7 +22,7 @@ result = sb.recv(timeout=0.1)      # 1.4142135623
 
 | Method | Semantics |
 |--------|-----------|
-| `exec(src)` | Run source in guest; raises `SandboxError` on fail. |
+| `exec(src)` | Run source in guest. Exceptions are posted to the outbox and must be retrieved with `recv()`. |
 | `call(func, *args, **kw)` | Import‑free RPC: call dotted `func` inside guest. |
 | `recv(timeout=None)` | Blocking receive from guest channel. |
 | `post(obj)` *(guest side)* | Send picklable object to supervisor. |
