@@ -18,6 +18,8 @@ dev = [
     "flake8",
     "pylint",
     "isort",
+    "coverage",
+    "coverage-badge",
 ]
 
 [tool.isort]
