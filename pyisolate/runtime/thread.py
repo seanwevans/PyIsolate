@@ -51,6 +51,7 @@ class SandboxThread(threading.Thread):
         self.mem_quota_bytes = mem_bytes
         self._cpu_time = 0.0
         self._mem_peak = 0
+        self._mem_base = 0
         self._start_time = None
 
     def exec(self, src: str) -> None:
