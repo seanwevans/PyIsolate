@@ -81,3 +81,11 @@ def test_policy_refresh_parses_yaml(tmp_path):
     import pyisolate.policy as policy
 
     policy.refresh(str(policy_file))
+
+
+def test_context_manager_closes():
+    with iso.spawn("ctx") as sb:
+        sb.exec("post(1)")
+        assert sb.recv(timeout=0.5) == 1
+
+    assert not sb._thread.is_alive()
