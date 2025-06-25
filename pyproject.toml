@@ -1,0 +1,10 @@
+[project]
+name = "pyisolate"
+version = "0.0.1"
+description = "Minimal skeleton for PyIsolate sandbox"
+authors = [{ name = "PyIsolate" }]
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
