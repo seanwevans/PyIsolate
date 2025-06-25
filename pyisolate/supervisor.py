@@ -59,15 +59,6 @@ class Supervisor:
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
 
-    def shutdown(self) -> None:
-        """Stop all sandboxes and the watchdog thread."""
-        with self._lock:
-            sandboxes = list(self._sandboxes.values())
-            self._sandboxes.clear()
-        for sb in sandboxes:
-            sb.stop()
-        if self._watchdog.is_alive():
-            self._watchdog.stop()
 
     def spawn(
         self,
