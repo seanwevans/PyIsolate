@@ -51,7 +51,8 @@ class BPFManager:
             raise RuntimeError("BPF not loaded")
         with open(policy_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        self.policy_maps.update(data)
+        # Replace the active policy entirely to drop removed entries
+        self.policy_maps = data
         for key, val in data.items():
             self._run(
                 [
