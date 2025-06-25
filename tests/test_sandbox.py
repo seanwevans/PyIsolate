@@ -51,3 +51,13 @@ def test_call_raises_exception():
             sb.call("math.sqrt", -1)
     finally:
         sb.close()
+
+
+def test_policy_refresh_parses_yaml(tmp_path):
+    policy_file = tmp_path / "p.yml"
+    policy_file.write_text("version: 0.1\n")
+
+    # Should not raise for valid YAML
+    import pyisolate.policy as policy
+
+    policy.refresh(str(policy_file))
