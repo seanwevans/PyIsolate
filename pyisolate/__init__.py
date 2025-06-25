@@ -11,6 +11,7 @@ from .errors import (
     TimeoutError,
 )
 from .supervisor import Sandbox, Supervisor, list_active, reload_policy, spawn
+from .observability.metrics import MetricsExporter
 
 __all__ = [
     "spawn",
@@ -23,4 +24,5 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "MetricsExporter",
 ]

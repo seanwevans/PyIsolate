@@ -10,6 +10,8 @@ from __future__ import annotations
 import threading
 from typing import Dict, Optional
 
+from .observability.metrics import MetricsExporter
+
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
 
@@ -43,11 +45,18 @@ class Sandbox:
 class Supervisor:
     """Main supervisor owning all sandboxes."""
 
-    def __init__(self):
+    def __init__(self, metrics_port: Optional[int] = None):
         self._sandboxes: Dict[str, SandboxThread] = {}
         self._lock = threading.Lock()
         self._bpf = BPFManager()
         self._bpf.load()
+        self._metrics: Optional[MetricsExporter] = None
+        if metrics_port is not None:
+            self._metrics = MetricsExporter(self, port=metrics_port)
+
+    @property
+    def metrics(self) -> Optional[MetricsExporter]:
+        return self._metrics
 
     def spawn(self, name: str, policy=None) -> Sandbox:
         """Create and start a sandbox thread."""
@@ -58,11 +67,16 @@ class Supervisor:
             self._sandboxes[name] = thread
         # Remove references to any terminated sandboxes
         self._cleanup()
-        return Sandbox(thread)
+        sb = Sandbox(thread)
+        if self._metrics:
+            self._metrics.export()
+        return sb
 
     def list_active(self) -> Dict[str, Sandbox]:
         """Return currently active sandboxes."""
         self._cleanup()
+        if self._metrics:
+            self._metrics.export()
         with self._lock:
             return {
                 name: Sandbox(t) for name, t in self._sandboxes.items() if t.is_alive()
@@ -71,6 +85,8 @@ class Supervisor:
     def reload_policy(self, policy_path: str) -> None:
         """Hot-reload policy via the BPF manager."""
         self._bpf.hot_reload(policy_path)
+        if self._metrics:
+            self._metrics.record_policy_reload()
 
     def _cleanup(self) -> None:
         """Remove dead sandboxes from the registry."""

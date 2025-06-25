@@ -47,6 +47,18 @@ print("Result:", sandbox.recv())   # 1.4142135623730951
 sandbox.close()
 ```
 
+### Metrics
+
+```python
+import pyisolate as iso
+
+sup = iso.Supervisor(metrics_port=8000)
+sb = sup.spawn("demo")
+sup.metrics.export()
+print("Metrics available at http://localhost:8000/metrics")
+sb.close()
+```
+
 ---
 
 ## Architecture

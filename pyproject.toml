@@ -4,6 +4,7 @@ version = "0.0.1"
 description = "Minimal skeleton for PyIsolate sandbox"
 authors = [{ name = "PyIsolate" }]
 requires-python = ">=3.11"
+dependencies = ["prometheus_client>=0.17"]
 
 [build-system]
 requires = ["setuptools>=64"]
@@ -17,6 +18,7 @@ dev = [
     "flake8",
     "pylint",
     "isort",
+    "prometheus_client>=0.17",
 ]
 
 [tool.isort]
