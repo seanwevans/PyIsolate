@@ -20,7 +20,7 @@
 ```bash
 git clone https://github.com/<you>/pyisolate.git
 cd pyisolate
-make setup         # builds patched CPython, BPF objects, Cython crypto
+python -m pip install -e .  # install package for development
 pytest -q          # run the test‑suite
 python examples/echo.py
 ```
