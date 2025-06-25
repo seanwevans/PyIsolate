@@ -12,3 +12,11 @@ class Policy:
 
     def allow_tcp(self, addr: str) -> "Policy":
         return self
+
+
+def refresh(path: str) -> None:
+    """Placeholder for policy hot-reload logic."""
+    return None
+
+
+__all__ = ["Policy", "refresh"]
