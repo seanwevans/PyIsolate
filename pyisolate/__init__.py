@@ -15,8 +15,8 @@ from .supervisor import (
     Supervisor,
     list_active,
     reload_policy,
-    shutdown,
     spawn,
+    shutdown,
 )
 
 __all__ = [
