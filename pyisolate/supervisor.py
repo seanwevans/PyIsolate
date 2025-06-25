@@ -103,6 +103,15 @@ class Supervisor:
         """Hot-reload policy via the BPF manager."""
         self._bpf.hot_reload(policy_path)
 
+    def shutdown(self) -> None:
+        """Stop watchdog and terminate all running sandboxes."""
+        self._watchdog.stop()
+        with self._lock:
+            sandboxes = list(self._sandboxes.values())
+        for sb in sandboxes:
+            sb.stop()
+        self._cleanup()
+
     def _cleanup(self) -> None:
         """Remove dead sandboxes from the registry."""
         with self._lock:
@@ -118,7 +127,6 @@ _supervisor = Supervisor()
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
 reload_policy = _supervisor.reload_policy
-
 
 def shutdown() -> None:
     """Stop the current supervisor and start a fresh one."""

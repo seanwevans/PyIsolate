@@ -21,12 +21,14 @@ class BPFManager:
         self._obj = Path(__file__).with_name("dummy.bpf.o")
 
     # internal helper
-    def _run(self, cmd: list[str]) -> None:
+    def _run(self, cmd: list[str]) -> bool:
+        """Run a subprocess command and report success."""
         try:
             subprocess.run(cmd, check=True, capture_output=True)
+            return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             # Missing tools or kernel permissions are ignored in the stub
-            pass
+            return False
 
     def load(self) -> None:
         """Compile and attempt to attach the eBPF program."""
@@ -40,10 +42,13 @@ class BPFManager:
             "-o",
             str(self._obj),
         ]
-        self._run(compile_cmd)
-        self._run(["llvm-objdump", "-d", str(self._obj)])
-        self._run(["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"])
-        self.loaded = True
+        ok = True
+        ok &= self._run(compile_cmd)
+        ok &= self._run(["llvm-objdump", "-d", str(self._obj)])
+        ok &= self._run(
+            ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"]
+        )
+        self.loaded = ok
 
     def hot_reload(self, policy_path: str) -> None:
         """Refresh maps based on a policy JSON file."""
