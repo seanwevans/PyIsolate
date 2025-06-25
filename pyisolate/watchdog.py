@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 from . import errors
 
 if TYPE_CHECKING:  # pragma: no cover - circular import hints
-    from .supervisor import Supervisor
     from .runtime.thread import SandboxThread
+    from .supervisor import Supervisor
 
 
 class ResourceWatchdog(threading.Thread):

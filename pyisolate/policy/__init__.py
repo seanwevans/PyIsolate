@@ -6,6 +6,7 @@ from pathlib import Path
 try:
     import yaml  # type: ignore
 except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
+
     def _mini_load(text: str) -> dict:
         result = {}
         for line in text.splitlines():

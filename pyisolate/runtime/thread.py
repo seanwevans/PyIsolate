@@ -35,7 +35,13 @@ class Stats:
 class SandboxThread(threading.Thread):
     """Thread that runs guest code and communicates via a queue."""
 
-    def __init__(self, name: str, policy=None, cpu_ms: Optional[int] = None, mem_bytes: Optional[int] = None):
+    def __init__(
+        self,
+        name: str,
+        policy=None,
+        cpu_ms: Optional[int] = None,
+        mem_bytes: Optional[int] = None,
+    ):
         super().__init__(name=name, daemon=True)
         self._inbox: "queue.Queue[str]" = queue.Queue()
         self._outbox: "queue.Queue[Any]" = queue.Queue()
