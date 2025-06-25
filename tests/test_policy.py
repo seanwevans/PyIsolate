@@ -33,6 +33,6 @@ def test_policy_refresh_invalid(tmp_path):
 
 def test_list_parsing_without_pyyaml():
     policy = load_policy(no_yaml=True)
-    doc = "net:\n  - connect: \"127.0.0.1:6379\""
+    doc = 'net:\n  - connect: "127.0.0.1:6379"'
     result = policy.yaml.safe_load(doc)
     assert result == {"net": [{"connect": "127.0.0.1:6379"}]}

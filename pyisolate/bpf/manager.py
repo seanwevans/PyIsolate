@@ -45,7 +45,9 @@ class BPFManager:
         ok = True
         ok &= self._run(compile_cmd)
         ok &= self._run(["llvm-objdump", "-d", str(self._obj)])
-        ok &= self._run(["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"])
+        ok &= self._run(
+            ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"]
+        )
         self.loaded = ok
 
     def hot_reload(self, policy_path: str) -> None:
