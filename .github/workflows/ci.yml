@@ -102,3 +102,13 @@ jobs:
           path: |
             coverage.xml
             docs/coverage.svg
+      - name: Commit coverage badge
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          if [ -n "$(git status --porcelain docs/coverage.svg)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/coverage.svg
+            git commit -m "docs: update coverage badge" || true
+            git push
+          fi
