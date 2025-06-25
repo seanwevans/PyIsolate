@@ -71,13 +71,23 @@ jobs:
           python -m pip install -e .[dev]
           pre-commit install-hooks
       - name: Run pylint
+        id: pylint
         run: |
           set +e
-          pre-commit run pylint --all-files
-          ret=$?
+          pre-commit run pylint --all-files | tee pylint.log
+          ret=${PIPESTATUS[0]}
+          grep -oE 'rated at [0-9.]+' pylint.log | awk '{print $3}' > score.txt
+          echo "score=$(cat score.txt)" >> "$GITHUB_OUTPUT"
           if [ $ret -gt 1 ]; then
             exit $ret
           fi
+      - name: Generate pylint badge
+        run: |
+          python scripts/pylint_badge.py pylint.log docs/pylint.svg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pylint-badge
+          path: docs/pylint.svg
 
   tests:
     runs-on: ubuntu-latest
