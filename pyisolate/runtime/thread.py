@@ -12,6 +12,8 @@ import threading
 from types import ModuleType
 from typing import Any, Optional
 
+from .. import errors
+
 
 class SandboxThread(threading.Thread):
     """Thread that runs guest code and communicates via a queue."""
@@ -39,7 +41,7 @@ class SandboxThread(threading.Thread):
         try:
             return self._outbox.get(timeout=timeout)
         except queue.Empty:
-            raise TimeoutError("no message received")
+            raise errors.TimeoutError("no message received")
 
     def stop(self, timeout: float = 0.2) -> None:
         self._stop_event.set()
