@@ -7,9 +7,9 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 
 from __future__ import annotations
 
+import json
 import queue
 import threading
-import json
 from types import ModuleType
 from typing import Any, Optional
 
