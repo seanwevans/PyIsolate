@@ -79,7 +79,9 @@ def test_policy_refresh_parses_yaml(tmp_path, monkeypatch):
 
     import pyisolate.policy as policy
 
-    monkeypatch.setattr("pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
+    )
 
     policy.refresh(str(policy_file))
 

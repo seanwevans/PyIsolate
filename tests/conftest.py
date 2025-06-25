@@ -7,19 +7,20 @@ import types
 def pytest_configure(config):
     try:
         import cryptography  # pragma: no cover - real lib present
+
         _ = cryptography
     except ModuleNotFoundError:  # pragma: no cover - fallback path
-        crypto = types.ModuleType('cryptography')
-        hazmat = types.ModuleType('cryptography.hazmat')
-        primitives = types.ModuleType('cryptography.hazmat.primitives')
-        hashes = types.ModuleType('cryptography.hazmat.primitives.hashes')
-        serialization = types.ModuleType('cryptography.hazmat.primitives.serialization')
-        asymmetric = types.ModuleType('cryptography.hazmat.primitives.asymmetric')
-        x25519 = types.ModuleType('cryptography.hazmat.primitives.asymmetric.x25519')
-        ciphers = types.ModuleType('cryptography.hazmat.primitives.ciphers')
-        aead = types.ModuleType('cryptography.hazmat.primitives.ciphers.aead')
-        kdf = types.ModuleType('cryptography.hazmat.primitives.kdf')
-        hkdf = types.ModuleType('cryptography.hazmat.primitives.kdf.hkdf')
+        crypto = types.ModuleType("cryptography")
+        hazmat = types.ModuleType("cryptography.hazmat")
+        primitives = types.ModuleType("cryptography.hazmat.primitives")
+        hashes = types.ModuleType("cryptography.hazmat.primitives.hashes")
+        serialization = types.ModuleType("cryptography.hazmat.primitives.serialization")
+        asymmetric = types.ModuleType("cryptography.hazmat.primitives.asymmetric")
+        x25519 = types.ModuleType("cryptography.hazmat.primitives.asymmetric.x25519")
+        ciphers = types.ModuleType("cryptography.hazmat.primitives.ciphers")
+        aead = types.ModuleType("cryptography.hazmat.primitives.ciphers.aead")
+        kdf = types.ModuleType("cryptography.hazmat.primitives.kdf")
+        hkdf = types.ModuleType("cryptography.hazmat.primitives.kdf.hkdf")
 
         class DummySHA256:
             pass
@@ -43,10 +44,10 @@ def pytest_configure(config):
             def generate(cls):
                 return cls(b"\x00" * 32)
 
-            def exchange(self, peer: 'DummyPublicKey') -> bytes:  # type: ignore[name-defined]
+            def exchange(self, peer: "DummyPublicKey") -> bytes:  # type: ignore[name-defined]
                 return b"shared" + peer.key
 
-            def public_key(self) -> 'DummyPublicKey':  # type: ignore[name-defined]
+            def public_key(self) -> "DummyPublicKey":  # type: ignore[name-defined]
                 return DummyPublicKey(self.key)
 
             def private_bytes(self, *a, **kw):
@@ -76,7 +77,7 @@ def pytest_configure(config):
         serialization.Encoding = types.SimpleNamespace(Raw=0)
         serialization.PublicFormat = types.SimpleNamespace(Raw=0)
         serialization.PrivateFormat = types.SimpleNamespace(Raw=0)
-        serialization.NoEncryption = type('NoEncryption', (), {})
+        serialization.NoEncryption = type("NoEncryption", (), {})
 
         hashes.SHA256 = DummySHA256
         x25519.X25519PrivateKey = DummyPrivateKey
@@ -96,16 +97,16 @@ def pytest_configure(config):
         kdf.hkdf = hkdf
 
         modules = {
-            'cryptography': crypto,
-            'cryptography.hazmat': hazmat,
-            'cryptography.hazmat.primitives': primitives,
-            'cryptography.hazmat.primitives.hashes': hashes,
-            'cryptography.hazmat.primitives.serialization': serialization,
-            'cryptography.hazmat.primitives.asymmetric': asymmetric,
-            'cryptography.hazmat.primitives.asymmetric.x25519': x25519,
-            'cryptography.hazmat.primitives.ciphers': ciphers,
-            'cryptography.hazmat.primitives.ciphers.aead': aead,
-            'cryptography.hazmat.primitives.kdf': kdf,
-            'cryptography.hazmat.primitives.kdf.hkdf': hkdf,
+            "cryptography": crypto,
+            "cryptography.hazmat": hazmat,
+            "cryptography.hazmat.primitives": primitives,
+            "cryptography.hazmat.primitives.hashes": hashes,
+            "cryptography.hazmat.primitives.serialization": serialization,
+            "cryptography.hazmat.primitives.asymmetric": asymmetric,
+            "cryptography.hazmat.primitives.asymmetric.x25519": x25519,
+            "cryptography.hazmat.primitives.ciphers": ciphers,
+            "cryptography.hazmat.primitives.ciphers.aead": aead,
+            "cryptography.hazmat.primitives.kdf": kdf,
+            "cryptography.hazmat.primitives.kdf.hkdf": hkdf,
         }
         sys.modules.update(modules)
