@@ -8,8 +8,12 @@ class PolicyError(SandboxError):
     """Raised when a policy violation occurs."""
 
 
-class TimeoutError(SandboxError):
+import builtins as _builtins
+
+
+class TimeoutError(SandboxError, _builtins.TimeoutError):
     """Raised when a sandbox operation times out."""
+    pass
 
 
 class MemoryExceeded(SandboxError):
