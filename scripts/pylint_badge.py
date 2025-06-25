@@ -30,8 +30,10 @@ else:
 left_text = "pylint"
 right_text = f"{score:.2f}/10"
 
+
 def text_width(text: str) -> int:
     return len(text) * 7 + 10
+
 
 left_width = text_width(left_text)
 right_width = text_width(right_text)
