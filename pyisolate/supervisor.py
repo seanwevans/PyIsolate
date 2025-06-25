@@ -12,6 +12,7 @@ from typing import Dict, Optional
 
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
+from .watchdog import ResourceWatchdog
 
 
 class Sandbox:
@@ -48,11 +49,24 @@ class Supervisor:
         self._lock = threading.Lock()
         self._bpf = BPFManager()
         self._bpf.load()
+        self._watchdog = ResourceWatchdog(self)
+        self._watchdog.start()
 
-    def spawn(self, name: str, policy=None) -> Sandbox:
+    def spawn(
+        self,
+        name: str,
+        policy=None,
+        cpu_ms: Optional[int] = None,
+        mem_bytes: Optional[int] = None,
+    ) -> Sandbox:
         """Create and start a sandbox thread."""
         self._cleanup()
-        thread = SandboxThread(name=name, policy=policy)
+        thread = SandboxThread(
+            name=name,
+            policy=policy,
+            cpu_ms=cpu_ms,
+            mem_bytes=mem_bytes,
+        )
         thread.start()
         with self._lock:
             self._sandboxes[name] = thread
