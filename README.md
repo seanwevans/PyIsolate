@@ -4,6 +4,7 @@
 [![Isort](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=isort)](https://github.com/seanwevans/pyisolate/actions/workflows/ci.yml)
 [![Flake8](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=flake8)](https://github.com/seanwevans/pyisolate/actions/workflows/ci.yml)
 [![Pylint](https://github.com/your/pyisolate/actions/workflows/ci.yml/badge.svg?branch=main&label=pylint)](https://github.com/seanwevans/pyisolate/actions/workflows/ci.yml)
+[![Coverage](docs/coverage.svg)](docs/coverage.svg)
 
 **Light‑weight, eBPF‑hardened sub‑interpreter sandbox for CPython 3.13 (no‑GIL)**
 
