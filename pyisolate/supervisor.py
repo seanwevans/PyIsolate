@@ -56,6 +56,8 @@ class Supervisor:
         thread.start()
         with self._lock:
             self._sandboxes[name] = thread
+        # Remove references to any terminated sandboxes
+        self._cleanup()
         return Sandbox(thread)
 
     def list_active(self) -> Dict[str, Sandbox]:
