@@ -32,7 +32,15 @@ right_text = f"{score:.2f}/10"
 
 
 def text_width(text: str) -> int:
-    return len(text) * 7 + 10
+    """Return a width that comfortably fits the scaled text.
+
+    The SVG text elements are rendered at a 0.1 scale with ``textLength`` set
+    to ``len(text) * 100``. This means the text itself spans ``len(text) * 10``
+    pixels. We pad the text with 10&nbsp;px of horizontal margin on each side so
+    the badge does not look cramped.
+    """
+
+    return len(text) * 10 + 20
 
 
 left_width = text_width(left_text)
