@@ -36,6 +36,13 @@ class Sandbox:
     def close(self, timeout: float = 0.2) -> None:
         self._thread.stop(timeout)
 
+    # allow ``with spawn(...) as sb:`` usage
+    def __enter__(self) -> "Sandbox":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
     @property
     def stats(self):
         return self._thread.stats

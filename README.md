@@ -36,16 +36,14 @@ python examples/echo.py
 ```python
 import pyisolate as iso
 
-sandbox = iso.spawn("demo", policy="stdlib.readonly")
-
 code = """
 from math import sqrt
 post(sqrt(2))
 """
 
-sandbox.exec(code)
-print("Result:", sandbox.recv())   # 1.4142135623730951
-sandbox.close()
+with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
+    sandbox.exec(code)
+    print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
 
 ---

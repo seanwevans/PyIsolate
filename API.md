@@ -10,6 +10,7 @@ import pyisolate as psi
 |------|-------------|
 | `psi.spawn(name:str, policy:str|dict=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle. |
 | `sandbox.close(timeout=0.2)` | Graceful stop → SIGTERM; force‑kill after timeout. |
+| `with psi.spawn(name, policy)` | Context manager form; sandbox closes on exit. |
 | `psi.list_active() → Dict[str, Sandbox]` | Introspection. |
 
 ## 2  Executing code
