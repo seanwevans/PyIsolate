@@ -128,6 +128,7 @@ spawn = _supervisor.spawn
 list_active = _supervisor.list_active
 reload_policy = _supervisor.reload_policy
 
+
 def shutdown() -> None:
     """Stop the current supervisor and start a fresh one."""
     global _supervisor
