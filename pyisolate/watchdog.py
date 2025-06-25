@@ -35,7 +35,9 @@ class ResourceWatchdog(threading.Thread):
         while not self._stop_event.is_set():
             time.sleep(self._interval)
             with self._supervisor._lock:
-                sandboxes = list(self._supervisor._sandboxes.values())
+                sandboxes: list[SandboxThread] = list(
+                    self._supervisor._sandboxes.values()
+                )
             for sb in sandboxes:
                 if not sb.is_alive():
                     continue
@@ -44,9 +46,8 @@ class ResourceWatchdog(threading.Thread):
                     sb._outbox.put(errors.CPUExceeded())
                     sb.stop()
                     continue
-                if (
-                    sb.mem_quota_bytes is not None
-                    and stats.mem_bytes >= sb.mem_quota_bytes
+                if sb.mem_quota_bytes is not None and (
+                    stats.mem_bytes >= sb.mem_quota_bytes
                 ):
                     sb._outbox.put(errors.MemoryExceeded())
                     sb.stop()

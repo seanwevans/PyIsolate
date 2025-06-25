@@ -3,9 +3,11 @@ import types
 
 # Provide a minimal stub for the 'cryptography' package when it is missing.
 
+
 def pytest_configure(config):
     try:
         import cryptography  # pragma: no cover - real lib present
+        _ = cryptography
     except ModuleNotFoundError:  # pragma: no cover - fallback path
         crypto = types.ModuleType('cryptography')
         hazmat = types.ModuleType('cryptography.hazmat')
