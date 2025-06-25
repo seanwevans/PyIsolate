@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import json
 from types import ModuleType
 from typing import Any, Optional
 
@@ -29,11 +30,17 @@ class SandboxThread(threading.Thread):
         self._inbox.put(src)
 
     def call(self, func: str, *args, **kwargs):
-        code = f"import importlib, builtins\n" \
-               f"module_name, func_name = '{func}'.rsplit('.', 1)\n" \
-               f"mod = importlib.import_module(module_name)\n" \
-               f"res = getattr(mod, func_name)(*{args!r}, **{kwargs!r})\n" \
-               f"post(res)"
+        payload = json.dumps({"func": func, "args": args, "kwargs": kwargs})
+        code = "\n".join(
+            [
+                "import importlib, json",
+                f"payload = json.loads({payload!r})",
+                "module_name, func_name = payload['func'].rsplit('.', 1)",
+                "mod = importlib.import_module(module_name)",
+                "res = getattr(mod, func_name)(*payload['args'], **payload['kwargs'])",
+                "post(res)",
+            ]
+        )
         self.exec(code)
         return self.recv()
 
