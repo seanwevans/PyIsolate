@@ -7,15 +7,40 @@ try:
     import yaml  # type: ignore
 except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
 
+    def _unquote(value: str) -> str:
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            return value[1:-1]
+        return value
+
     def _mini_load(text: str) -> dict:
-        result = {}
-        for line in text.splitlines():
-            if not line.strip() or line.lstrip().startswith("#"):
+        result: dict[str, object] = {}
+        current: str | None = None
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
                 continue
+
+            if line.startswith("-"):
+                if current is None or not isinstance(result.get(current), list):
+                    raise ValueError("invalid YAML line")
+                item = line[1:].strip()
+                if ":" not in item:
+                    raise ValueError("invalid YAML line")
+                k, v = item.split(":", 1)
+                result[current].append({k.strip(): _unquote(v.strip())})
+                continue
+
             if ":" not in line:
                 raise ValueError("invalid YAML line")
             k, v = line.split(":", 1)
-            result[k.strip()] = v.strip()
+            key = k.strip()
+            val = v.strip()
+            if val == "":
+                result[key] = []
+                current = key
+            else:
+                result[key] = _unquote(val)
+                current = key
         return result
 
     class _MiniYaml:
