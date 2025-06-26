@@ -43,7 +43,15 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
 class CryptoBroker:
     """Broker side of the authenticated channel."""
 
-    def __init__(self, private_key: bytes, peer_key: bytes, *, pq_secret: bytes | None = None):
+    def __init__(self, private_key: bytes, peer_key: bytes):
+        self.rotate(private_key, peer_key)
+
+    @staticmethod
+    def _nonce(counter: int) -> bytes:
+        return counter.to_bytes(12, "little")
+
+    def rotate(self, private_key: bytes, peer_key: bytes) -> None:
+        """Derive a new AEAD key and reset counters."""
         priv = x25519.X25519PrivateKey.from_private_bytes(private_key)
         pub = x25519.X25519PublicKey.from_public_bytes(peer_key)
         shared = priv.exchange(pub)
@@ -63,10 +71,6 @@ class CryptoBroker:
         self._aead = ChaCha20Poly1305(self._key)
         self._tx_ctr = 0
         self._rx_ctr = 0
-
-    @staticmethod
-    def _nonce(counter: int) -> bytes:
-        return counter.to_bytes(12, "little")
 
     def frame(self, data: bytes) -> bytes:
         """Encrypt and frame ``data`` using the send counter."""
@@ -99,5 +103,9 @@ class CryptoBroker:
                 pass
             raise ValueError("replay detected")
 
+        try:
+            plaintext = self._aead.decrypt(nonce, data[12:], b"")
+        except Exception:
+            raise ValueError("decryption failed") from None
         self._rx_ctr += 1
-        return self._aead.decrypt(nonce, data[12:], b"")
+        return plaintext
