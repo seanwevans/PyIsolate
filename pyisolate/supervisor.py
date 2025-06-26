@@ -51,11 +51,16 @@ class Sandbox:
 class Supervisor:
     """Main supervisor owning all sandboxes."""
 
-    def __init__(self):
+    def __init__(self, warm_pool: int = 0):
         self._sandboxes: Dict[str, SandboxThread] = {}
         self._lock = threading.Lock()
         self._bpf = BPFManager()
         self._bpf.load()
+        self._warm_pool: list[SandboxThread] = []
+        for i in range(warm_pool):
+            t = SandboxThread(name=f"warm-{i}")
+            t.start()
+            self._warm_pool.append(t)
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
 
@@ -68,14 +73,23 @@ class Supervisor:
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         self._cleanup()
-        thread = SandboxThread(
-            name=name,
-            policy=policy,
-            cpu_ms=cpu_ms,
-            mem_bytes=mem_bytes,
-        )
-        thread.start()
         with self._lock:
+            if self._warm_pool:
+                thread = self._warm_pool.pop()
+                thread.reset(
+                    name,
+                    policy=policy,
+                    cpu_ms=cpu_ms,
+                    mem_bytes=mem_bytes,
+                )
+            else:
+                thread = SandboxThread(
+                    name=name,
+                    policy=policy,
+                    cpu_ms=cpu_ms,
+                    mem_bytes=mem_bytes,
+                )
+                thread.start()
             self._sandboxes[name] = thread
         # Remove references to any terminated sandboxes
         self._cleanup()
@@ -104,7 +118,9 @@ class Supervisor:
         self._watchdog.stop()
         with self._lock:
             sandboxes = list(self._sandboxes.values())
-        for sb in sandboxes:
+            warm = list(self._warm_pool)
+            self._warm_pool.clear()
+        for sb in sandboxes + warm:
             sb.stop()
         self._cleanup()
 
@@ -114,6 +130,7 @@ class Supervisor:
             dead = [n for n, t in self._sandboxes.items() if not t.is_alive()]
             for n in dead:
                 del self._sandboxes[n]
+            self._warm_pool = [t for t in self._warm_pool if t.is_alive()]
 
 
 _supervisor = Supervisor()

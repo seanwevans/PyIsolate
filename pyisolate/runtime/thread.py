@@ -91,6 +91,21 @@ class SandboxThread(threading.Thread):
         self._stop_event.set()
         self.join(timeout)
 
+    def reset(
+        self,
+        name: str,
+        policy=None,
+        cpu_ms: Optional[int] = None,
+        mem_bytes: Optional[int] = None,
+    ) -> None:
+        """Reuse this thread for a new sandbox."""
+        self.name = name
+        self.policy = policy
+        self.cpu_quota_ms = cpu_ms
+        self.mem_quota_bytes = mem_bytes
+        self._cpu_time = 0.0
+        self._mem_peak = 0
+
     @property
     def stats(self):
         cpu_ms = self._cpu_time
