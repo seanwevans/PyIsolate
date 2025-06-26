@@ -44,6 +44,20 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
     print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
 
+Higher‑level helpers can automatically sandbox functions and build simple
+pipelines:
+
+```python
+@iso.sandbox(policy="ml-inference", timeout="30s")
+def run_model(data):
+    ...
+
+pipeline = iso.Pipeline()
+pipeline.add_stage("extract", policy="readonly-fs")
+pipeline.add_stage("transform", policy="compute-only")
+pipeline.add_stage("load", policy="write-db")
+```
+
 ---
 
 ## Architecture

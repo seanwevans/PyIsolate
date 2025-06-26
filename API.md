@@ -44,7 +44,20 @@ cust.tcp # ["127.0.0.1:9200"]
 sb = psi.spawn("etl", policy=cust)
 ```
 
-## 4  Metrics & events
+## 4  High-level helpers
+
+```python
+@psi.sandbox(policy="ml-inference", timeout="30s")
+def run_model(data):
+    ...
+
+pipeline = psi.Pipeline()
+pipeline.add_stage("extract", policy="readonly-fs")
+pipeline.add_stage("transform", policy="compute-only")
+pipeline.add_stage("load", policy="write-db")
+```
+
+## 5  Metrics & events
 
 | Property | Meaning |
 |----------|---------|
@@ -54,7 +67,7 @@ sb = psi.spawn("etl", policy=cust)
 
 Event types: `MEM_KILL`, `CPU_THROTTLE`, `POLICY_HOTLOAD`, `BROKER_ERROR`.
 
-## 5  Exceptions hierarchy
+## 6  Exceptions hierarchy
 
 ```python
 class SandboxError(Exception): pass

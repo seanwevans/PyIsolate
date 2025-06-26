@@ -18,6 +18,7 @@ from .supervisor import (
     spawn,
     shutdown,
 )
+from .sdk import Pipeline, sandbox
 
 __all__ = [
     "spawn",
@@ -31,4 +32,6 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "sandbox",
+    "Pipeline",
 ]
