@@ -37,6 +37,10 @@ cust = (Policy(mem="256MiB")
         .allow_fs("/srv/data/*.parquet")
         .allow_tcp("127.0.0.1:9200"))
 
+# Lists of accumulated permissions are available via `fs` and `tcp`:
+cust.fs  # ["/srv/data/*.parquet"]
+cust.tcp # ["127.0.0.1:9200"]
+
 sb = psi.spawn("etl", policy=cust)
 ```
 

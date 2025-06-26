@@ -21,6 +21,8 @@ def test_policy_methods_chain():
     p = policy.Policy()
     assert p.allow_fs("/tmp") is p
     assert p.allow_tcp("127.0.0.1") is p
+    assert p.fs == ["/tmp"]
+    assert p.tcp == ["127.0.0.1"]
 
 
 def test_policy_refresh_invalid(tmp_path):
