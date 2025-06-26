@@ -6,6 +6,7 @@ sys.path.insert(0, str(ROOT))
 
 import pyisolate as iso
 from pyisolate.bpf.manager import BPFManager
+import pytest
 
 
 def test_list_active_contains_spawned():
@@ -57,3 +58,18 @@ def test_shutdown_clears_warm_pool():
     assert len(sup._warm_pool) == 1
     sup.shutdown()
     assert sup._warm_pool == []
+
+
+def test_spawn_invalid_name_empty():
+    with pytest.raises(ValueError):
+        iso.spawn("")
+
+
+def test_spawn_invalid_name_long():
+    with pytest.raises(ValueError):
+        iso.spawn("x" * 65)
+
+
+def test_spawn_invalid_name_type():
+    with pytest.raises(ValueError):
+        iso.spawn(None)  # type: ignore[arg-type]

@@ -40,6 +40,16 @@ pytest -q          # run the test‑suite
 python examples/echo.py
 ```
 
+### Structured logging
+
+Enable JSON-formatted logs for easier parsing:
+
+```python
+from pyisolate.logging import setup_structured_logging
+
+setup_structured_logging()
+```
+
 ### Hello World
 
 ```python
@@ -99,7 +109,7 @@ templates cover common scenarios:
 * **`web_scraper.yml`** – permits HTTP/HTTPS to the public internet while
   restricting filesystem access to `/tmp`.
 
-Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
+Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑load any of these files at runtime.
 
 
 

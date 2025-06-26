@@ -7,6 +7,7 @@ requires eBPF enforcement which is not implemented here.
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Dict, Optional
 
@@ -18,6 +19,9 @@ from .watchdog import ResourceWatchdog
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from . import cgroup
+
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -58,6 +62,17 @@ class Sandbox:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    def __del__(self):
+        thread = getattr(self, "_thread", None)
+        if thread is not None and thread.is_alive():
+            logger.warning(
+                "sandbox %s garbage-collected while still running", thread.name
+            )
+            try:
+                self.close()
+            except Exception:
+                pass
+
     @property
     def stats(self):
         return self._thread.stats
@@ -96,6 +111,10 @@ class Supervisor:
         numa_node: Optional[int] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("Sandbox name must be non-empty string")
+        if len(name) > 64:
+            raise ValueError("Sandbox name too long")
         self._cleanup()
         cg_path = cgroup.create(name, cpu_ms, mem_bytes)
         thread = SandboxThread(

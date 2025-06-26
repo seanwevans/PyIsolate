@@ -3,7 +3,6 @@
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from ..supervisor import reload_policy
-from .compiler import PolicyCompilerError, compile_policy
 
 import urllib.request
 import tempfile
@@ -62,6 +61,9 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
     yaml = _MiniYaml()
 
 
+from .compiler import PolicyCompilerError, compile_policy
+
+
 
 @dataclass
 class Policy:
@@ -99,7 +101,7 @@ def _validate(data: object) -> None:
             raise ValueError(f'"{section}" must be a mapping')
 
 
-def refresh(path: str) -> None:
+def refresh(path: str, token: str) -> None:
     """Parse *path* and atomically update eBPF policy maps."""
 
     # Compile and validate the YAML policy first
@@ -112,10 +114,6 @@ def refresh(path: str) -> None:
 
         json.dump(asdict(compiled), fh)
 
-    # Upon successful parse, swap the live maps via the supervisor
-    reload_policy(str(json_path.resolve()))
-
-
     # Fail fast if the YAML is malformed before touching BPF maps
     with open(path, "r", encoding="utf-8") as fh:
         try:
@@ -126,10 +124,10 @@ def refresh(path: str) -> None:
     _validate(data)
 
     # Upon successful parse, swap the live maps via the supervisor
-    reload_policy(str(Path(path).resolve()), token)
+    reload_policy(str(json_path.resolve()), token)
 
 
-def refresh_remote(url: str) -> None:
+def refresh_remote(url: str, token: str) -> None:
     """Fetch policy YAML from *url* and apply it."""
     with urllib.request.urlopen(url) as fh:
         text = fh.read().decode("utf-8")
@@ -139,7 +137,7 @@ def refresh_remote(url: str) -> None:
         tmp_path = tmp.name
 
     try:
-        refresh(tmp_path)
+        refresh(tmp_path, token)
     finally:
         os.unlink(tmp_path)
 
