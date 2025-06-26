@@ -38,3 +38,36 @@ def test_list_parsing_without_pyyaml():
     doc = 'net:\n  - connect: "127.0.0.1:6379"'
     result = policy.yaml.safe_load(doc)
     assert result == {"net": [{"connect": "127.0.0.1:6379"}]}
+
+
+def test_compile_policy_detects_conflict(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        "      - allow: \"/tmp/data\"\n"
+        "      - deny: \"/tmp/data\"\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    with pytest.raises(policy.PolicyCompilerError):
+        policy.compile_policy(str(f))
+
+
+def test_compile_policy_ok(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        "      - allow: \"/tmp/data\"\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    assert compiled.sandboxes["sb"].fs[0].path == "/tmp/data"

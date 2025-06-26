@@ -1,6 +1,6 @@
 """Policy helpers stub."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 try:
@@ -53,6 +53,7 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
     yaml = _MiniYaml()
 
 from ..supervisor import reload_policy
+from .compiler import PolicyCompilerError, compile_policy
 
 
 @dataclass
@@ -73,12 +74,23 @@ class Policy:
 def refresh(path: str) -> None:
     """Parse *path* and atomically update eBPF policy maps."""
 
-    # Fail fast if the YAML is malformed before touching BPF maps
-    with open(path, "r", encoding="utf-8") as fh:
-        yaml.safe_load(fh)
+    # Compile and validate the YAML policy first
+    compiled = compile_policy(path)
+
+    # Write the compiled representation to a JSON file for the BPF manager
+    json_path = Path(path).with_suffix(".json")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        import json
+
+        json.dump(asdict(compiled), fh)
 
     # Upon successful parse, swap the live maps via the supervisor
-    reload_policy(str(Path(path).resolve()))
+    reload_policy(str(json_path.resolve()))
 
 
-__all__ = ["Policy", "refresh"]
+__all__ = [
+    "Policy",
+    "refresh",
+    "compile_policy",
+    "PolicyCompilerError",
+]
