@@ -39,10 +39,22 @@ def test_load_runs_toolchain(monkeypatch):
         "-o",
         str(mgr._filter_obj),
     ]
+    clang_guard = [
+        "clang",
+        "-target",
+        "bpf",
+        "-O2",
+        "-c",
+        str(mgr._guard_src),
+        "-o",
+        str(mgr._guard_obj),
+    ]
     assert clang_dummy in calls
     assert clang_filter in calls
+    assert clang_guard in calls
     assert ["llvm-objdump", "-d", str(mgr._obj)] in calls
     assert ["llvm-objdump", "-d", str(mgr._filter_obj)] in calls
+    assert ["llvm-objdump", "-d", str(mgr._guard_obj)] in calls
     assert ["bpftool", "prog", "load", str(mgr._obj), "/sys/fs/bpf/dummy"] in calls
     assert [
         "bpftool",
@@ -50,6 +62,13 @@ def test_load_runs_toolchain(monkeypatch):
         "load",
         str(mgr._filter_obj),
         "/sys/fs/bpf/syscall_filter",
+    ] in calls
+    assert [
+        "bpftool",
+        "prog",
+        "load",
+        str(mgr._guard_obj),
+        "/sys/fs/bpf/resource_guard",
     ] in calls
     assert mgr.loaded
 

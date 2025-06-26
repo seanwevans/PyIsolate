@@ -21,6 +21,8 @@ class BPFManager:
         self._obj = Path(__file__).with_name("dummy.bpf.o")
         self._filter_src = Path(__file__).with_name("syscall_filter.bpf.c")
         self._filter_obj = Path(__file__).with_name("syscall_filter.bpf.o")
+        self._guard_src = Path(__file__).with_name("resource_guard.bpf.c")
+        self._guard_obj = Path(__file__).with_name("resource_guard.bpf.o")
 
     # internal helper
     def _run(self, cmd: list[str]) -> bool:
@@ -54,11 +56,23 @@ class BPFManager:
             "-o",
             str(self._filter_obj),
         ]
+        guard_compile = [
+            "clang",
+            "-target",
+            "bpf",
+            "-O2",
+            "-c",
+            str(self._guard_src),
+            "-o",
+            str(self._guard_obj),
+        ]
         ok = True
         ok &= self._run(dummy_compile)
         ok &= self._run(filter_compile)
+        ok &= self._run(guard_compile)
         ok &= self._run(["llvm-objdump", "-d", str(self._obj)])
         ok &= self._run(["llvm-objdump", "-d", str(self._filter_obj)])
+        ok &= self._run(["llvm-objdump", "-d", str(self._guard_obj)])
         ok &= self._run(
             ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"]
         )
@@ -70,6 +84,9 @@ class BPFManager:
                 str(self._filter_obj),
                 "/sys/fs/bpf/syscall_filter",
             ]
+        )
+        ok &= self._run(
+            ["bpftool", "prog", "load", str(self._guard_obj), "/sys/fs/bpf/resource_guard"]
         )
         self.loaded = ok
 
@@ -101,3 +118,7 @@ class BPFManager:
                     "any",
                 ]
             )
+
+    def open_ring_buffer(self):
+        """Return an iterator over resource guard events."""
+        return iter(())
