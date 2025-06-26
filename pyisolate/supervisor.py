@@ -13,6 +13,7 @@ from typing import Dict, Optional
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
+from . import cgroup
 
 
 class Sandbox:
@@ -73,6 +74,18 @@ class Supervisor:
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         self._cleanup()
+<<<<<<< codex/pool-pre-warmed-sub-interpreters
+=======
+        cg_path = cgroup.create(name, cpu_ms, mem_bytes)
+        thread = SandboxThread(
+            name=name,
+            policy=policy,
+            cpu_ms=cpu_ms,
+            mem_bytes=mem_bytes,
+            cgroup_path=cg_path,
+        )
+        thread.start()
+>>>>>>> main
         with self._lock:
             if self._warm_pool:
                 thread = self._warm_pool.pop()
@@ -129,6 +142,8 @@ class Supervisor:
         with self._lock:
             dead = [n for n, t in self._sandboxes.items() if not t.is_alive()]
             for n in dead:
+                thread = self._sandboxes[n]
+                cgroup.delete(getattr(thread, "_cgroup_path", None))
                 del self._sandboxes[n]
             self._warm_pool = [t for t in self._warm_pool if t.is_alive()]
 

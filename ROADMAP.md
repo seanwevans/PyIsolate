@@ -31,10 +31,13 @@ the project.
 - **WASM build target** to run the sandbox inside browsers.
 - **gRPC control‑plane plugin** for managing remote sandboxes.
 - **Language bindings** for Rust and Go to drive PyIsolate from other projects.
+- **Remote policy enforcement** over HTTP.
+- **Encrypted checkpointing** for sandbox migration.
 
 ## 5 Long‑term vision
 
 - **Distributed supervisor** that schedules sandboxes across multiple hosts.
+- **Live migration** of running sandboxes between hosts.
 - **Policy plugin ecosystem** allowing community‑contributed guards and metrics.
 - **Comprehensive dashboards** with Grafana and alerting hooks.
 
