@@ -12,13 +12,21 @@ from pathlib import Path
 
 
 class BPFManager:
-    """Compile and manage a minimal eBPF program."""
+    """Compile and manage a minimal eBPF program.
+
+    Compilation and skeleton generation are cached so that subsequent
+    instances can reuse the pre-built object.
+    """
+
+    _SKEL_CACHE: dict[Path, str] = {}
 
     def __init__(self):
         self.loaded = False
         self.policy_maps: dict[str, str] = {}
         self._src = Path(__file__).with_name("dummy.bpf.c")
         self._obj = Path(__file__).with_name("dummy.bpf.o")
+        self._skel = Path(__file__).with_name("dummy.skel.h")
+        self.skeleton = ""
 
     # internal helper
     def _run(self, cmd: list[str]) -> bool:
@@ -43,7 +51,24 @@ class BPFManager:
             str(self._obj),
         ]
         ok = True
-        ok &= self._run(compile_cmd)
+        if self._src not in self._SKEL_CACHE:
+            ok &= self._run(compile_cmd)
+            # Generate and store the skeleton if tools are available
+            skel_cmd = [
+                "sh",
+                "-c",
+                f"bpftool gen skeleton {self._obj} > {self._skel}",
+            ]
+            ok &= self._run(skel_cmd)
+            if ok and self._skel.exists():
+                try:
+                    self._SKEL_CACHE[self._src] = self._skel.read_text()
+                except OSError:
+                    self._SKEL_CACHE[self._src] = ""
+                self.skeleton = self._SKEL_CACHE[self._src]
+        else:
+            self.skeleton = self._SKEL_CACHE[self._src]
+
         ok &= self._run(["llvm-objdump", "-d", str(self._obj)])
         ok &= self._run(
             ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"]
