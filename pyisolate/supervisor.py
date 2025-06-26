@@ -92,6 +92,7 @@ class Supervisor:
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
@@ -102,6 +103,7 @@ class Supervisor:
             policy=policy,
             cpu_ms=cpu_ms,
             mem_bytes=mem_bytes,
+            allowed_imports=allowed_imports,
             on_violation=self._alerts.notify,
             tracer=self._tracer,
             numa_node=numa_node,

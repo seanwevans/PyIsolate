@@ -19,6 +19,7 @@
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
 * **eBPF‑verified contracts** — runtime assertions compiled into BPF for extra safety.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+* **Capability imports** — restrict module access per sandbox via `allowed_imports`.
 * **Restricted subset** — optional interpreter with move-only ownership semantics.
 * **Stack canaries & CFI** — sub‑interpreter compiled with `-fstack-protector-strong` and `-fsanitize=cfi`.
 * **NUMA‑aware scheduling** — bind sandboxes to the CPUs of a chosen node on multi‑socket hosts.
@@ -54,6 +55,15 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
 ```
 
 
+### Restricting imports
+
+```python
+sb = iso.spawn("safe", allowed_imports=["math"])
+sb.exec("from math import sqrt; post(sqrt(9))")
+print(sb.recv())  # 3.0
+```
+
+
 ### Policy editor
 
 Run a minimal GUI to tweak and hot‑reload YAML policies:
@@ -74,6 +84,7 @@ templates cover common scenarios:
   restricting filesystem access to `/tmp`.
 
 Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
+
 
 
 ---
