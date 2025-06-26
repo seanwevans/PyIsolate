@@ -43,6 +43,7 @@ class SandboxThread(threading.Thread):
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
         numa_node: Optional[int] = None,
+        cgroup_path=None,
     ):
         super().__init__(name=name, daemon=True)
         self._inbox: "queue.Queue[str]" = queue.Queue()
@@ -56,6 +57,7 @@ class SandboxThread(threading.Thread):
         self.numa_node = numa_node
         self._mem_base = 0
         self._start_time = None
+        self._cgroup_path = cgroup_path
 
     def exec(self, src: str) -> None:
         self._inbox.put(src)
@@ -94,6 +96,21 @@ class SandboxThread(threading.Thread):
         self._stop_event.set()
         self.join(timeout)
 
+    def reset(
+        self,
+        name: str,
+        policy=None,
+        cpu_ms: Optional[int] = None,
+        mem_bytes: Optional[int] = None,
+    ) -> None:
+        """Reuse this thread for a new sandbox."""
+        self.name = name
+        self.policy = policy
+        self.cpu_quota_ms = cpu_ms
+        self.mem_quota_bytes = mem_bytes
+        self._cpu_time = 0.0
+        self._mem_peak = 0
+
     @property
     def stats(self):
         cpu_ms = self._cpu_time
@@ -105,6 +122,12 @@ class SandboxThread(threading.Thread):
     def run(self) -> None:
         if not tracemalloc.is_tracing():
             tracemalloc.start()
+        try:
+            from .. import cgroup
+
+            cgroup.attach_current(self._cgroup_path)
+        except Exception:
+            pass
         self._mem_base = tracemalloc.get_traced_memory()[0]
         self._cpu_time = 0.0
         self._start_time = None
