@@ -101,10 +101,8 @@ class SandboxThread(threading.Thread):
         self._mem_peak = 0
         self.numa_node = numa_node
         self._mem_base = 0
-        self._start_time = None
+        self._start_time: float | None = None
         self._on_violation = on_violation
-        
-
         self._tracer = tracer or Tracer()
         self._ops = 0
         self._errors = 0

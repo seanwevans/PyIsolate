@@ -33,7 +33,10 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
                 if ":" not in item:
                     raise ValueError("invalid YAML line")
                 k, v = item.split(":", 1)
-                result[current].append({k.strip(): _unquote(v.strip())})
+                from typing import cast, List, Dict
+                assert isinstance(result[current], list)
+                lst = cast(list[dict[str, str]], result[current])
+                lst.append({k.strip(): _unquote(v.strip())})
                 continue
 
             if ":" not in line:

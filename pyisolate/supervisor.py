@@ -10,8 +10,8 @@ from __future__ import annotations
 import threading
 from typing import Dict, Optional
 
+from .capabilities import RootCapability, ROOT
 from .errors import PolicyAuthError
-
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
@@ -153,10 +153,15 @@ class Supervisor:
         """Hot-reload policy via the BPF manager if *token* matches."""
         if token != self._policy_token:
             raise PolicyAuthError("invalid policy token")
+
         self._bpf.hot_reload(policy_path)
 
-    def shutdown(self) -> None:
-        """Stop watchdog and terminate all running sandboxes."""
+    def shutdown(self, cap: RootCapability = ROOT) -> None:
+        """Stop watchdog and terminate all running sandboxes.
+
+        The ``cap`` argument models a privileged capability required to shut
+        down the supervisor.
+        """
         self._watchdog.stop()
         with self._lock:
             sandboxes = list(self._sandboxes.values())
@@ -183,15 +188,20 @@ _supervisor = Supervisor()
 # Public API
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
+
+def reload_policy(policy_path: str, cap: RootCapability = ROOT) -> None:
+    _supervisor.reload_policy(policy_path, cap)
+
 reload_policy = _supervisor.reload_policy
 set_policy_token = _supervisor.set_policy_token
 
 
-def shutdown() -> None:
+
+def shutdown(cap: RootCapability = ROOT) -> None:
     """Stop the current supervisor and start a fresh one."""
     global _supervisor
     old = _supervisor
-    old.shutdown()
+    old.shutdown(cap)
     _supervisor = Supervisor()
     global spawn, list_active, reload_policy, set_policy_token
     spawn = _supervisor.spawn

@@ -22,6 +22,8 @@ from .supervisor import (
     shutdown,
     spawn,
 )
+
+from .capabilities import ROOT, Capability, Token, RootCapability
 from .checkpoint import checkpoint, restore
 from .migration import migrate
 from .policy import refresh_remote
@@ -39,6 +41,10 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "Capability",
+    "Token",
+    "RootCapability",
+    "ROOT",
     "set_policy_token",
     "PolicyEditor",
     "parse_policy",
