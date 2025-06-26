@@ -53,6 +53,9 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
     yaml = _MiniYaml()
 
 from ..supervisor import reload_policy
+import urllib.request
+import tempfile
+import os
 
 
 @dataclass
@@ -102,4 +105,19 @@ def refresh(path: str) -> None:
     reload_policy(str(Path(path).resolve()))
 
 
-__all__ = ["Policy", "refresh"]
+def refresh_remote(url: str) -> None:
+    """Fetch policy YAML from *url* and apply it."""
+    with urllib.request.urlopen(url) as fh:
+        text = fh.read().decode("utf-8")
+
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
+        tmp.write(text)
+        tmp_path = tmp.name
+
+    try:
+        refresh(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+__all__ = ["Policy", "refresh", "refresh_remote"]
