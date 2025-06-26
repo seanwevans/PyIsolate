@@ -17,9 +17,13 @@
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
 * **eBPF‑verified contracts** — runtime assertions compiled into BPF for extra safety.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+<<<<<<< codex/add-numa-aware-scheduling
+* **NUMA‑aware scheduling** — bind sandboxes to the CPUs of a chosen node on multi‑socket hosts.
+=======
 * **Remote policy enforcement** — fetch and apply YAML over HTTP.
 * **Encrypted checkpointing** — save sandbox state with ChaCha20‑Poly1305.
 * **Migration** — transfer checkpoints to a peer host.
+>>>>>>> main
 
 ---
 

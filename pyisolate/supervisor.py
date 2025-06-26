@@ -71,21 +71,21 @@ class Supervisor:
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        numa_node: Optional[int] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         self._cleanup()
-<<<<<<< codex/pool-pre-warmed-sub-interpreters
-=======
         cg_path = cgroup.create(name, cpu_ms, mem_bytes)
         thread = SandboxThread(
             name=name,
             policy=policy,
             cpu_ms=cpu_ms,
             mem_bytes=mem_bytes,
+            numa_node=numa_node,
             cgroup_path=cg_path,
         )
         thread.start()
->>>>>>> main
+
         with self._lock:
             if self._warm_pool:
                 thread = self._warm_pool.pop()
