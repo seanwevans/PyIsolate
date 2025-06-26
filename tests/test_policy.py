@@ -27,10 +27,22 @@ def test_policy_methods_chain():
 
 def test_policy_refresh_invalid(tmp_path):
     policy = load_policy(no_yaml=True)
+    import pyisolate as iso
+    iso.set_policy_token("tok")
     bad = tmp_path / "bad.yml"
     bad.write_text("invalid")
     with pytest.raises(ValueError):
-        policy.refresh(str(bad))
+        policy.refresh(str(bad), token="tok")
+
+
+def test_refresh_bad_token(tmp_path):
+    policy = load_policy(no_yaml=True)
+    import pyisolate as iso
+    iso.set_policy_token("tok")
+    good = tmp_path / "p.yml"
+    good.write_text("version: 0.1\n")
+    with pytest.raises(iso.PolicyAuthError):
+        policy.refresh(str(good), token="wrong")
 
 
 def test_list_parsing_without_pyyaml():
@@ -38,3 +50,64 @@ def test_list_parsing_without_pyyaml():
     doc = 'net:\n  - connect: "127.0.0.1:6379"'
     result = policy.yaml.safe_load(doc)
     assert result == {"net": [{"connect": "127.0.0.1:6379"}]}
+
+
+
+def test_compile_policy_detects_conflict(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        "      - allow: \"/tmp/data\"\n"
+        "      - deny: \"/tmp/data\"\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    with pytest.raises(policy.PolicyCompilerError):
+        policy.compile_policy(str(f))
+
+
+def test_compile_policy_ok(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        "      - allow: \"/tmp/data\"\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    assert compiled.sandboxes["sb"].fs[0].path == "/tmp/data"
+
+
+def test_validation_missing_version(tmp_path):
+    policy = load_policy(no_yaml=True)
+    p = tmp_path / "p.yml"
+    p.write_text("defaults: {}\n")
+    with pytest.raises(ValueError, match="version"):
+        policy.refresh(str(p))
+
+
+def test_validation_bad_section_type(tmp_path):
+    policy = load_policy(no_yaml=True)
+    p = tmp_path / "p.yml"
+    p.write_text("version: 0.1\nsandboxes: []\n")
+    with pytest.raises(ValueError, match="sandboxes"):
+        policy.refresh(str(p))
+
+@pytest.mark.parametrize("name", ["ml.yml", "web_scraper.yml"])
+def test_templates_parse(monkeypatch, name):
+    policy = load_policy()
+    monkeypatch.setattr(
+        "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
+    )
+    path = ROOT / "policy" / name
+    policy.refresh(str(path))
+
+

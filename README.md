@@ -14,9 +14,19 @@
 * **Kernel‑enforced security** — eBPF‑LSM & cgroup hooks gate filesystem, network, and high‑risk syscalls.
 * **Deterministic quotas** — per‑interpreter arenas cap RAM; perf‑event BPF guards CPU & bandwidth.
 * **Kernel‑level accounting** — `resource_guard.bpf.c` tracks CPU time and RSS per sandbox via a ring buffer.
-* **Authenticated broker** — X25519 + ChaCha20‑Poly1305 secure control channel with replay counters.
+* **io_uring async I/O** — broker uses Linux io_uring for non-blocking operations.
+* **Token‑gated policy reload** — update YAML policies in micro‑seconds with authentication.
+* **Authenticated broker** — X25519 (optionally Kyber‑768) + ChaCha20‑Poly1305 secure control channel with replay counters.
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
+* **eBPF‑verified contracts** — runtime assertions compiled into BPF for extra safety.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+* **Capability imports** — restrict module access per sandbox via `allowed_imports`.
+* **Restricted subset** — optional interpreter with move-only ownership semantics.
+* **Stack canaries & CFI** — sub‑interpreter compiled with `-fstack-protector-strong` and `-fsanitize=cfi`.
+* **NUMA‑aware scheduling** — bind sandboxes to the CPUs of a chosen node on multi‑socket hosts.
+* **Remote policy enforcement** — fetch and apply YAML over HTTP.
+* **Encrypted checkpointing** — save sandbox state with ChaCha20‑Poly1305.
+* **Migration** — transfer checkpoints to a peer host.
 
 ---
 
@@ -44,6 +54,39 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
     sandbox.exec(code)
     print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
+
+
+### Restricting imports
+
+```python
+sb = iso.spawn("safe", allowed_imports=["math"])
+sb.exec("from math import sqrt; post(sqrt(9))")
+print(sb.recv())  # 3.0
+```
+
+
+### Policy editor
+
+Run a minimal GUI to tweak and hot‑reload YAML policies:
+
+```bash
+python -m pyisolate.editor policy/example.yml
+```
+The debug box lets you test file paths or addresses against the live policy.
+
+### Policy templates
+
+Ready-made YAML policies live in the `policy/` directory.  The following
+templates cover common scenarios:
+
+* **`ml.yml`** – baseline for machine learning workloads with outbound HTTPS
+  access and generous CPU/memory limits.
+* **`web_scraper.yml`** – permits HTTP/HTTPS to the public internet while
+  restricting filesystem access to `/tmp`.
+
+Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
+
+
 
 ---
 
@@ -73,6 +116,7 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
 * **Process boundary** – single process; sub‑interpreter ≙ trust boundary.
 * **Kernel boundary** – every sandbox thread enters its own cgroup; CO‑RE eBPF programs enforce FS/net/syscall policy.
 * **Broker** – sole path to privileged syscalls, sealed with AEAD and strict replay protection.
+* **Verified eBPF modules** – bytecode is disassembled with `llvm-objdump -d` and must succeed `bpftool prog load` so the kernel verifier approves it before any sandbox runs.
 
 See **SECURITY.md** for a full threat‑model walkthrough.
 
@@ -92,7 +136,7 @@ See **SECURITY.md** for a full threat‑model walkthrough.
 ## Roadmap
 
 * [ ] Land Landlock fallback for unprivileged kernels
-* [ ] Add Kyber‑768 / Dilithium PQ hybrids
+* [x] Add Kyber‑768 / Dilithium PQ hybrids
 * [ ] WASM build target for browser sandboxes
 * [ ] gRPC control‑plane plugin
 
@@ -109,6 +153,10 @@ See **SECURITY.md** for a full threat‑model walkthrough.
 
 * Discord: **#pyisolate**
 * Matrix: `#pyisolate:matrix.org`
+
+## Kubernetes deployment
+
+A `Dockerfile` and experimental operator are included. See [docs/kubernetes.md](docs/kubernetes.md) for details.
 
 ---
 

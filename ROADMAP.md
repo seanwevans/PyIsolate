@@ -19,6 +19,8 @@ the project.
 - **Landlock fallback** for systems without eBPF privileges.
 - **Post‑quantum handshake** using Kyber‑736 / Dilithium hybrids.
 - **Input validation** on broker messages and strict constant‑time error paths.
+- **Hardware-assisted checks** — evaluate Intel CET, ARM pointer authentication,
+  and MTE for platforms that support them.
 
 ## 3 Developer experience
 
@@ -31,10 +33,13 @@ the project.
 - **WASM build target** to run the sandbox inside browsers.
 - **gRPC control‑plane plugin** for managing remote sandboxes.
 - **Language bindings** for Rust and Go to drive PyIsolate from other projects.
+- **Remote policy enforcement** over HTTP.
+- **Encrypted checkpointing** for sandbox migration.
 
 ## 5 Long‑term vision
 
 - **Distributed supervisor** that schedules sandboxes across multiple hosts.
+- **Live migration** of running sandboxes between hosts.
 - **Policy plugin ecosystem** allowing community‑contributed guards and metrics.
 - **Comprehensive dashboards** with Grafana and alerting hooks.
 
