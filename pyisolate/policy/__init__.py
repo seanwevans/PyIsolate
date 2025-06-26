@@ -73,12 +73,37 @@ class Policy:
         return self
 
 
+<<<<<<< codex/add-policy-validation-with-error-messages
+def _validate(data: object) -> None:
+    """Validate parsed YAML schema."""
+    if not isinstance(data, dict):
+        raise ValueError("policy root must be a mapping")
+
+    if "version" not in data:
+        raise ValueError('policy missing "version" key')
+
+    if data.get("version") != "0.1":
+        raise ValueError(f"unsupported policy version: {data.get('version')}")
+
+    for section in ("defaults", "sandboxes"):
+        if section in data and not isinstance(data[section], dict):
+            raise ValueError(f'"{section}" must be a mapping')
+
+
+def refresh(path: str) -> None:
+=======
 def refresh(path: str, token: str) -> None:
+>>>>>>> main
     """Parse *path* and atomically update eBPF policy maps."""
 
     # Fail fast if the YAML is malformed before touching BPF maps
     with open(path, "r", encoding="utf-8") as fh:
-        yaml.safe_load(fh)
+        try:
+            data = yaml.safe_load(fh)
+        except Exception as exc:  # broad due to optional parser
+            raise ValueError(f"invalid YAML: {exc}") from None
+
+    _validate(data)
 
     # Upon successful parse, swap the live maps via the supervisor
     reload_policy(str(Path(path).resolve()), token)
