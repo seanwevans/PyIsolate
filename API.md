@@ -8,7 +8,7 @@ import pyisolate as psi
 
 | Call | Description |
 |------|-------------|
-| `psi.spawn(name:str, policy:str|dict=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle. |
+| `psi.spawn(name:str, policy:str|dict=None, numa_node:int|None=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle. |
 | `sandbox.close(timeout=0.2)` | Graceful stop → SIGTERM; force‑kill after timeout. |
 | `with psi.spawn(name, policy)` | Context manager form; sandbox closes on exit. |
 | `psi.list_active() → Dict[str, Sandbox]` | Introspection. |
@@ -16,7 +16,7 @@ import pyisolate as psi
 ## 2  Executing code
 
 ```python
-sb = psi.spawn("guest42", policy="defaults")
+sb = psi.spawn("guest42", policy="defaults", numa_node=0)
 sb.exec("from math import sqrt; post(sqrt(2))")
 result = sb.recv(timeout=0.1)      # 1.4142135623
 ```
@@ -27,6 +27,9 @@ result = sb.recv(timeout=0.1)      # 1.4142135623
 | `call(func, *args, **kw)` | Import‑free RPC: call dotted `func` inside guest. |
 | `recv(timeout=None)` | Blocking receive from guest channel. |
 | `post(obj)` *(guest side)* | Send picklable object to supervisor. |
+| `enable_tracing()` | Start recording guest operations. |
+| `get_syscall_log()` | Return recorded operations. |
+| `profile()` | Snapshot of current CPU and memory usage. |
 
 ## 3  Policy helpers
 
@@ -41,7 +44,12 @@ cust = (Policy(mem="256MiB")
 cust.fs  # ["/srv/data/*.parquet"]
 cust.tcp # ["127.0.0.1:9200"]
 
+
 sb = psi.spawn("etl", policy=cust)
+
+# Configure token and hot-reload policies
+psi.set_policy_token("secret")
+policy.refresh("/tmp/policy.yml", token="secret")
 ```
 
 ## 4  Metrics & events
@@ -54,11 +62,21 @@ sb = psi.spawn("etl", policy=cust)
 
 Event types: `MEM_KILL`, `CPU_THROTTLE`, `POLICY_HOTLOAD`, `BROKER_ERROR`.
 
-## 5  Exceptions hierarchy
+## 5  Distributed features
+
+| Call | Description |
+|------|-------------|
+| `psi.checkpoint(sb, key:bytes) -> bytes` | Serialize and encrypt sandbox state. |
+| `psi.restore(blob:bytes, key:bytes) -> Sandbox` | Spawn sandbox from encrypted state. |
+| `psi.migrate(sb, host:str, key:bytes) -> Sandbox` | Send checkpoint to `host` and restore there. |
+| `policy.refresh_remote(url:str)` | Fetch YAML policy over HTTP and apply. |
+
+## 6  Exceptions hierarchy
 
 ```python
 class SandboxError(Exception): pass
 class PolicyError(SandboxError): pass
+class PolicyAuthError(PolicyError): pass
 class TimeoutError(SandboxError): pass
 class MemoryExceeded(SandboxError): pass
 class CPUExceeded(SandboxError): pass

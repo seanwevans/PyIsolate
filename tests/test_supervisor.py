@@ -27,7 +27,8 @@ def test_reload_policy_delegates(tmp_path, monkeypatch):
     monkeypatch.setattr(BPFManager, "hot_reload", fake_hot_reload)
     p = tmp_path / "p.json"
     p.write_text("{}")
-    iso.reload_policy(str(p))
+    iso.set_policy_token("tok")
+    iso.reload_policy(str(p), token="tok")
     assert called["path"] == str(p)
 
 
@@ -37,3 +38,22 @@ def test_shutdown_joins_threads():
     sup.shutdown()
     assert not sup._watchdog.is_alive()
     assert not sb._thread.is_alive()
+
+
+def test_spawn_uses_warm_pool():
+    sup = iso.Supervisor(warm_pool=1)
+    try:
+        warm = sup._warm_pool[0]
+        sb = sup.spawn("warm")
+        assert sb._thread is warm
+        assert len(sup._warm_pool) == 0
+    finally:
+        sb.close()
+        sup.shutdown()
+
+
+def test_shutdown_clears_warm_pool():
+    sup = iso.Supervisor(warm_pool=1)
+    assert len(sup._warm_pool) == 1
+    sup.shutdown()
+    assert sup._warm_pool == []

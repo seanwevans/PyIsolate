@@ -36,8 +36,9 @@ sandboxes:
 *Rule precedence:* first match wins. Unmatched operation → **deny**.
 
 ## 3  Live reloading
-`pyisolate.policy.refresh(path)` calls `bpftool map update` for every
-changed row; new limits apply within µs—no guest restart required.
+`pyisolate.policy.refresh(path, token)` calls `bpftool map update` for every
+changed row; the supervisor verifies *token* and new limits apply within µs—no
+guest restart required.
 The file is parsed and validated first.  Only after a successful parse
 does `BPFManager.hot_reload()` install a new set of maps.  The previous
 policy remains active until the swap completes so running sandboxes
@@ -73,3 +74,15 @@ class IpcLimiter(PolicyPlugin):
 
 register_plugin(IpcLimiter)
 ```
+
+## 6  Policy templates
+
+Several ready-to-use policies are included under the `policy/` directory:
+
+| File | Intended use |
+|------|--------------|
+| `ml.yml` | Machine learning jobs with outbound HTTPS and generous quotas |
+| `web_scraper.yml` | Basic web scraping with only HTTP/HTTPS access |
+
+Load any template with `pyisolate.policy.refresh("policy/<name>.yml")` and the
+new limits take effect instantly.
