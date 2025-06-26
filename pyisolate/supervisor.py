@@ -36,6 +36,15 @@ class Sandbox:
     def close(self, timeout: float = 0.2) -> None:
         self._thread.stop(timeout)
 
+    def enable_tracing(self) -> None:
+        self._thread.enable_tracing()
+
+    def get_syscall_log(self) -> list[str]:
+        return self._thread.get_syscall_log()
+
+    def profile(self):
+        return self._thread.profile()
+
     # allow ``with spawn(...) as sb:`` usage
     def __enter__(self) -> "Sandbox":
         return self
