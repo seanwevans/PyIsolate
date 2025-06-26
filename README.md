@@ -44,6 +44,18 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
     print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
 
+### Policy templates
+
+Ready-made YAML policies live in the `policy/` directory.  The following
+templates cover common scenarios:
+
+* **`ml.yml`** – baseline for machine learning workloads with outbound HTTPS
+  access and generous CPU/memory limits.
+* **`web_scraper.yml`** – permits HTTP/HTTPS to the public internet while
+  restricting filesystem access to `/tmp`.
+
+Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
+
 ---
 
 ## Architecture
