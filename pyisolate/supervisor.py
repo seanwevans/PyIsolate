@@ -96,6 +96,10 @@ class Supervisor:
         numa_node: Optional[int] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("Sandbox name must be non-empty string")
+        if len(name) > 64:
+            raise ValueError("Sandbox name too long")
         self._cleanup()
         cg_path = cgroup.create(name, cpu_ms, mem_bytes)
         thread = SandboxThread(
