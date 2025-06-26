@@ -83,7 +83,8 @@ def test_policy_refresh_parses_yaml(tmp_path, monkeypatch):
         "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
     )
 
-    policy.refresh(str(policy_file))
+    iso.set_policy_token("tok")
+    policy.refresh(str(policy_file), token="tok")
 
 
 def test_context_manager_closes():

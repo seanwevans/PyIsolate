@@ -53,6 +53,9 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
     yaml = _MiniYaml()
 
 from ..supervisor import reload_policy
+import urllib.request
+import tempfile
+import os
 
 
 @dataclass
@@ -70,7 +73,7 @@ class Policy:
         return self
 
 
-def refresh(path: str) -> None:
+def refresh(path: str, token: str) -> None:
     """Parse *path* and atomically update eBPF policy maps."""
 
     # Fail fast if the YAML is malformed before touching BPF maps
@@ -78,7 +81,22 @@ def refresh(path: str) -> None:
         yaml.safe_load(fh)
 
     # Upon successful parse, swap the live maps via the supervisor
-    reload_policy(str(Path(path).resolve()))
+    reload_policy(str(Path(path).resolve()), token)
 
 
-__all__ = ["Policy", "refresh"]
+def refresh_remote(url: str) -> None:
+    """Fetch policy YAML from *url* and apply it."""
+    with urllib.request.urlopen(url) as fh:
+        text = fh.read().decode("utf-8")
+
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
+        tmp.write(text)
+        tmp_path = tmp.name
+
+    try:
+        refresh(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+__all__ = ["Policy", "refresh", "refresh_remote"]
