@@ -11,6 +11,10 @@ class PolicyError(SandboxError):
     """Raised when a policy violation occurs."""
 
 
+class PolicyAuthError(PolicyError):
+    """Raised when a policy update is not properly authenticated."""
+
+
 class TimeoutError(SandboxError, _builtins.TimeoutError):
     """Raised when a sandbox operation times out."""
 
