@@ -41,6 +41,7 @@ class SandboxThread(threading.Thread):
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        allowed_imports: Optional[list[str]] = None,
     ):
         super().__init__(name=name, daemon=True)
         self._inbox: "queue.Queue[str]" = queue.Queue()
@@ -49,6 +50,11 @@ class SandboxThread(threading.Thread):
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
         self.mem_quota_bytes = mem_bytes
+        if allowed_imports is not None:
+            self.allowed_imports = set(allowed_imports)
+            self.allowed_imports.add("json")
+        else:
+            self.allowed_imports = None
         self._cpu_time = 0.0
         self._mem_peak = 0
         self._mem_base = 0
@@ -61,10 +67,10 @@ class SandboxThread(threading.Thread):
         payload = json.dumps({"func": func, "args": args, "kwargs": kwargs})
         code = "\n".join(
             [
-                "import importlib, json",
+                "import json",
                 f"payload = json.loads({payload!r})",
                 "module_name, func_name = payload['func'].rsplit('.', 1)",
-                "mod = importlib.import_module(module_name)",
+                "mod = __import__(module_name, fromlist=['_'])",
                 "res = getattr(mod, func_name)(*payload['args'], **payload['kwargs'])",
                 "post(res)",
             ]
@@ -106,6 +112,13 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._start_time = None
         local_vars = {"post": self._outbox.put}
+        if self.allowed_imports is not None:
+            from .imports import CapabilityImporter
+            import builtins as _builtins
+
+            builtins_dict = _builtins.__dict__.copy()
+            builtins_dict["__import__"] = CapabilityImporter(self.allowed_imports)
+            local_vars["__builtins__"] = builtins_dict
         while not self._stop_event.is_set():
             try:
                 src = self._inbox.get(timeout=0.1)

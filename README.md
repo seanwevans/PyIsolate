@@ -16,6 +16,7 @@
 * **Authenticated broker** — X25519 + ChaCha20‑Poly1305 secure control channel with replay counters.
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+* **Capability imports** — restrict module access per sandbox via `allowed_imports`.
 
 ---
 
@@ -42,6 +43,14 @@ post(sqrt(2))
 with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
     sandbox.exec(code)
     print("Result:", sandbox.recv())   # 1.4142135623730951
+```
+
+### Restricting imports
+
+```python
+sb = iso.spawn("safe", allowed_imports=["math"])
+sb.exec("from math import sqrt; post(sqrt(9))")
+print(sb.recv())  # 3.0
 ```
 
 ---

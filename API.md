@@ -8,7 +8,7 @@ import pyisolate as psi
 
 | Call | Description |
 |------|-------------|
-| `psi.spawn(name:str, policy:str|dict=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle. |
+| `psi.spawn(name:str, policy:str|dict=None, allowed_imports:list[str]|None=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle with module whitelist. |
 | `sandbox.close(timeout=0.2)` | Graceful stop → SIGTERM; force‑kill after timeout. |
 | `with psi.spawn(name, policy)` | Context manager form; sandbox closes on exit. |
 | `psi.list_active() → Dict[str, Sandbox]` | Introspection. |
@@ -35,7 +35,8 @@ from pyisolate.policy import Policy
 
 cust = (Policy(mem="256MiB")
         .allow_fs("/srv/data/*.parquet")
-        .allow_tcp("127.0.0.1:9200"))
+        .allow_tcp("127.0.0.1:9200")
+        .allow_import("math"))
 
 # Lists of accumulated permissions are available via `fs` and `tcp`:
 cust.fs  # ["/srv/data/*.parquet"]

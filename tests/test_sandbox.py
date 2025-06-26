@@ -35,6 +35,23 @@ def test_call_returns_result():
         sb.close()
 
 
+def test_allowed_imports_success():
+    sb = iso.spawn("imp_ok", allowed_imports=["math"])
+    try:
+        assert sb.call("math.sqrt", 16) == 4.0
+    finally:
+        sb.close()
+
+
+def test_allowed_imports_blocked():
+    sb = iso.spawn("imp_no", allowed_imports=["json"])
+    try:
+        with pytest.raises(iso.PolicyError):
+            sb.call("math.sqrt", 4)
+    finally:
+        sb.close()
+
+
 def test_recv_timeout_raises():
     sb = iso.spawn("t4")
     try:

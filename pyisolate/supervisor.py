@@ -65,6 +65,7 @@ class Supervisor:
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        allowed_imports: Optional[list[str]] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         self._cleanup()
@@ -73,6 +74,7 @@ class Supervisor:
             policy=policy,
             cpu_ms=cpu_ms,
             mem_bytes=mem_bytes,
+            allowed_imports=allowed_imports,
         )
         thread.start()
         with self._lock:
