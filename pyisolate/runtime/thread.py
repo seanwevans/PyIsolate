@@ -12,11 +12,12 @@ import json
 import logging
 import queue
 import signal
+import socket
 import threading
 import time
 import tracemalloc
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Iterable
 
 from .. import errors
 from ..numa import bind_current_thread
@@ -37,6 +38,22 @@ _SAFE_BUILTINS = {
 }
 for name in _FORBIDDEN:
     _SAFE_BUILTINS.pop(name, None)
+
+
+_thread_local = threading.local()
+_orig_connect = socket.socket.connect
+
+
+def _guarded_connect(self: socket.socket, address: Iterable[str]) -> Any:
+    allowed = getattr(_thread_local, "tcp", None)
+    if allowed is not None:
+        host, port = address
+        if f"{host}:{port}" not in allowed:
+            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    return _orig_connect(self, address)
+
+
+socket.socket.connect = _guarded_connect
 
 
 def _sigxcpu_handler(signum, frame):
@@ -170,6 +187,11 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._start_time = None
 
+        allowed_tcp = set()
+        if self.policy is not None and getattr(self.policy, "tcp", None):
+            allowed_tcp = set(self.policy.tcp)
+        _thread_local.tcp = allowed_tcp
+
         local_vars = {"post": self._outbox.put, "__builtins__": _SAFE_BUILTINS}
 
         if self.numa_node is not None:
@@ -194,3 +216,5 @@ class SandboxThread(threading.Thread):
                 self._mem_peak = max(self._mem_peak, peak - self._mem_base)
             except Exception as exc:  # real impl would sanitize
                 self._outbox.put(exc)
+        _thread_local.tcp = set()
+        
