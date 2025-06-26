@@ -25,8 +25,13 @@ class BPFManager:
         self.policy_maps: dict[str, str] = {}
         self._src = Path(__file__).with_name("dummy.bpf.c")
         self._obj = Path(__file__).with_name("dummy.bpf.o")
+<<<<<<< codex/pre-compile-ebpf-programs-and-cache-skeletons
         self._skel = Path(__file__).with_name("dummy.skel.h")
         self.skeleton = ""
+=======
+        self._filter_src = Path(__file__).with_name("syscall_filter.bpf.c")
+        self._filter_obj = Path(__file__).with_name("syscall_filter.bpf.o")
+>>>>>>> main
 
     # internal helper
     def _run(self, cmd: list[str]) -> bool:
@@ -39,8 +44,8 @@ class BPFManager:
             return False
 
     def load(self) -> None:
-        """Compile and attempt to attach the eBPF program."""
-        compile_cmd = [
+        """Compile and attempt to attach the eBPF programs."""
+        dummy_compile = [
             "clang",
             "-target",
             "bpf",
@@ -50,7 +55,18 @@ class BPFManager:
             "-o",
             str(self._obj),
         ]
+        filter_compile = [
+            "clang",
+            "-target",
+            "bpf",
+            "-O2",
+            "-c",
+            str(self._filter_src),
+            "-o",
+            str(self._filter_obj),
+        ]
         ok = True
+<<<<<<< codex/pre-compile-ebpf-programs-and-cache-skeletons
         if self._src not in self._SKEL_CACHE:
             ok &= self._run(compile_cmd)
             # Generate and store the skeleton if tools are available
@@ -69,9 +85,23 @@ class BPFManager:
         else:
             self.skeleton = self._SKEL_CACHE[self._src]
 
+=======
+        ok &= self._run(dummy_compile)
+        ok &= self._run(filter_compile)
+>>>>>>> main
         ok &= self._run(["llvm-objdump", "-d", str(self._obj)])
+        ok &= self._run(["llvm-objdump", "-d", str(self._filter_obj)])
         ok &= self._run(
             ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"]
+        )
+        ok &= self._run(
+            [
+                "bpftool",
+                "prog",
+                "load",
+                str(self._filter_obj),
+                "/sys/fs/bpf/syscall_filter",
+            ]
         )
         self.loaded = ok
 

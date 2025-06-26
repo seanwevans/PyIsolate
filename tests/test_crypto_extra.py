@@ -60,3 +60,40 @@ def test_rx_final_frame_allowed():
     b._rx_ctr = CTR_LIMIT
     frame = a.frame(b"edge")
     assert b.unframe(frame) == b"edge"
+
+
+def test_key_rotation():
+    a, b = make_pair()
+    first = a.frame(b"first")
+    assert b.unframe(first) == b"first"
+
+    # Rotate to new key pair
+    new_priv_a = x25519.X25519PrivateKey.generate()
+    new_priv_b = x25519.X25519PrivateKey.generate()
+    a.rotate(
+        new_priv_a.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        new_priv_b.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        ),
+    )
+    b.rotate(
+        new_priv_b.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        new_priv_a.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        ),
+    )
+
+    # After rotation counters start at zero
+    second = a.frame(b"second")
+    assert second[:12] == b"\x00" * 12
+    assert b.unframe(second) == b"second"

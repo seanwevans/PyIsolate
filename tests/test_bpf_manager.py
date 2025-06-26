@@ -20,7 +20,7 @@ def test_load_runs_toolchain(monkeypatch):
     mgr = BPFManager()
     mgr.load()
 
-    clang_call = [
+    clang_dummy = [
         "clang",
         "-target",
         "bpf",
@@ -30,6 +30,7 @@ def test_load_runs_toolchain(monkeypatch):
         "-o",
         str(mgr._obj),
     ]
+<<<<<<< codex/pre-compile-ebpf-programs-and-cache-skeletons
     assert clang_call in calls
     skel_cmd = [
         "sh",
@@ -37,8 +38,30 @@ def test_load_runs_toolchain(monkeypatch):
         f"bpftool gen skeleton {mgr._obj} > {mgr._skel}",
     ]
     assert skel_cmd in calls
+=======
+    clang_filter = [
+        "clang",
+        "-target",
+        "bpf",
+        "-O2",
+        "-c",
+        str(mgr._filter_src),
+        "-o",
+        str(mgr._filter_obj),
+    ]
+    assert clang_dummy in calls
+    assert clang_filter in calls
+>>>>>>> main
     assert ["llvm-objdump", "-d", str(mgr._obj)] in calls
+    assert ["llvm-objdump", "-d", str(mgr._filter_obj)] in calls
     assert ["bpftool", "prog", "load", str(mgr._obj), "/sys/fs/bpf/dummy"] in calls
+    assert [
+        "bpftool",
+        "prog",
+        "load",
+        str(mgr._filter_obj),
+        "/sys/fs/bpf/syscall_filter",
+    ] in calls
     assert mgr.loaded
 
 
