@@ -52,7 +52,7 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._mem_peak = 0
         self._mem_base = 0
-        self._start_time = None
+        self._start_time: float | None = None
 
     def exec(self, src: str) -> None:
         self._inbox.put(src)

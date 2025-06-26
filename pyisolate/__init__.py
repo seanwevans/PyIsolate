@@ -18,6 +18,7 @@ from .supervisor import (
     spawn,
     shutdown,
 )
+from .capabilities import ROOT, Capability, Token, RootCapability
 
 __all__ = [
     "spawn",
@@ -31,4 +32,8 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "Capability",
+    "Token",
+    "RootCapability",
+    "ROOT",
 ]

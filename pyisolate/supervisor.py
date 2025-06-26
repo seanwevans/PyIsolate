@@ -10,6 +10,8 @@ from __future__ import annotations
 import threading
 from typing import Dict, Optional
 
+from .capabilities import RootCapability, ROOT
+
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
@@ -95,12 +97,20 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
-    def reload_policy(self, policy_path: str) -> None:
-        """Hot-reload policy via the BPF manager."""
+    def reload_policy(self, policy_path: str, cap: RootCapability = ROOT) -> None:
+        """Hot-reload policy via the BPF manager.
+
+        ``cap`` must be ``ROOT`` for type checking purposes. The runtime stub
+        does not enforce this but mypy can verify callers have the capability.
+        """
         self._bpf.hot_reload(policy_path)
 
-    def shutdown(self) -> None:
-        """Stop watchdog and terminate all running sandboxes."""
+    def shutdown(self, cap: RootCapability = ROOT) -> None:
+        """Stop watchdog and terminate all running sandboxes.
+
+        The ``cap`` argument models a privileged capability required to shut
+        down the supervisor.
+        """
         self._watchdog.stop()
         with self._lock:
             sandboxes = list(self._sandboxes.values())
@@ -122,12 +132,14 @@ _supervisor = Supervisor()
 # Public API
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
-reload_policy = _supervisor.reload_policy
+
+def reload_policy(policy_path: str, cap: RootCapability = ROOT) -> None:
+    _supervisor.reload_policy(policy_path, cap)
 
 
-def shutdown() -> None:
+def shutdown(cap: RootCapability = ROOT) -> None:
     """Stop the current supervisor and start a fresh one."""
     global _supervisor
     old = _supervisor
-    old.shutdown()
+    old.shutdown(cap)
     _supervisor = Supervisor()
