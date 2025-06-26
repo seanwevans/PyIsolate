@@ -2,7 +2,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
-from pyisolate.broker.crypto import CryptoBroker
+from pyisolate.broker.crypto import CryptoBroker, handshake
 
 
 def make_pair():
@@ -57,3 +57,24 @@ def test_out_of_order():
     # deliver the dropped frame then the next
     assert b.unframe(dropped) == b"one"
     assert b.unframe(later) == b"two"
+
+
+def test_handshake_helper():
+    priv_b = x25519.X25519PrivateKey.generate()
+    pub_b = priv_b.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+    pub_a, broker_a = handshake(pub_b)
+    broker_b = CryptoBroker(
+        priv_b.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        pub_a,
+    )
+
+    msg = b"hi"
+    assert broker_b.unframe(broker_a.frame(msg)) == msg
