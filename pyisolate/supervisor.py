@@ -15,7 +15,10 @@ from .errors import PolicyAuthError
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
+from .observability.alerts import AlertManager
+from .observability.trace import Tracer
 from . import cgroup
+
 
 
 class Sandbox:
@@ -66,6 +69,8 @@ class Supervisor:
     def __init__(self, warm_pool: int = 0):
         self._sandboxes: Dict[str, SandboxThread] = {}
         self._lock = threading.Lock()
+        self._alerts = AlertManager()
+        self._tracer = Tracer()
         self._bpf = BPFManager()
         self._bpf.load()
         self._warm_pool: list[SandboxThread] = []
@@ -76,6 +81,10 @@ class Supervisor:
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
         self._policy_token: str | None = None
+
+    def register_alert_handler(self, callback) -> None:
+        """Subscribe to policy violation alerts."""
+        self._alerts.register(callback)
 
     def spawn(
         self,
@@ -93,6 +102,8 @@ class Supervisor:
             policy=policy,
             cpu_ms=cpu_ms,
             mem_bytes=mem_bytes,
+            on_violation=self._alerts.notify,
+            tracer=self._tracer,
             numa_node=numa_node,
             cgroup_path=cg_path,
         )

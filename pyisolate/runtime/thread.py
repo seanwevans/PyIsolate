@@ -17,10 +17,11 @@ import threading
 import time
 import tracemalloc
 from dataclasses import dataclass
-from typing import Any, Optional, Iterable
+from typing import Any, Callable, Optional, Iterable
 
 from .. import errors
 from ..numa import bind_current_thread
+from ..observability.trace import Tracer
 
 # Precompute a sanitized builtins dict for sandbox execution.
 _FORBIDDEN = {
@@ -67,6 +68,11 @@ signal.signal(signal.SIGXCPU, _sigxcpu_handler)
 class Stats:
     cpu_ms: float
     mem_bytes: int
+    latency: dict[str, int]
+    latency_sum: float
+    errors: int
+    operations: int
+    cost: float
 
 
 class SandboxThread(threading.Thread):
@@ -78,6 +84,8 @@ class SandboxThread(threading.Thread):
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        on_violation: Optional[Callable[[str, Exception], None]] = None,
+        tracer: Optional["Tracer"] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,
     ):
@@ -94,6 +102,14 @@ class SandboxThread(threading.Thread):
         self.numa_node = numa_node
         self._mem_base = 0
         self._start_time = None
+        self._on_violation = on_violation
+        
+
+        self._tracer = tracer or Tracer()
+        self._ops = 0
+        self._errors = 0
+        self._latency = {"0.5": 0, "1": 0, "5": 0, "10": 0, "inf": 0}
+        self._latency_sum = 0.0
         self._cgroup_path = cgroup_path
         self._trace_enabled = False
         self._syscall_log: list[str] = []
@@ -171,7 +187,16 @@ class SandboxThread(threading.Thread):
         cpu_ms = self._cpu_time
         if self._start_time is not None:
             cpu_ms += (time.monotonic() - self._start_time) * 1000
-        return Stats(cpu_ms=cpu_ms, mem_bytes=self._mem_peak)
+        cost = cpu_ms * 0.0001 + self._mem_peak * 1e-9
+        return Stats(
+            cpu_ms=cpu_ms,
+            mem_bytes=self._mem_peak,
+            latency=dict(self._latency),
+            latency_sum=self._latency_sum,
+            errors=self._errors,
+            operations=self._ops,
+            cost=cost,
+        )
 
     # internal thread run loop
     def run(self) -> None:
@@ -202,19 +227,34 @@ class SandboxThread(threading.Thread):
                 src = self._inbox.get(timeout=0.1)
             except queue.Empty:
                 continue
-            try:
-                start_cpu = time.thread_time()
-                self._start_time = time.monotonic()
-                if self._trace_enabled:
-                    self._syscall_log.append(src)
-                self._logger.debug("run_exec", extra={"code": src})
-                exec(src, local_vars, local_vars)
-                end_cpu = time.thread_time()
-                self._cpu_time += (end_cpu - start_cpu) * 1000
-                self._start_time = None
-                cur, peak = tracemalloc.get_traced_memory()
-                self._mem_peak = max(self._mem_peak, peak - self._mem_base)
-            except Exception as exc:  # real impl would sanitize
-                self._outbox.put(exc)
-        _thread_local.tcp = set()
-        
+
+            self._ops += 1
+            op_start = time.monotonic()
+            with self._tracer.start_span(f"sandbox:{self.name}"):
+                try:
+                    start_cpu = time.thread_time()
+                    self._start_time = time.monotonic()
+                    exec(src, local_vars, local_vars)
+                    end_cpu = time.thread_time()
+                    self._cpu_time += (end_cpu - start_cpu) * 1000
+                    self._start_time = None
+                    cur, peak = tracemalloc.get_traced_memory()
+                    self._mem_peak = max(self._mem_peak, peak - self._mem_base)
+                except Exception as exc:  # real impl would sanitize
+                    self._errors += 1
+                    if self._on_violation and isinstance(exc, errors.PolicyError):
+                        self._on_violation(self.name, exc)
+                    self._outbox.put(exc)
+                finally:
+                    duration = (time.monotonic() - op_start) * 1000
+                    self._latency_sum += duration
+                    if duration <= 0.5:
+                        self._latency["0.5"] += 1
+                    elif duration <= 1:
+                        self._latency["1"] += 1
+                    elif duration <= 5:
+                        self._latency["5"] += 1
+                    elif duration <= 10:
+                        self._latency["10"] += 1
+                    else:
+                        self._latency["inf"] += 1
