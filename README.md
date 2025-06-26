@@ -109,6 +109,10 @@ See **SECURITY.md** for a full threat‑model walkthrough.
 * Discord: **#pyisolate**
 * Matrix: `#pyisolate:matrix.org`
 
+## Kubernetes deployment
+
+A `Dockerfile` and experimental operator are included. See [docs/kubernetes.md](docs/kubernetes.md) for details.
+
 ---
 
 ## License
