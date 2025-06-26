@@ -38,6 +38,8 @@ Anything not listed above is *not* guaranteed.
 
 * **No‑GIL build** — removes the global interpreter lock; each sandbox runs on its own OS thread.
 * **Per‑interpreter arenas** — allocator instances are never shared; freelists are local.
+* **Stack canaries** — CPython compiled with `-fstack-protector-strong`.
+* **Control‑flow integrity** — built with `-fsanitize=cfi` to detect code‑reuse attacks.
 * **Builtin shrink‑wrap** — `__import__`, `open`, `ctypes`, `cffi`, `dlopen`, `mmap`, and `pickle` removed unless explicitly re‑enabled via policy.
 
 ### 3.3 Crypto‑sealed broker
