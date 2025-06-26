@@ -31,7 +31,15 @@ def test_load_runs_toolchain(monkeypatch):
     ]
     assert clang_call in calls
     assert ["llvm-objdump", "-d", str(mgr._obj)] in calls
-    assert ["bpftool", "prog", "load", str(mgr._obj), "/sys/fs/bpf/dummy"] in calls
+    assert [
+        "bpftool",
+        "prog",
+        "load",
+        str(mgr._obj),
+        "/sys/fs/bpf/fs_filter",
+        "type",
+        "lsm",
+    ] in calls
     assert mgr.loaded
 
 
@@ -41,13 +49,13 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
     mgr.load()
 
     policy = tmp_path / "policy.json"
-    policy.write_text(json.dumps({"cpu": "100ms"}))
+    policy.write_text(json.dumps({"allowed_paths": "/tmp"}))
     mgr.hot_reload(str(policy))
-    assert mgr.policy_maps["cpu"] == "100ms"
+    assert mgr.policy_maps["allowed_paths"] == "/tmp"
 
-    policy.write_text(json.dumps({"cpu": "200ms", "mem": "64MiB"}))
+    policy.write_text(json.dumps({"allowed_paths": "/var", "extra": "1"}))
     mgr.hot_reload(str(policy))
-    assert mgr.policy_maps == {"cpu": "200ms", "mem": "64MiB"}
+    assert mgr.policy_maps == {"allowed_paths": "/var", "extra": "1"}
 
 
 def test_load_failure_keeps_unloaded(monkeypatch):

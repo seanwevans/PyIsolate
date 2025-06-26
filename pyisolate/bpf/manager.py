@@ -16,9 +16,9 @@ class BPFManager:
 
     def __init__(self):
         self.loaded = False
-        self.policy_maps: dict[str, str] = {}
-        self._src = Path(__file__).with_name("dummy.bpf.c")
-        self._obj = Path(__file__).with_name("dummy.bpf.o")
+        self.policy_maps: dict[str, object] = {}
+        self._src = Path(__file__).with_name("fs_filter.bpf.c")
+        self._obj = Path(__file__).with_name("fs_filter.bpf.o")
 
     # internal helper
     def _run(self, cmd: list[str]) -> bool:
@@ -46,7 +46,7 @@ class BPFManager:
         ok &= self._run(compile_cmd)
         ok &= self._run(["llvm-objdump", "-d", str(self._obj)])
         ok &= self._run(
-            ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"]
+            ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/fs_filter", "type", "lsm"]
         )
         self.loaded = ok
 

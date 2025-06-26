@@ -11,7 +11,7 @@
 ## Features
 
 * **True parallelism** — built on CPython 3.13 with the `--disable-gil` build.
-* **Kernel‑enforced security** — eBPF‑LSM & cgroup hooks gate filesystem, network, and high‑risk syscalls.
+* **Kernel‑enforced security** — path filtering via an eBPF‑LSM `file_open` hook plus cgroup guards for network and syscalls.
 * **Deterministic quotas** — per‑interpreter arenas cap RAM; perf‑event BPF guards CPU & bandwidth.
 * **Authenticated broker** — X25519 + ChaCha20‑Poly1305 secure control channel with replay counters.
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
