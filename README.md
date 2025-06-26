@@ -13,8 +13,13 @@
 * **True parallelism** — built on CPython 3.13 with the `--disable-gil` build.
 * **Kernel‑enforced security** — eBPF‑LSM & cgroup hooks gate filesystem, network, and high‑risk syscalls.
 * **Deterministic quotas** — per‑interpreter arenas cap RAM; perf‑event BPF guards CPU & bandwidth.
+<<<<<<< codex/use-io_uring-for-async-i/o
+* **Authenticated broker** — X25519 + ChaCha20‑Poly1305 secure control channel with replay counters.
+* **io_uring async I/O** — broker uses Linux io_uring for non-blocking operations.
+=======
 * **Token‑gated policy reload** — update YAML policies in micro‑seconds with authentication.
 * **Authenticated broker** — X25519 (optionally Kyber‑768) + ChaCha20‑Poly1305 secure control channel with replay counters.
+>>>>>>> main
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
 * **eBPF‑verified contracts** — runtime assertions compiled into BPF for extra safety.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
