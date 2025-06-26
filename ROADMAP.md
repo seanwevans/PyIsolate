@@ -19,6 +19,8 @@ the project.
 - **Landlock fallback** for systems without eBPF privileges.
 - **Post‑quantum handshake** using Kyber‑736 / Dilithium hybrids.
 - **Input validation** on broker messages and strict constant‑time error paths.
+- **Hardware-assisted checks** — evaluate Intel CET, ARM pointer authentication,
+  and MTE for platforms that support them.
 
 ## 3 Developer experience
 
