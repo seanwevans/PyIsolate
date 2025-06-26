@@ -38,3 +38,19 @@ def test_list_parsing_without_pyyaml():
     doc = 'net:\n  - connect: "127.0.0.1:6379"'
     result = policy.yaml.safe_load(doc)
     assert result == {"net": [{"connect": "127.0.0.1:6379"}]}
+
+
+def test_validation_missing_version(tmp_path):
+    policy = load_policy(no_yaml=True)
+    p = tmp_path / "p.yml"
+    p.write_text("defaults: {}\n")
+    with pytest.raises(ValueError, match="version"):
+        policy.refresh(str(p))
+
+
+def test_validation_bad_section_type(tmp_path):
+    policy = load_policy(no_yaml=True)
+    p = tmp_path / "p.yml"
+    p.write_text("version: 0.1\nsandboxes: []\n")
+    with pytest.raises(ValueError, match="sandboxes"):
+        policy.refresh(str(p))
