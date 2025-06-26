@@ -7,6 +7,7 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 
 from __future__ import annotations
 
+import builtins
 import json
 import queue
 import signal
@@ -17,6 +18,23 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from .. import errors
+
+# Precompute a sanitized builtins dict for sandbox execution.
+_FORBIDDEN = {
+    "eval",
+    "exec",
+    "compile",
+    "getattr",
+    "setattr",
+    "delattr",
+}
+_SAFE_BUILTINS = {
+    name: getattr(builtins, name)
+    for name in dir(builtins)
+    if not name.startswith("_") or name == "__import__"
+}
+for name in _FORBIDDEN:
+    _SAFE_BUILTINS.pop(name, None)
 
 
 def _sigxcpu_handler(signum, frame):
@@ -65,7 +83,7 @@ class SandboxThread(threading.Thread):
                 f"payload = json.loads({payload!r})",
                 "module_name, func_name = payload['func'].rsplit('.', 1)",
                 "mod = importlib.import_module(module_name)",
-                "res = getattr(mod, func_name)(*payload['args'], **payload['kwargs'])",
+                "res = object.__getattribute__(mod, func_name)(*payload['args'], **payload['kwargs'])",
                 "post(res)",
             ]
         )
@@ -105,7 +123,7 @@ class SandboxThread(threading.Thread):
         self._mem_base = tracemalloc.get_traced_memory()[0]
         self._cpu_time = 0.0
         self._start_time = None
-        local_vars = {"post": self._outbox.put}
+        local_vars = {"post": self._outbox.put, "__builtins__": _SAFE_BUILTINS}
         while not self._stop_event.is_set():
             try:
                 src = self._inbox.get(timeout=0.1)
