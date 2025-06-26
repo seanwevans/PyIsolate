@@ -31,7 +31,7 @@ def test_refresh_remote(tmp_path):
         orig = mgr.BPFManager.hot_reload
         mgr.BPFManager.hot_reload = lambda *a, **k: None
         try:
-            policy.refresh_remote(f"http://127.0.0.1:{port}")
+            policy.refresh_remote(f"http://127.0.0.1:{port}", token="tok")
         finally:
             mgr.BPFManager.hot_reload = orig
     finally:

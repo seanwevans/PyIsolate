@@ -91,7 +91,7 @@ def test_validation_missing_version(tmp_path):
     p = tmp_path / "p.yml"
     p.write_text("defaults: {}\n")
     with pytest.raises(ValueError, match="version"):
-        policy.refresh(str(p))
+        policy.refresh(str(p), token="tok")
 
 
 def test_validation_bad_section_type(tmp_path):
@@ -99,7 +99,7 @@ def test_validation_bad_section_type(tmp_path):
     p = tmp_path / "p.yml"
     p.write_text("version: 0.1\nsandboxes: []\n")
     with pytest.raises(ValueError, match="sandboxes"):
-        policy.refresh(str(p))
+        policy.refresh(str(p), token="tok")
 
 @pytest.mark.parametrize("name", ["ml.yml", "web_scraper.yml"])
 def test_templates_parse(monkeypatch, name):
@@ -108,6 +108,6 @@ def test_templates_parse(monkeypatch, name):
         "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
     )
     path = ROOT / "policy" / name
-    policy.refresh(str(path))
+    policy.refresh(str(path), token="tok")
 
 
