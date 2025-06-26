@@ -15,5 +15,6 @@ def test_stats_property_updates():
         s = sb.stats
         assert s.cpu_ms >= 0
         assert s.mem_bytes >= 0
+        assert s.cost >= 0
     finally:
         sb.close()
