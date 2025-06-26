@@ -22,12 +22,16 @@ from .supervisor import (
     shutdown,
     spawn,
 )
+
+from .sdk import Pipeline, sandbox
+
 from .subset import OwnershipError, RestrictedExec
 
 from .capabilities import ROOT, Capability, Token, RootCapability
 from .checkpoint import checkpoint, restore
 from .migration import migrate
 from .policy import refresh_remote
+
 
 __all__ = [
     "spawn",
@@ -42,6 +46,8 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "sandbox",
+    "Pipeline",
     "RestrictedExec",
     "OwnershipError",
     "Capability",

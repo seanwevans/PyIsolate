@@ -53,7 +53,20 @@ psi.set_policy_token("secret")
 policy.refresh("/tmp/policy.yml", token="secret")
 ```
 
-## 4  Metrics & events
+## 4  High-level helpers
+
+```python
+@psi.sandbox(policy="ml-inference", timeout="30s")
+def run_model(data):
+    ...
+
+pipeline = psi.Pipeline()
+pipeline.add_stage("extract", policy="readonly-fs")
+pipeline.add_stage("transform", policy="compute-only")
+pipeline.add_stage("load", policy="write-db")
+```
+
+## 5  Metrics & events
 
 | Property | Meaning |
 |----------|---------|
@@ -71,6 +84,7 @@ Event types: `MEM_KILL`, `CPU_THROTTLE`, `POLICY_HOTLOAD`, `BROKER_ERROR`.
 | `psi.restore(blob:bytes, key:bytes) -> Sandbox` | Spawn sandbox from encrypted state. |
 | `psi.migrate(sb, host:str, key:bytes) -> Sandbox` | Send checkpoint to `host` and restore there. |
 | `policy.refresh_remote(url:str)` | Fetch YAML policy over HTTP and apply. |
+
 
 ## 6  Exceptions hierarchy
 
