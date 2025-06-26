@@ -89,6 +89,12 @@ class Supervisor:
                 name: Sandbox(t) for name, t in self._sandboxes.items() if t.is_alive()
             }
 
+    def get_active_threads(self) -> list[SandboxThread]:
+        """Return active sandbox threads for internal consumers."""
+        self._cleanup()
+        with self._lock:
+            return [t for t in self._sandboxes.values() if t.is_alive()]
+
     def reload_policy(self, policy_path: str) -> None:
         """Hot-reload policy via the BPF manager."""
         self._bpf.hot_reload(policy_path)

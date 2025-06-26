@@ -34,13 +34,8 @@ class ResourceWatchdog(threading.Thread):
     def run(self) -> None:
         while not self._stop_event.is_set():
             time.sleep(self._interval)
-            with self._supervisor._lock:
-                sandboxes: list[SandboxThread] = list(
-                    self._supervisor._sandboxes.values()
-                )
+            sandboxes: list[SandboxThread] = self._supervisor.get_active_threads()
             for sb in sandboxes:
-                if not sb.is_alive():
-                    continue
                 stats = sb.stats
                 if sb.cpu_quota_ms is not None and stats.cpu_ms >= sb.cpu_quota_ms:
                     sb._outbox.put(errors.CPUExceeded())
