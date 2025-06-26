@@ -22,6 +22,7 @@ from .supervisor import (
     shutdown,
     spawn,
 )
+from .subset import OwnershipError, RestrictedExec
 
 from .capabilities import ROOT, Capability, Token, RootCapability
 from .checkpoint import checkpoint, restore
@@ -41,6 +42,8 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "RestrictedExec",
+    "OwnershipError",
     "Capability",
     "Token",
     "RootCapability",

@@ -19,6 +19,7 @@
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
 * **eBPF‑verified contracts** — runtime assertions compiled into BPF for extra safety.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+* **Restricted subset** — optional interpreter with move-only ownership semantics.
 * **Stack canaries & CFI** — sub‑interpreter compiled with `-fstack-protector-strong` and `-fsanitize=cfi`.
 * **NUMA‑aware scheduling** — bind sandboxes to the CPUs of a chosen node on multi‑socket hosts.
 * **Remote policy enforcement** — fetch and apply YAML over HTTP.
