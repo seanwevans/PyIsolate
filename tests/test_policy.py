@@ -27,10 +27,22 @@ def test_policy_methods_chain():
 
 def test_policy_refresh_invalid(tmp_path):
     policy = load_policy(no_yaml=True)
+    import pyisolate as iso
+    iso.set_policy_token("tok")
     bad = tmp_path / "bad.yml"
     bad.write_text("invalid")
     with pytest.raises(ValueError):
-        policy.refresh(str(bad))
+        policy.refresh(str(bad), token="tok")
+
+
+def test_refresh_bad_token(tmp_path):
+    policy = load_policy(no_yaml=True)
+    import pyisolate as iso
+    iso.set_policy_token("tok")
+    good = tmp_path / "p.yml"
+    good.write_text("version: 0.1\n")
+    with pytest.raises(iso.PolicyAuthError):
+        policy.refresh(str(good), token="wrong")
 
 
 def test_list_parsing_without_pyyaml():

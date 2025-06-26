@@ -13,9 +13,17 @@
 * **True parallelism** — built on CPython 3.13 with the `--disable-gil` build.
 * **Kernel‑enforced security** — eBPF‑LSM & cgroup hooks gate filesystem, network, and high‑risk syscalls.
 * **Deterministic quotas** — per‑interpreter arenas cap RAM; perf‑event BPF guards CPU & bandwidth.
+<<<<<<< codex/use-io_uring-for-async-i/o
+* **Authenticated broker** — X25519 + ChaCha20‑Poly1305 secure control channel with replay counters.
+* **io_uring async I/O** — broker uses Linux io_uring for non-blocking operations.
+=======
+* **Token‑gated policy reload** — update YAML policies in micro‑seconds with authentication.
 * **Authenticated broker** — X25519 (optionally Kyber‑768) + ChaCha20‑Poly1305 secure control channel with replay counters.
+>>>>>>> main
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
+* **eBPF‑verified contracts** — runtime assertions compiled into BPF for extra safety.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+* **NUMA‑aware scheduling** — bind sandboxes to the CPUs of a chosen node on multi‑socket hosts.
 * **Remote policy enforcement** — fetch and apply YAML over HTTP.
 * **Encrypted checkpointing** — save sandbox state with ChaCha20‑Poly1305.
 * **Migration** — transfer checkpoints to a peer host.
@@ -47,7 +55,7 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
     print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
 
-<<<<<<< codex/add-visual-policy-editor/debugger
+
 ### Policy editor
 
 Run a minimal GUI to tweak and hot‑reload YAML policies:
@@ -56,7 +64,7 @@ Run a minimal GUI to tweak and hot‑reload YAML policies:
 python -m pyisolate.editor policy/example.yml
 ```
 The debug box lets you test file paths or addresses against the live policy.
-=======
+
 ### Policy templates
 
 Ready-made YAML policies live in the `policy/` directory.  The following
@@ -68,7 +76,7 @@ templates cover common scenarios:
   restricting filesystem access to `/tmp`.
 
 Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
->>>>>>> main
+
 
 ---
 
@@ -98,6 +106,7 @@ Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
 * **Process boundary** – single process; sub‑interpreter ≙ trust boundary.
 * **Kernel boundary** – every sandbox thread enters its own cgroup; CO‑RE eBPF programs enforce FS/net/syscall policy.
 * **Broker** – sole path to privileged syscalls, sealed with AEAD and strict replay protection.
+* **Verified eBPF modules** – bytecode is disassembled with `llvm-objdump -d` and must succeed `bpftool prog load` so the kernel verifier approves it before any sandbox runs.
 
 See **SECURITY.md** for a full threat‑model walkthrough.
 

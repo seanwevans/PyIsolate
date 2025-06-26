@@ -73,6 +73,7 @@ class Policy:
         return self
 
 
+<<<<<<< codex/add-policy-validation-with-error-messages
 def _validate(data: object) -> None:
     """Validate parsed YAML schema."""
     if not isinstance(data, dict):
@@ -90,6 +91,9 @@ def _validate(data: object) -> None:
 
 
 def refresh(path: str) -> None:
+=======
+def refresh(path: str, token: str) -> None:
+>>>>>>> main
     """Parse *path* and atomically update eBPF policy maps."""
 
     # Fail fast if the YAML is malformed before touching BPF maps
@@ -102,7 +106,7 @@ def refresh(path: str) -> None:
     _validate(data)
 
     # Upon successful parse, swap the live maps via the supervisor
-    reload_policy(str(Path(path).resolve()))
+    reload_policy(str(Path(path).resolve()), token)
 
 
 def refresh_remote(url: str) -> None:
