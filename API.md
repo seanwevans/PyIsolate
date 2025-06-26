@@ -27,6 +27,9 @@ result = sb.recv(timeout=0.1)      # 1.4142135623
 | `call(func, *args, **kw)` | Import‑free RPC: call dotted `func` inside guest. |
 | `recv(timeout=None)` | Blocking receive from guest channel. |
 | `post(obj)` *(guest side)* | Send picklable object to supervisor. |
+| `enable_tracing()` | Start recording guest operations. |
+| `get_syscall_log()` | Return recorded operations. |
+| `profile()` | Snapshot of current CPU and memory usage. |
 
 ## 3  Policy helpers
 

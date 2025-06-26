@@ -8,6 +8,7 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import signal
 import threading
@@ -46,6 +47,7 @@ class SandboxThread(threading.Thread):
         cgroup_path=None,
     ):
         super().__init__(name=name, daemon=True)
+        self._logger = logging.getLogger(f"pyisolate.{name}")
         self._inbox: "queue.Queue[str]" = queue.Queue()
         self._outbox: "queue.Queue[Any]" = queue.Queue()
         self._stop_event = threading.Event()
@@ -58,8 +60,26 @@ class SandboxThread(threading.Thread):
         self._mem_base = 0
         self._start_time = None
         self._cgroup_path = cgroup_path
+        self._trace_enabled = False
+        self._syscall_log: list[str] = []
+
+    def enable_tracing(self) -> None:
+        """Start recording guest operations."""
+        self._trace_enabled = True
+        self._syscall_log = []
+
+    def get_syscall_log(self) -> list[str]:
+        """Return recorded guest operations."""
+        return list(self._syscall_log)
+
+    def profile(self) -> Stats:
+        """Return current CPU and memory usage."""
+        return self.stats
 
     def exec(self, src: str) -> None:
+        if self._trace_enabled:
+            self._syscall_log.append(src)
+        self._logger.debug("exec", extra={"code": src})
         self._inbox.put(src)
 
     def call(self, func: str, *args, **kwargs):
@@ -142,6 +162,9 @@ class SandboxThread(threading.Thread):
             try:
                 start_cpu = time.thread_time()
                 self._start_time = time.monotonic()
+                if self._trace_enabled:
+                    self._syscall_log.append(src)
+                self._logger.debug("run_exec", extra={"code": src})
                 exec(src, local_vars, local_vars)
                 end_cpu = time.thread_time()
                 self._cpu_time += (end_cpu - start_cpu) * 1000
