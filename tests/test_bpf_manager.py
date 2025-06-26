@@ -19,7 +19,7 @@ def test_load_runs_toolchain(monkeypatch):
     mgr = BPFManager()
     mgr.load()
 
-    clang_call = [
+    clang_dummy = [
         "clang",
         "-target",
         "bpf",
@@ -29,9 +29,28 @@ def test_load_runs_toolchain(monkeypatch):
         "-o",
         str(mgr._obj),
     ]
-    assert clang_call in calls
+    clang_filter = [
+        "clang",
+        "-target",
+        "bpf",
+        "-O2",
+        "-c",
+        str(mgr._filter_src),
+        "-o",
+        str(mgr._filter_obj),
+    ]
+    assert clang_dummy in calls
+    assert clang_filter in calls
     assert ["llvm-objdump", "-d", str(mgr._obj)] in calls
+    assert ["llvm-objdump", "-d", str(mgr._filter_obj)] in calls
     assert ["bpftool", "prog", "load", str(mgr._obj), "/sys/fs/bpf/dummy"] in calls
+    assert [
+        "bpftool",
+        "prog",
+        "load",
+        str(mgr._filter_obj),
+        "/sys/fs/bpf/syscall_filter",
+    ] in calls
     assert mgr.loaded
 
 
