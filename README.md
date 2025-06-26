@@ -47,6 +47,16 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
     print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
 
+<<<<<<< codex/add-visual-policy-editor/debugger
+### Policy editor
+
+Run a minimal GUI to tweak and hot‑reload YAML policies:
+
+```bash
+python -m pyisolate.editor policy/example.yml
+```
+The debug box lets you test file paths or addresses against the live policy.
+=======
 ### Policy templates
 
 Ready-made YAML policies live in the `policy/` directory.  The following
@@ -58,6 +68,7 @@ templates cover common scenarios:
   restricting filesystem access to `/tmp`.
 
 Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
+>>>>>>> main
 
 ---
 
