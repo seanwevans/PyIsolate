@@ -8,7 +8,7 @@ This document describes the **runtime roles** inside PyIsolate. Each agent is an
 | **SandboxThread**    | One Linux thread per guest                             | Hosts sub‑interpreter; installs minimal builtins; runs user code; communicates over PEP 554 channel          | `runtime/thread.py`                       |
 | **BPFManager**       | Async task in supervisor                               | Compiles CO‑RE objects, attaches LSM & cgroup programs, applies hot‑reload diff when `policy/*.yaml` changes | `bpf/manager.py`, `Makefile.bpf`          |
 | **CryptoBroker**     | Same thread as supervisor                              | Frames/unframes AEAD packets, maintains per‑channel counters, exposes a capability RPC surface               | `broker/crypto.py`, `isocrypto.*`         |
-| **ResourceWatchdog** | In‑kernel perf‑event BPF + userspace ringbuffer reader | Counts CPU ticks & RSS per cgroup; triggers `SIGXCPU` on quota breach                                        | `bpf/resource_guard.bpf.c`, `watchdog.py` |
+| **ResourceWatchdog** | In‑kernel perf‑event BPF + userspace ringbuffer reader | Counts CPU ticks & RSS per cgroup; triggers `SIGXCPU` on quota breach                                        | `bpf/resource_guard.bpf.c` (pinned `/sys/fs/bpf/resource_guard`), `watchdog.py` |
 | **MetricsExporter**  | Async task                                             | Samples BPF maps, converts to Prometheus `Gauge` & `Counter`                                                 | `observability/metrics.py`                |
 
 ---

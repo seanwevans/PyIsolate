@@ -38,6 +38,8 @@ Anything not listed above is *not* guaranteed.
 
 * **No‑GIL build** — removes the global interpreter lock; each sandbox runs on its own OS thread.
 * **Per‑interpreter arenas** — allocator instances are never shared; freelists are local.
+* **Stack canaries** — CPython compiled with `-fstack-protector-strong`.
+* **Control‑flow integrity** — built with `-fsanitize=cfi` to detect code‑reuse attacks.
 * **Builtin shrink‑wrap** — `__import__`, `open`, `ctypes`, `cffi`, `dlopen`, `mmap`, and `pickle` removed unless explicitly re‑enabled via policy.
 
 ### 3.3 Crypto‑sealed broker
@@ -45,6 +47,7 @@ Anything not listed above is *not* guaranteed.
 * Noise‑like 1‑RTT handshake: `X25519` + optional `Kyber‑768` hybrid → HKDF‑SHA‑256.
 * Per‑frame AEAD: `ChaCha20‑Poly1305` (96‑bit nonce, 16‑byte tag).
 * 64‑bit monotone counter, stored in a lock‑free slab per channel; any rollback closes the channel.
+* Keys can be rotated by repeating the handshake; counters reset on success.
 
 ### 3.4 Supervisor watchdog
 
