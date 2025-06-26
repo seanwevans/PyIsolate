@@ -11,6 +11,8 @@ ChaCha20-Poly1305.
 3. A shared secret is derived via `X25519PrivateKey.exchange()`.
 4. The secret feeds HKDF-SHA256 with `info=b"pyisolate-channel"` to produce the
    32 byte AEAD key.
+5. The helper `pyisolate.broker.crypto.handshake()` wraps these steps and
+   returns `(public_key, broker)`.
 
 ## Framing
 
