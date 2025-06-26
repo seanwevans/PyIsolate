@@ -70,7 +70,7 @@ class Policy:
         return self
 
 
-def refresh(path: str) -> None:
+def refresh(path: str, token: str) -> None:
     """Parse *path* and atomically update eBPF policy maps."""
 
     # Fail fast if the YAML is malformed before touching BPF maps
@@ -78,7 +78,7 @@ def refresh(path: str) -> None:
         yaml.safe_load(fh)
 
     # Upon successful parse, swap the live maps via the supervisor
-    reload_policy(str(Path(path).resolve()))
+    reload_policy(str(Path(path).resolve()), token)
 
 
 __all__ = ["Policy", "refresh"]

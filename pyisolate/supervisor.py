@@ -10,6 +10,8 @@ from __future__ import annotations
 import threading
 from typing import Dict, Optional
 
+from .errors import PolicyAuthError
+
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
@@ -58,6 +60,7 @@ class Supervisor:
         self._bpf.load()
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
+        self._policy_token: str | None = None
 
     def spawn(
         self,
@@ -95,8 +98,14 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
-    def reload_policy(self, policy_path: str) -> None:
-        """Hot-reload policy via the BPF manager."""
+    def set_policy_token(self, token: str) -> None:
+        """Configure the secret used to authenticate policy updates."""
+        self._policy_token = token
+
+    def reload_policy(self, policy_path: str, token: str) -> None:
+        """Hot-reload policy via the BPF manager if *token* matches."""
+        if token != self._policy_token:
+            raise PolicyAuthError("invalid policy token")
         self._bpf.hot_reload(policy_path)
 
     def shutdown(self) -> None:
@@ -123,6 +132,7 @@ _supervisor = Supervisor()
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
 reload_policy = _supervisor.reload_policy
+set_policy_token = _supervisor.set_policy_token
 
 
 def shutdown() -> None:
@@ -131,3 +141,8 @@ def shutdown() -> None:
     old = _supervisor
     old.shutdown()
     _supervisor = Supervisor()
+    global spawn, list_active, reload_policy, set_policy_token
+    spawn = _supervisor.spawn
+    list_active = _supervisor.list_active
+    reload_policy = _supervisor.reload_policy
+    set_policy_token = _supervisor.set_policy_token

@@ -7,6 +7,7 @@ from .errors import (
     CPUExceeded,
     MemoryExceeded,
     PolicyError,
+    PolicyAuthError,
     SandboxError,
     TimeoutError,
 )
@@ -15,6 +16,7 @@ from .supervisor import (
     Supervisor,
     list_active,
     reload_policy,
+    set_policy_token,
     spawn,
     shutdown,
 )
@@ -28,7 +30,9 @@ __all__ = [
     "shutdown",
     "SandboxError",
     "PolicyError",
+    "PolicyAuthError",
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "set_policy_token",
 ]
