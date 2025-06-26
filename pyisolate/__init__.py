@@ -18,6 +18,9 @@ from .supervisor import (
     spawn,
     shutdown,
 )
+from .checkpoint import checkpoint, restore
+from .migration import migrate
+from .policy import refresh_remote
 
 __all__ = [
     "spawn",
@@ -31,4 +34,8 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "checkpoint",
+    "restore",
+    "migrate",
+    "refresh_remote",
 ]
