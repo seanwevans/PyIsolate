@@ -74,3 +74,15 @@ class IpcLimiter(PolicyPlugin):
 
 register_plugin(IpcLimiter)
 ```
+
+## 6  Policy templates
+
+Several ready-to-use policies are included under the `policy/` directory:
+
+| File | Intended use |
+|------|--------------|
+| `ml.yml` | Machine learning jobs with outbound HTTPS and generous quotas |
+| `web_scraper.yml` | Basic web scraping with only HTTP/HTTPS access |
+
+Load any template with `pyisolate.policy.refresh("policy/<name>.yml")` and the
+new limits take effect instantly.

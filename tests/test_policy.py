@@ -50,3 +50,13 @@ def test_list_parsing_without_pyyaml():
     doc = 'net:\n  - connect: "127.0.0.1:6379"'
     result = policy.yaml.safe_load(doc)
     assert result == {"net": [{"connect": "127.0.0.1:6379"}]}
+
+
+@pytest.mark.parametrize("name", ["ml.yml", "web_scraper.yml"])
+def test_templates_parse(monkeypatch, name):
+    policy = load_policy()
+    monkeypatch.setattr(
+        "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
+    )
+    path = ROOT / "policy" / name
+    policy.refresh(str(path))
