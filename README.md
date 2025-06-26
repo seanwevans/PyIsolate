@@ -106,6 +106,7 @@ Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
 * **Process boundary** – single process; sub‑interpreter ≙ trust boundary.
 * **Kernel boundary** – every sandbox thread enters its own cgroup; CO‑RE eBPF programs enforce FS/net/syscall policy.
 * **Broker** – sole path to privileged syscalls, sealed with AEAD and strict replay protection.
+* **Verified eBPF modules** – bytecode is disassembled with `llvm-objdump -d` and must succeed `bpftool prog load` so the kernel verifier approves it before any sandbox runs.
 
 See **SECURITY.md** for a full threat‑model walkthrough.
 
