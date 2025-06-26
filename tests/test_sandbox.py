@@ -93,3 +93,24 @@ def test_context_manager_closes():
         assert sb.recv(timeout=0.5) == 1
 
     assert not sb._thread.is_alive()
+
+
+def test_dangerous_builtins_removed():
+    sb = iso.spawn("builtins")
+    try:
+        sb.exec(
+            "try:\n    eval('1')\nexcept NameError:\n    post('missing')\nelse:\n    post('present')"
+        )
+        assert sb.recv(timeout=0.5) == "missing"
+
+        sb.exec(
+            "try:\n    compile('1', '<s>', 'eval')\nexcept NameError:\n    post('missing')\nelse:\n    post('present')"
+        )
+        assert sb.recv(timeout=0.5) == "missing"
+
+        sb.exec(
+            "try:\n    getattr(1, 'bit_length')\nexcept NameError:\n    post('missing')\nelse:\n    post('present')"
+        )
+        assert sb.recv(timeout=0.5) == "missing"
+    finally:
+        sb.close()
