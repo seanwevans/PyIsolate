@@ -27,7 +27,8 @@ def test_reload_policy_delegates(tmp_path, monkeypatch):
     monkeypatch.setattr(BPFManager, "hot_reload", fake_hot_reload)
     p = tmp_path / "p.json"
     p.write_text("{}")
-    iso.reload_policy(str(p))
+    iso.set_policy_token("tok")
+    iso.reload_policy(str(p), token="tok")
     assert called["path"] == str(p)
 
 

@@ -41,7 +41,12 @@ cust = (Policy(mem="256MiB")
 cust.fs  # ["/srv/data/*.parquet"]
 cust.tcp # ["127.0.0.1:9200"]
 
-sb = psi.spawn("etl", policy=cust, numa_node=1)
+
+sb = psi.spawn("etl", policy=cust)
+
+# Configure token and hot-reload policies
+psi.set_policy_token("secret")
+policy.refresh("/tmp/policy.yml", token="secret")
 ```
 
 ## 4  Metrics & events
@@ -68,6 +73,7 @@ Event types: `MEM_KILL`, `CPU_THROTTLE`, `POLICY_HOTLOAD`, `BROKER_ERROR`.
 ```python
 class SandboxError(Exception): pass
 class PolicyError(SandboxError): pass
+class PolicyAuthError(PolicyError): pass
 class TimeoutError(SandboxError): pass
 class MemoryExceeded(SandboxError): pass
 class CPUExceeded(SandboxError): pass
