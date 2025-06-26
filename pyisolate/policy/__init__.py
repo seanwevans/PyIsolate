@@ -1,7 +1,13 @@
 """Policy helpers stub."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from ..supervisor import reload_policy
+from .compiler import PolicyCompilerError, compile_policy
+
+import urllib.request
+import tempfile
+import os
 
 try:
     import yaml  # type: ignore
@@ -52,10 +58,6 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
 
     yaml = _MiniYaml()
 
-from ..supervisor import reload_policy
-import urllib.request
-import tempfile
-import os
 
 
 @dataclass
@@ -73,7 +75,6 @@ class Policy:
         return self
 
 
-<<<<<<< codex/add-policy-validation-with-error-messages
 def _validate(data: object) -> None:
     """Validate parsed YAML schema."""
     if not isinstance(data, dict):
@@ -91,10 +92,21 @@ def _validate(data: object) -> None:
 
 
 def refresh(path: str) -> None:
-=======
-def refresh(path: str, token: str) -> None:
->>>>>>> main
     """Parse *path* and atomically update eBPF policy maps."""
+
+    # Compile and validate the YAML policy first
+    compiled = compile_policy(path)
+
+    # Write the compiled representation to a JSON file for the BPF manager
+    json_path = Path(path).with_suffix(".json")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        import json
+
+        json.dump(asdict(compiled), fh)
+
+    # Upon successful parse, swap the live maps via the supervisor
+    reload_policy(str(json_path.resolve()))
+
 
     # Fail fast if the YAML is malformed before touching BPF maps
     with open(path, "r", encoding="utf-8") as fh:
@@ -123,5 +135,10 @@ def refresh_remote(url: str) -> None:
     finally:
         os.unlink(tmp_path)
 
-
-__all__ = ["Policy", "refresh", "refresh_remote"]
+__all__ = [
+    "Policy",
+    "refresh",
+    "compile_policy",
+    "PolicyCompilerError",
+    "refresh_remote"
+]

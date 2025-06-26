@@ -53,6 +53,39 @@ def test_list_parsing_without_pyyaml():
 
 
 
+def test_compile_policy_detects_conflict(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        "      - allow: \"/tmp/data\"\n"
+        "      - deny: \"/tmp/data\"\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    with pytest.raises(policy.PolicyCompilerError):
+        policy.compile_policy(str(f))
+
+
+def test_compile_policy_ok(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        "      - allow: \"/tmp/data\"\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    assert compiled.sandboxes["sb"].fs[0].path == "/tmp/data"
+
+
 def test_validation_missing_version(tmp_path):
     policy = load_policy(no_yaml=True)
     p = tmp_path / "p.yml"
@@ -76,4 +109,5 @@ def test_templates_parse(monkeypatch, name):
     )
     path = ROOT / "policy" / name
     policy.refresh(str(path))
+
 
