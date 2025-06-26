@@ -3,7 +3,6 @@
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from ..supervisor import reload_policy
-from .compiler import PolicyCompilerError, compile_policy
 
 import urllib.request
 import tempfile
@@ -60,6 +59,9 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
             return _mini_load(stream)
 
     yaml = _MiniYaml()
+
+
+from .compiler import PolicyCompilerError, compile_policy
 
 
 

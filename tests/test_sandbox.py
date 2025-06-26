@@ -8,6 +8,8 @@ import pytest
 
 import pyisolate as iso
 import time
+import logging
+import gc
 from pyisolate.bpf.manager import BPFManager
 
 
@@ -159,3 +161,13 @@ def test_dangerous_builtins_removed():
         assert sb.recv(timeout=0.5) == "missing"
     finally:
         sb.close()
+
+
+def test_warning_on_gc_without_close(caplog):
+    caplog.set_level(logging.WARNING)
+    sb = iso.spawn("delwarn")
+    thread = sb._thread
+    del sb
+    gc.collect()
+    assert any("garbage-collected" in r.message for r in caplog.records)
+    assert not thread.is_alive()
