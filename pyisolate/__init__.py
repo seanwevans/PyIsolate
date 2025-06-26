@@ -31,6 +31,7 @@ from .capabilities import ROOT, Capability, Token, RootCapability
 from .checkpoint import checkpoint, restore
 from .migration import migrate
 from .policy import refresh_remote
+from .logging import setup_structured_logging
 
 
 __all__ = [
@@ -63,4 +64,5 @@ __all__ = [
     "restore",
     "migrate",
     "refresh_remote",
+    "setup_structured_logging",
 ]

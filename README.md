@@ -40,6 +40,16 @@ pytest -q          # run the test‑suite
 python examples/echo.py
 ```
 
+### Structured logging
+
+Enable JSON-formatted logs for easier parsing:
+
+```python
+from pyisolate.logging import setup_structured_logging
+
+setup_structured_logging()
+```
+
 ### Hello World
 
 ```python
