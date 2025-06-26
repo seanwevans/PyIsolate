@@ -23,3 +23,7 @@ class MemoryExceeded(SandboxError):
 
 class CPUExceeded(SandboxError):
     """Raised when a sandbox exceeds its CPU quota."""
+
+
+class OwnershipError(SandboxError):
+    """Raised when a moved value is accessed."""

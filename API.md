@@ -65,3 +65,14 @@ class CPUExceeded(SandboxError): pass
 ```
 
 All user‑facing errors inherit from `SandboxError`.
+
+## 6  Restricted subset
+
+```python
+from pyisolate import RestrictedExec
+
+r = RestrictedExec()
+r.exec("a = 1\nb = move(a)")
+```
+
+Using `a` after it is moved raises `OwnershipError`.
