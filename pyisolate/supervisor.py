@@ -10,9 +10,12 @@ from __future__ import annotations
 import threading
 from typing import Dict, Optional
 
+from .errors import PolicyAuthError
+
 from .bpf.manager import BPFManager
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
+from . import cgroup
 
 
 class Sandbox:
@@ -60,13 +63,19 @@ class Sandbox:
 class Supervisor:
     """Main supervisor owning all sandboxes."""
 
-    def __init__(self):
+    def __init__(self, warm_pool: int = 0):
         self._sandboxes: Dict[str, SandboxThread] = {}
         self._lock = threading.Lock()
         self._bpf = BPFManager()
         self._bpf.load()
+        self._warm_pool: list[SandboxThread] = []
+        for i in range(warm_pool):
+            t = SandboxThread(name=f"warm-{i}")
+            t.start()
+            self._warm_pool.append(t)
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
+        self._policy_token: str | None = None
 
     def spawn(
         self,
@@ -74,17 +83,38 @@ class Supervisor:
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        numa_node: Optional[int] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         self._cleanup()
+        cg_path = cgroup.create(name, cpu_ms, mem_bytes)
         thread = SandboxThread(
             name=name,
             policy=policy,
             cpu_ms=cpu_ms,
             mem_bytes=mem_bytes,
+            numa_node=numa_node,
+            cgroup_path=cg_path,
         )
         thread.start()
+
         with self._lock:
+            if self._warm_pool:
+                thread = self._warm_pool.pop()
+                thread.reset(
+                    name,
+                    policy=policy,
+                    cpu_ms=cpu_ms,
+                    mem_bytes=mem_bytes,
+                )
+            else:
+                thread = SandboxThread(
+                    name=name,
+                    policy=policy,
+                    cpu_ms=cpu_ms,
+                    mem_bytes=mem_bytes,
+                )
+                thread.start()
             self._sandboxes[name] = thread
         # Remove references to any terminated sandboxes
         self._cleanup()
@@ -104,8 +134,14 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
-    def reload_policy(self, policy_path: str) -> None:
-        """Hot-reload policy via the BPF manager."""
+    def set_policy_token(self, token: str) -> None:
+        """Configure the secret used to authenticate policy updates."""
+        self._policy_token = token
+
+    def reload_policy(self, policy_path: str, token: str) -> None:
+        """Hot-reload policy via the BPF manager if *token* matches."""
+        if token != self._policy_token:
+            raise PolicyAuthError("invalid policy token")
         self._bpf.hot_reload(policy_path)
 
     def shutdown(self) -> None:
@@ -113,7 +149,9 @@ class Supervisor:
         self._watchdog.stop()
         with self._lock:
             sandboxes = list(self._sandboxes.values())
-        for sb in sandboxes:
+            warm = list(self._warm_pool)
+            self._warm_pool.clear()
+        for sb in sandboxes + warm:
             sb.stop()
         self._cleanup()
 
@@ -122,7 +160,10 @@ class Supervisor:
         with self._lock:
             dead = [n for n, t in self._sandboxes.items() if not t.is_alive()]
             for n in dead:
+                thread = self._sandboxes[n]
+                cgroup.delete(getattr(thread, "_cgroup_path", None))
                 del self._sandboxes[n]
+            self._warm_pool = [t for t in self._warm_pool if t.is_alive()]
 
 
 _supervisor = Supervisor()
@@ -132,6 +173,7 @@ _supervisor = Supervisor()
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
 reload_policy = _supervisor.reload_policy
+set_policy_token = _supervisor.set_policy_token
 
 
 def shutdown() -> None:
@@ -140,3 +182,8 @@ def shutdown() -> None:
     old = _supervisor
     old.shutdown()
     _supervisor = Supervisor()
+    global spawn, list_active, reload_policy, set_policy_token
+    spawn = _supervisor.spawn
+    list_active = _supervisor.list_active
+    reload_policy = _supervisor.reload_policy
+    set_policy_token = _supervisor.set_policy_token
