@@ -7,6 +7,7 @@ requires eBPF enforcement which is not implemented here.
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Dict, Optional
 
@@ -18,6 +19,9 @@ from .watchdog import ResourceWatchdog
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from . import cgroup
+
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -57,6 +61,17 @@ class Sandbox:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+    def __del__(self):
+        thread = getattr(self, "_thread", None)
+        if thread is not None and thread.is_alive():
+            logger.warning(
+                "sandbox %s garbage-collected while still running", thread.name
+            )
+            try:
+                self.close()
+            except Exception:
+                pass
 
     @property
     def stats(self):

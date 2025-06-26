@@ -25,18 +25,12 @@ class BPFManager:
         self.policy_maps: dict[str, str] = {}
         self._src = Path(__file__).with_name("dummy.bpf.c")
         self._obj = Path(__file__).with_name("dummy.bpf.o")
-<<<<<<< codex/pre-compile-ebpf-programs-and-cache-skeletons
         self._skel = Path(__file__).with_name("dummy.skel.h")
         self.skeleton = ""
-=======
         self._filter_src = Path(__file__).with_name("syscall_filter.bpf.c")
         self._filter_obj = Path(__file__).with_name("syscall_filter.bpf.o")
-<<<<<<< codex/add-ebpf-resource-guard-and-update-bpfmanager
         self._guard_src = Path(__file__).with_name("resource_guard.bpf.c")
         self._guard_obj = Path(__file__).with_name("resource_guard.bpf.o")
-=======
->>>>>>> main
->>>>>>> main
 
     # internal helper
     def _run(self, cmd: list[str]) -> bool:
@@ -81,10 +75,9 @@ class BPFManager:
             str(self._guard_obj),
         ]
         ok = True
-<<<<<<< codex/pre-compile-ebpf-programs-and-cache-skeletons
+        compile_cmd = dummy_compile
         if self._src not in self._SKEL_CACHE:
             ok &= self._run(compile_cmd)
-            # Generate and store the skeleton if tools are available
             skel_cmd = [
                 "sh",
                 "-c",
@@ -96,18 +89,12 @@ class BPFManager:
                     self._SKEL_CACHE[self._src] = self._skel.read_text()
                 except OSError:
                     self._SKEL_CACHE[self._src] = ""
-                self.skeleton = self._SKEL_CACHE[self._src]
+            self.skeleton = self._SKEL_CACHE.get(self._src, "")
         else:
             self.skeleton = self._SKEL_CACHE[self._src]
 
-=======
-        ok &= self._run(dummy_compile)
         ok &= self._run(filter_compile)
-<<<<<<< codex/add-ebpf-resource-guard-and-update-bpfmanager
         ok &= self._run(guard_compile)
-=======
->>>>>>> main
->>>>>>> main
         ok &= self._run(["llvm-objdump", "-d", str(self._obj)])
         ok &= self._run(["llvm-objdump", "-d", str(self._filter_obj)])
         ok &= self._run(["llvm-objdump", "-d", str(self._guard_obj)])
