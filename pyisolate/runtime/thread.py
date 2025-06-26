@@ -10,13 +10,30 @@ from __future__ import annotations
 import json
 import queue
 import signal
+import socket
 import threading
 import time
 import tracemalloc
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Iterable
 
 from .. import errors
+
+
+_thread_local = threading.local()
+_orig_connect = socket.socket.connect
+
+
+def _guarded_connect(self: socket.socket, address: Iterable[str]) -> Any:
+    allowed = getattr(_thread_local, "tcp", None)
+    if allowed is not None:
+        host, port = address
+        if f"{host}:{port}" not in allowed:
+            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    return _orig_connect(self, address)
+
+
+socket.socket.connect = _guarded_connect
 
 
 def _sigxcpu_handler(signum, frame):
@@ -106,6 +123,11 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._start_time = None
         local_vars = {"post": self._outbox.put}
+
+        allowed_tcp = set()
+        if self.policy is not None and getattr(self.policy, "tcp", None):
+            allowed_tcp = set(self.policy.tcp)
+        _thread_local.tcp = allowed_tcp
         while not self._stop_event.is_set():
             try:
                 src = self._inbox.get(timeout=0.1)
@@ -122,3 +144,5 @@ class SandboxThread(threading.Thread):
                 self._mem_peak = max(self._mem_peak, peak - self._mem_base)
             except Exception as exc:  # real impl would sanitize
                 self._outbox.put(exc)
+        _thread_local.tcp = set()
+        
