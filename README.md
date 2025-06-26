@@ -44,6 +44,15 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
     print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
 
+### Policy editor
+
+Run a minimal GUI to tweak and hot‑reload YAML policies:
+
+```bash
+python -m pyisolate.editor policy/example.yml
+```
+The debug box lets you test file paths or addresses against the live policy.
+
 ---
 
 ## Architecture

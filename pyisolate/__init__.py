@@ -3,6 +3,7 @@
 This module exposes the high-level API described in API.md.
 """
 
+from .editor import PolicyEditor, check_fs, check_tcp, parse_policy
 from .errors import (
     CPUExceeded,
     MemoryExceeded,
@@ -15,8 +16,8 @@ from .supervisor import (
     Supervisor,
     list_active,
     reload_policy,
-    spawn,
     shutdown,
+    spawn,
 )
 
 __all__ = [
@@ -31,4 +32,8 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "PolicyEditor",
+    "parse_policy",
+    "check_fs",
+    "check_tcp",
 ]
