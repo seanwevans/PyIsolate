@@ -83,7 +83,7 @@ Event types: `MEM_KILL`, `CPU_THROTTLE`, `POLICY_HOTLOAD`, `BROKER_ERROR`.
 | `psi.checkpoint(sb, key:bytes) -> bytes` | Serialize and encrypt sandbox state. |
 | `psi.restore(blob:bytes, key:bytes) -> Sandbox` | Spawn sandbox from encrypted state. |
 | `psi.migrate(sb, host:str, key:bytes) -> Sandbox` | Send checkpoint to `host` and restore there. |
-| `policy.refresh_remote(url:str)` | Fetch YAML policy over HTTP and apply. |
+| `policy.refresh_remote(url:str, token:str)` | Fetch YAML policy over HTTP and apply. |
 
 
 ## 6  Exceptions hierarchy

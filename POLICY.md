@@ -84,5 +84,5 @@ Several ready-to-use policies are included under the `policy/` directory:
 | `ml.yml` | Machine learning jobs with outbound HTTPS and generous quotas |
 | `web_scraper.yml` | Basic web scraping with only HTTP/HTTPS access |
 
-Load any template with `pyisolate.policy.refresh("policy/<name>.yml")` and the
+Load any template with `pyisolate.policy.refresh("policy/<name>.yml", token)` and the
 new limits take effect instantly.

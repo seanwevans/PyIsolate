@@ -99,7 +99,7 @@ templates cover common scenarios:
 * **`web_scraper.yml`** – permits HTTP/HTTPS to the public internet while
   restricting filesystem access to `/tmp`.
 
-Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
+Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑load any of these files at runtime.
 
 
 
