@@ -23,3 +23,11 @@ class MemoryExceeded(SandboxError):
 
 class CPUExceeded(SandboxError):
     """Raised when a sandbox exceeds its CPU quota."""
+
+
+class BandwidthExceeded(SandboxError):
+    """Raised when a sandbox exceeds its bandwidth quota."""
+
+
+class IOPSExceeded(SandboxError):
+    """Raised when a sandbox exceeds its IOPS quota."""

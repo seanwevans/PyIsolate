@@ -65,6 +65,8 @@ class Supervisor:
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        bandwidth_bytes: Optional[int] = None,
+        iops: Optional[int] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         self._cleanup()
@@ -73,6 +75,8 @@ class Supervisor:
             policy=policy,
             cpu_ms=cpu_ms,
             mem_bytes=mem_bytes,
+            bandwidth_bytes=bandwidth_bytes,
+            iops=iops,
         )
         thread.start()
         with self._lock:

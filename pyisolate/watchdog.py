@@ -46,3 +46,14 @@ class ResourceWatchdog(threading.Thread):
                 ):
                     sb._outbox.put(errors.MemoryExceeded())
                     sb.stop()
+                    continue
+                if sb.bandwidth_quota_bytes is not None and (
+                    stats.io_bytes >= sb.bandwidth_quota_bytes
+                ):
+                    sb._outbox.put(errors.BandwidthExceeded())
+                    sb.stop()
+                    continue
+                if sb.iops_quota is not None and stats.iops >= sb.iops_quota:
+                    sb._outbox.put(errors.IOPSExceeded())
+                    sb.stop()
+                    continue

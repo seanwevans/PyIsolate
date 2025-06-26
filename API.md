@@ -8,7 +8,7 @@ import pyisolate as psi
 
 | Call | Description |
 |------|-------------|
-| `psi.spawn(name:str, policy:str|dict=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle. |
+| `psi.spawn(name:str, policy:str|dict=None, cpu_ms:int=None, mem_bytes:int=None, bandwidth_bytes:int=None, iops:int=None) → Sandbox` | Create sandbox thread with optional quotas, attach eBPF, return handle. |
 | `sandbox.close(timeout=0.2)` | Graceful stop → SIGTERM; force‑kill after timeout. |
 | `with psi.spawn(name, policy)` | Context manager form; sandbox closes on exit. |
 | `psi.list_active() → Dict[str, Sandbox]` | Introspection. |
@@ -50,6 +50,8 @@ sb = psi.spawn("etl", policy=cust)
 |----------|---------|
 | `sb.stats.cpu_ms` | CPU consumed since launch. |
 | `sb.stats.mem_bytes` | Resident set size (live). |
+| `sb.stats.io_bytes` | Total bytes of I/O performed. |
+| `sb.stats.iops` | I/O operations performed. |
 | `psi.events` | Async iterator of `(ts, sandbox, event)` tuples. |
 
 Event types: `MEM_KILL`, `CPU_THROTTLE`, `POLICY_HOTLOAD`, `BROKER_ERROR`.
@@ -62,6 +64,8 @@ class PolicyError(SandboxError): pass
 class TimeoutError(SandboxError): pass
 class MemoryExceeded(SandboxError): pass
 class CPUExceeded(SandboxError): pass
+class BandwidthExceeded(SandboxError): pass
+class IOPSExceeded(SandboxError): pass
 ```
 
 All user‑facing errors inherit from `SandboxError`.

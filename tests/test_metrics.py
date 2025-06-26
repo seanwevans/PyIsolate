@@ -16,5 +16,7 @@ def test_export_contains_metrics():
         metrics = MetricsExporter().export()
         assert "pyisolate_cpu_ms" in metrics
         assert "pyisolate_mem_bytes" in metrics
+        assert "pyisolate_io_bytes" in metrics
+        assert "pyisolate_iops" in metrics
     finally:
         sb.close()

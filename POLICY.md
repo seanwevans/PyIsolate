@@ -32,6 +32,8 @@ sandboxes:
 | `net` | `none` \| list of rules | Hooked at `cgroup/connect*`; tuples `["ip:port", "tcp/udp"]`. |
 | `mem` | `<N>MiB` | Hard cap, checked in allocator; guest killed on exceed. |
 | `cpu` | `<N>ms` per 100 ms window | Perf‑event counter → SIGXCPU to offending thread. |
+| `bw` | `<N>bytes` per second | Cgroup I/O throttling of aggregate bandwidth. |
+| `iops` | `<N>` operations per second | Limit on I/O syscall count. |
 
 *Rule precedence:* first match wins. Unmatched operation → **deny**.
 

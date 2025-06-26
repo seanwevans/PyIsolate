@@ -73,6 +73,26 @@ def test_memory_quota_exceeded():
         sb.close()
 
 
+def test_bandwidth_quota_exceeded():
+    sb = iso.spawn("tbw", bandwidth_bytes=10)
+    try:
+        sb._thread.record_io(20)
+        with pytest.raises(iso.BandwidthExceeded):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
+def test_iops_quota_exceeded():
+    sb = iso.spawn("tiops", iops=1)
+    try:
+        sb._thread.record_io(1, ops=2)
+        with pytest.raises(iso.IOPSExceeded):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
 def test_policy_refresh_parses_yaml(tmp_path, monkeypatch):
     policy_file = tmp_path / "p.yml"
     policy_file.write_text("version: 0.1\n")

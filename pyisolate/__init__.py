@@ -4,7 +4,9 @@ This module exposes the high-level API described in API.md.
 """
 
 from .errors import (
+    BandwidthExceeded,
     CPUExceeded,
+    IOPSExceeded,
     MemoryExceeded,
     PolicyError,
     SandboxError,
@@ -31,4 +33,6 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "BandwidthExceeded",
+    "IOPSExceeded",
 ]

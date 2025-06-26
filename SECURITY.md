@@ -6,7 +6,7 @@
 | ----------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------- |
 | **Guest attacker**                              | Executes arbitrary Python bytecode inside a sandbox sub‑interpreter. | • Escalate into supervisor or host OS                |
 | • Read/modify data belonging to other sandboxes |                                                                      |                                                      |
-| • Exhaust shared resources (CPU / RAM / I/O)    |                                                                      |                                                      |
+| • Exhaust shared resources (CPU / RAM / I/O bandwidth & ops)    |                                                                      |                                                      |
 | **Network adversary**                           | Can capture, replay, or inject broker frames over IPC/TCP.           | Hijack privileged RPCs; tamper or spoof audit trails |
 | **Malicious extension author**                  | Crafts a wheel with native code to break isolation.                  | Load arbitrary ELF, bypass policies                  |
 
@@ -31,7 +31,7 @@ Anything not listed above is *not* guaranteed.
 ### 3.1 Kernel eBPF guards
 
 * **LSM hooks** (`file_open`, `inode_unlink`, `socket_connect`) — path‑aware FS & net gating.
-* **cgroup programs** — per‑sandbox memory (`cgroup/mem`), CPU (`perf‑event`) & bandwidth limits.
+* **cgroup programs** — per‑sandbox memory (`cgroup/mem`), CPU (`perf‑event`), bandwidth & IOPS limits.
 * **Tracepoint programs** — instant kill on `execve`, `ptrace`, `bpf()`, or other high‑risk syscalls.
 
 ### 3.2 CPython hardening

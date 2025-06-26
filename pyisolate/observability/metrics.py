@@ -19,5 +19,7 @@ class MetricsExporter:
             stats = sb.stats
             lines.append(f'pyisolate_cpu_ms{{sandbox="{name}"}} {stats.cpu_ms:.0f}')
             lines.append(f'pyisolate_mem_bytes{{sandbox="{name}"}} {stats.mem_bytes}')
+            lines.append(f'pyisolate_io_bytes{{sandbox="{name}"}} {stats.io_bytes}')
+            lines.append(f'pyisolate_iops{{sandbox="{name}"}} {stats.iops}')
 
         return "\n".join(lines) + ("\n" if lines else "")

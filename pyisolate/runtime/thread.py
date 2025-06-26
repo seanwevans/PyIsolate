@@ -30,6 +30,8 @@ signal.signal(signal.SIGXCPU, _sigxcpu_handler)
 class Stats:
     cpu_ms: float
     mem_bytes: int
+    io_bytes: int
+    iops: int
 
 
 class SandboxThread(threading.Thread):
@@ -41,6 +43,8 @@ class SandboxThread(threading.Thread):
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        bandwidth_bytes: Optional[int] = None,
+        iops: Optional[int] = None,
     ):
         super().__init__(name=name, daemon=True)
         self._inbox: "queue.Queue[str]" = queue.Queue()
@@ -49,10 +53,14 @@ class SandboxThread(threading.Thread):
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
         self.mem_quota_bytes = mem_bytes
+        self.bandwidth_quota_bytes = bandwidth_bytes
+        self.iops_quota = iops
         self._cpu_time = 0.0
         self._mem_peak = 0
         self._mem_base = 0
         self._start_time = None
+        self._io_bytes = 0
+        self._iops = 0
 
     def exec(self, src: str) -> None:
         self._inbox.put(src)
@@ -91,12 +99,22 @@ class SandboxThread(threading.Thread):
         self._stop_event.set()
         self.join(timeout)
 
+    def record_io(self, bytes_count: int, ops: int = 1) -> None:
+        """Increment I/O counters for bandwidth and operations."""
+        self._io_bytes += bytes_count
+        self._iops += ops
+
     @property
     def stats(self):
         cpu_ms = self._cpu_time
         if self._start_time is not None:
             cpu_ms += (time.monotonic() - self._start_time) * 1000
-        return Stats(cpu_ms=cpu_ms, mem_bytes=self._mem_peak)
+        return Stats(
+            cpu_ms=cpu_ms,
+            mem_bytes=self._mem_peak,
+            io_bytes=self._io_bytes,
+            iops=self._iops,
+        )
 
     # internal thread run loop
     def run(self) -> None:
@@ -105,7 +123,7 @@ class SandboxThread(threading.Thread):
         self._mem_base = tracemalloc.get_traced_memory()[0]
         self._cpu_time = 0.0
         self._start_time = None
-        local_vars = {"post": self._outbox.put}
+        local_vars = {"post": self._outbox.put, "io": self.record_io}
         while not self._stop_event.is_set():
             try:
                 src = self._inbox.get(timeout=0.1)

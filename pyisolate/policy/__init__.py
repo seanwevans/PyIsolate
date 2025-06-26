@@ -58,6 +58,8 @@ from ..supervisor import reload_policy
 @dataclass
 class Policy:
     mem: str | None = None
+    bw: str | None = None
+    iops: int | None = None
     fs: list[str] = field(default_factory=list)
     tcp: list[str] = field(default_factory=list)
 

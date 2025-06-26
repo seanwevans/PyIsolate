@@ -33,6 +33,26 @@ def test_memory_quota_exceeded_via_watchdog():
         sb.close()
 
 
+def test_bandwidth_quota_exceeded_via_watchdog():
+    sb = iso.spawn("wdbw", bandwidth_bytes=10)
+    try:
+        sb._thread.record_io(20)
+        with pytest.raises(iso.BandwidthExceeded):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
+def test_iops_quota_exceeded_via_watchdog():
+    sb = iso.spawn("wdiops", iops=1)
+    try:
+        sb._thread.record_io(1, ops=2)
+        with pytest.raises(iso.IOPSExceeded):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
 def test_watchdog_thread_stops():
     sup = iso.supervisor._supervisor
     iso.shutdown()
