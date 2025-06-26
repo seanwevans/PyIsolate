@@ -1,6 +1,6 @@
 """Policy helpers stub."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 try:
@@ -58,11 +58,15 @@ from ..supervisor import reload_policy
 @dataclass
 class Policy:
     mem: str | None = None
+    fs: list[str] = field(default_factory=list)
+    tcp: list[str] = field(default_factory=list)
 
     def allow_fs(self, path: str) -> "Policy":
+        self.fs.append(path)
         return self
 
     def allow_tcp(self, addr: str) -> "Policy":
+        self.tcp.append(addr)
         return self
 
 
