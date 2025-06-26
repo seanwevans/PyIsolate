@@ -18,8 +18,6 @@ class PolicyAuthError(PolicyError):
 class TimeoutError(SandboxError, _builtins.TimeoutError):
     """Raised when a sandbox operation times out."""
 
-    pass
-
 
 class MemoryExceeded(SandboxError):
     """Raised when a sandbox exceeds its memory quota."""
