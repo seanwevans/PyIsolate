@@ -63,7 +63,13 @@ class BPFManager:
             ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"]
         )
         ok &= self._run(
-            ["bpftool", "prog", "load", str(self._filter_obj), "/sys/fs/bpf/syscall_filter"]
+            [
+                "bpftool",
+                "prog",
+                "load",
+                str(self._filter_obj),
+                "/sys/fs/bpf/syscall_filter",
+            ]
         )
         self.loaded = ok
 
