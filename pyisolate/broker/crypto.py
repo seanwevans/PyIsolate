@@ -7,6 +7,8 @@ from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from ..libsodium import constant_compare
+
 CTR_LIMIT = 0xFFFFFFFFFFFFFFFFFFFF  # 2^96 - 1
 
 
@@ -59,8 +61,8 @@ class CryptoBroker:
             raise ValueError("invalid frame")
 
         nonce = data[:12]
-        ctr = int.from_bytes(nonce, "little")
-        if ctr != self._rx_ctr:
+        expected_nonce = self._nonce(self._rx_ctr)
+        if not constant_compare(nonce, expected_nonce):
             try:
                 self._aead.decrypt(nonce, data[12:], b"")
             except Exception:
