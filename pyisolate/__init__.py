@@ -19,6 +19,9 @@ from .supervisor import (
     shutdown,
     spawn,
 )
+from .checkpoint import checkpoint, restore
+from .migration import migrate
+from .policy import refresh_remote
 
 __all__ = [
     "spawn",
@@ -36,4 +39,8 @@ __all__ = [
     "parse_policy",
     "check_fs",
     "check_tcp",
+    "checkpoint",
+    "restore",
+    "migrate",
+    "refresh_remote",
 ]

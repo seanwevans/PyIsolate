@@ -13,9 +13,12 @@
 * **True parallelism** — built on CPython 3.13 with the `--disable-gil` build.
 * **Kernel‑enforced security** — eBPF‑LSM & cgroup hooks gate filesystem, network, and high‑risk syscalls.
 * **Deterministic quotas** — per‑interpreter arenas cap RAM; perf‑event BPF guards CPU & bandwidth.
-* **Authenticated broker** — X25519 + ChaCha20‑Poly1305 secure control channel with replay counters.
+* **Authenticated broker** — X25519 (optionally Kyber‑768) + ChaCha20‑Poly1305 secure control channel with replay counters.
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+* **Remote policy enforcement** — fetch and apply YAML over HTTP.
+* **Encrypted checkpointing** — save sandbox state with ChaCha20‑Poly1305.
+* **Migration** — transfer checkpoints to a peer host.
 
 ---
 
@@ -44,6 +47,7 @@ with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
     print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
 
+<<<<<<< codex/add-visual-policy-editor/debugger
 ### Policy editor
 
 Run a minimal GUI to tweak and hot‑reload YAML policies:
@@ -52,6 +56,19 @@ Run a minimal GUI to tweak and hot‑reload YAML policies:
 python -m pyisolate.editor policy/example.yml
 ```
 The debug box lets you test file paths or addresses against the live policy.
+=======
+### Policy templates
+
+Ready-made YAML policies live in the `policy/` directory.  The following
+templates cover common scenarios:
+
+* **`ml.yml`** – baseline for machine learning workloads with outbound HTTPS
+  access and generous CPU/memory limits.
+* **`web_scraper.yml`** – permits HTTP/HTTPS to the public internet while
+  restricting filesystem access to `/tmp`.
+
+Use `pyisolate.policy.refresh()` to hot‑load any of these files at runtime.
+>>>>>>> main
 
 ---
 
@@ -100,7 +117,7 @@ See **SECURITY.md** for a full threat‑model walkthrough.
 ## Roadmap
 
 * [ ] Land Landlock fallback for unprivileged kernels
-* [ ] Add Kyber‑768 / Dilithium PQ hybrids
+* [x] Add Kyber‑768 / Dilithium PQ hybrids
 * [ ] WASM build target for browser sandboxes
 * [ ] gRPC control‑plane plugin
 
