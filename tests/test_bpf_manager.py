@@ -31,7 +31,7 @@ def test_load_runs_toolchain(monkeypatch):
         str(mgr._obj),
     ]
 
-    assert clang_call in calls
+    assert clang_dummy in calls
     skel_cmd = [
         "sh",
         "-c",
