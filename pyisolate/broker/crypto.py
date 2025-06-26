@@ -7,13 +7,51 @@ from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+try:  # Optional post-quantum KEM
+    from pqcrypto.kem import kyber768
+
+    HAVE_KYBER = True
+except Exception:  # pragma: no cover - library optional
+    HAVE_KYBER = False
+
 CTR_LIMIT = 0xFFFFFFFFFFFFFFFFFFFF  # 2^96 - 1
+
+
+def kyber_keypair() -> tuple[bytes, bytes]:
+    """Generate a Kyber-768 key pair."""
+    if not HAVE_KYBER:
+        raise RuntimeError("Kyber library not available")
+    pk, sk = kyber768.generate_keypair()
+    return bytes(pk), bytes(sk)
+
+
+def kyber_encapsulate(peer_pk: bytes) -> tuple[bytes, bytes]:
+    """Encapsulate a shared secret to ``peer_pk``."""
+    if not HAVE_KYBER:
+        raise RuntimeError("Kyber library not available")
+    ct, ss = kyber768.encrypt(peer_pk)
+    return bytes(ct), bytes(ss)
+
+
+def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
+    """Recover the shared secret from ``ciphertext``."""
+    if not HAVE_KYBER:
+        raise RuntimeError("Kyber library not available")
+    return bytes(kyber768.decrypt(ciphertext, secret_key))
 
 
 class CryptoBroker:
     """Broker side of the authenticated channel."""
 
     def __init__(self, private_key: bytes, peer_key: bytes):
+        self.rotate(private_key, peer_key)
+
+    @staticmethod
+    def _nonce(counter: int) -> bytes:
+        return counter.to_bytes(12, "little")
+
+    def rotate(self, private_key: bytes, peer_key: bytes) -> None:
+        """Derive a new AEAD key and reset counters."""
         priv = x25519.X25519PrivateKey.from_private_bytes(private_key)
         try:
             pub = x25519.X25519PublicKey.from_public_bytes(peer_key)
@@ -21,6 +59,8 @@ class CryptoBroker:
             priv.exchange(x25519.X25519PrivateKey.generate().public_key())
             raise ValueError("invalid peer key") from exc
         shared = priv.exchange(pub)
+        if pq_secret is not None:
+            shared += pq_secret
         hkdf = HKDF(
             algorithm=hashes.SHA256(),
             length=32,
@@ -35,10 +75,6 @@ class CryptoBroker:
         self._aead = ChaCha20Poly1305(self._key)
         self._tx_ctr = 0
         self._rx_ctr = 0
-
-    @staticmethod
-    def _nonce(counter: int) -> bytes:
-        return counter.to_bytes(12, "little")
 
     def frame(self, data: bytes) -> bytes:
         """Encrypt and frame ``data`` using the send counter."""
@@ -71,7 +107,12 @@ class CryptoBroker:
                 pass
             raise ValueError("replay detected")
 
+        try:
+            plaintext = self._aead.decrypt(nonce, data[12:], b"")
+        except Exception:
+            raise ValueError("decryption failed") from None
         self._rx_ctr += 1
+
         return self._aead.decrypt(nonce, data[12:], b"")
 
 

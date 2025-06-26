@@ -1,8 +1,9 @@
 # Broker Protocol
 
-The supervisor and each sandbox communicate over an authenticated channel. Keys
-are negotiated using X25519 and all frames are protected with
-ChaCha20-Poly1305.
+The supervisor and each sandbox communicate over an authenticated channel.
+Keys are negotiated using X25519 and, if available, a Kyber‑768
+key‑encapsulation mechanism. The resulting secret feeds HKDF and all
+frames are protected with ChaCha20-Poly1305.
 
 ## Handshake
 
@@ -13,6 +14,9 @@ ChaCha20-Poly1305.
    32 byte AEAD key.
 5. The helper `pyisolate.broker.crypto.handshake()` wraps these steps and
    returns `(public_key, broker)`.
+6. Keys can be rotated by repeating steps 1‑5; counters reset to zero after a
+   successful rotation.
+
 
 ## Framing
 
