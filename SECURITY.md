@@ -45,6 +45,7 @@ Anything not listed above is *not* guaranteed.
 * Noise‑like 1‑RTT handshake: `X25519` + optional `Kyber‑768` hybrid → HKDF‑SHA‑256.
 * Per‑frame AEAD: `ChaCha20‑Poly1305` (96‑bit nonce, 16‑byte tag).
 * 64‑bit monotone counter, stored in a lock‑free slab per channel; any rollback closes the channel.
+* Keys can be rotated by repeating the handshake; counters reset on success.
 
 ### 3.4 Supervisor watchdog
 

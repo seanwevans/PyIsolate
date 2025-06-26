@@ -7,7 +7,9 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 
 from __future__ import annotations
 
+import builtins
 import json
+import logging
 import queue
 import signal
 import socket
@@ -18,6 +20,24 @@ from dataclasses import dataclass
 from typing import Any, Optional, Iterable
 
 from .. import errors
+from ..numa import bind_current_thread
+
+# Precompute a sanitized builtins dict for sandbox execution.
+_FORBIDDEN = {
+    "eval",
+    "exec",
+    "compile",
+    "getattr",
+    "setattr",
+    "delattr",
+}
+_SAFE_BUILTINS = {
+    name: getattr(builtins, name)
+    for name in dir(builtins)
+    if not name.startswith("_") or name == "__import__"
+}
+for name in _FORBIDDEN:
+    _SAFE_BUILTINS.pop(name, None)
 
 
 _thread_local = threading.local()
@@ -58,8 +78,11 @@ class SandboxThread(threading.Thread):
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        numa_node: Optional[int] = None,
+        cgroup_path=None,
     ):
         super().__init__(name=name, daemon=True)
+        self._logger = logging.getLogger(f"pyisolate.{name}")
         self._inbox: "queue.Queue[str]" = queue.Queue()
         self._outbox: "queue.Queue[Any]" = queue.Queue()
         self._stop_event = threading.Event()
@@ -68,10 +91,30 @@ class SandboxThread(threading.Thread):
         self.mem_quota_bytes = mem_bytes
         self._cpu_time = 0.0
         self._mem_peak = 0
+        self.numa_node = numa_node
         self._mem_base = 0
         self._start_time = None
+        self._cgroup_path = cgroup_path
+        self._trace_enabled = False
+        self._syscall_log: list[str] = []
+
+    def enable_tracing(self) -> None:
+        """Start recording guest operations."""
+        self._trace_enabled = True
+        self._syscall_log = []
+
+    def get_syscall_log(self) -> list[str]:
+        """Return recorded guest operations."""
+        return list(self._syscall_log)
+
+    def profile(self) -> Stats:
+        """Return current CPU and memory usage."""
+        return self.stats
 
     def exec(self, src: str) -> None:
+        if self._trace_enabled:
+            self._syscall_log.append(src)
+        self._logger.debug("exec", extra={"code": src})
         self._inbox.put(src)
 
     def call(self, func: str, *args, **kwargs):
@@ -82,7 +125,7 @@ class SandboxThread(threading.Thread):
                 f"payload = json.loads({payload!r})",
                 "module_name, func_name = payload['func'].rsplit('.', 1)",
                 "mod = importlib.import_module(module_name)",
-                "res = getattr(mod, func_name)(*payload['args'], **payload['kwargs'])",
+                "res = object.__getattribute__(mod, func_name)(*payload['args'], **payload['kwargs'])",
                 "post(res)",
             ]
         )
@@ -108,6 +151,21 @@ class SandboxThread(threading.Thread):
         self._stop_event.set()
         self.join(timeout)
 
+    def reset(
+        self,
+        name: str,
+        policy=None,
+        cpu_ms: Optional[int] = None,
+        mem_bytes: Optional[int] = None,
+    ) -> None:
+        """Reuse this thread for a new sandbox."""
+        self.name = name
+        self.policy = policy
+        self.cpu_quota_ms = cpu_ms
+        self.mem_quota_bytes = mem_bytes
+        self._cpu_time = 0.0
+        self._mem_peak = 0
+
     @property
     def stats(self):
         cpu_ms = self._cpu_time
@@ -119,15 +177,26 @@ class SandboxThread(threading.Thread):
     def run(self) -> None:
         if not tracemalloc.is_tracing():
             tracemalloc.start()
+        try:
+            from .. import cgroup
+
+            cgroup.attach_current(self._cgroup_path)
+        except Exception:
+            pass
         self._mem_base = tracemalloc.get_traced_memory()[0]
         self._cpu_time = 0.0
         self._start_time = None
-        local_vars = {"post": self._outbox.put}
 
         allowed_tcp = set()
         if self.policy is not None and getattr(self.policy, "tcp", None):
             allowed_tcp = set(self.policy.tcp)
         _thread_local.tcp = allowed_tcp
+
+        local_vars = {"post": self._outbox.put, "__builtins__": _SAFE_BUILTINS}
+
+        if self.numa_node is not None:
+            bind_current_thread(self.numa_node)
+            
         while not self._stop_event.is_set():
             try:
                 src = self._inbox.get(timeout=0.1)
@@ -136,6 +205,9 @@ class SandboxThread(threading.Thread):
             try:
                 start_cpu = time.thread_time()
                 self._start_time = time.monotonic()
+                if self._trace_enabled:
+                    self._syscall_log.append(src)
+                self._logger.debug("run_exec", extra={"code": src})
                 exec(src, local_vars, local_vars)
                 end_cpu = time.thread_time()
                 self._cpu_time += (end_cpu - start_cpu) * 1000
