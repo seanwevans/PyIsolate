@@ -53,7 +53,11 @@ class CryptoBroker:
     def rotate(self, private_key: bytes, peer_key: bytes) -> None:
         """Derive a new AEAD key and reset counters."""
         priv = x25519.X25519PrivateKey.from_private_bytes(private_key)
-        pub = x25519.X25519PublicKey.from_public_bytes(peer_key)
+        try:
+            pub = x25519.X25519PublicKey.from_public_bytes(peer_key)
+        except Exception as exc:  # maintain constant-time failure path
+            priv.exchange(x25519.X25519PrivateKey.generate().public_key())
+            raise ValueError("invalid peer key") from exc
         shared = priv.exchange(pub)
         if pq_secret is not None:
             shared += pq_secret
@@ -108,4 +112,33 @@ class CryptoBroker:
         except Exception:
             raise ValueError("decryption failed") from None
         self._rx_ctr += 1
-        return plaintext
+
+        return self._aead.decrypt(nonce, data[12:], b"")
+
+
+def handshake(peer_key: bytes, *, private_key: bytes | None = None) -> tuple[bytes, CryptoBroker]:
+    """Perform a one-shot X25519 handshake and return ``(public_key, broker)``.
+
+    If ``private_key`` is ``None``, a fresh keypair is generated. The returned
+    ``public_key`` should be sent to the peer, while ``broker`` is ready for
+    authenticated framing.
+    """
+
+    if private_key is None:
+        priv_obj = x25519.X25519PrivateKey.generate()
+        priv_bytes = priv_obj.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    else:
+        priv_bytes = private_key
+        priv_obj = x25519.X25519PrivateKey.from_private_bytes(private_key)
+
+    pub_bytes = priv_obj.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+    broker = CryptoBroker(priv_bytes, peer_key)
+    return pub_bytes, broker

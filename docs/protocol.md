@@ -12,8 +12,11 @@ frames are protected with ChaCha20-Poly1305.
 3. A shared secret is derived via `X25519PrivateKey.exchange()`.
 4. The secret feeds HKDF-SHA256 with `info=b"pyisolate-channel"` to produce the
    32 byte AEAD key.
-5. Keys can be rotated by repeating steps 1‑4; counters reset to zero after a
+5. The helper `pyisolate.broker.crypto.handshake()` wraps these steps and
+   returns `(public_key, broker)`.
+6. Keys can be rotated by repeating steps 1‑5; counters reset to zero after a
    successful rotation.
+
 
 ## Framing
 
