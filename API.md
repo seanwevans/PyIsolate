@@ -8,7 +8,7 @@ import pyisolate as psi
 
 | Call | Description |
 |------|-------------|
-| `psi.spawn(name:str, policy:str|dict=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle. |
+| `psi.spawn(name:str, policy:str|dict=None, numa_node:int|None=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle. |
 | `sandbox.close(timeout=0.2)` | Graceful stop → SIGTERM; force‑kill after timeout. |
 | `with psi.spawn(name, policy)` | Context manager form; sandbox closes on exit. |
 | `psi.list_active() → Dict[str, Sandbox]` | Introspection. |
@@ -16,7 +16,7 @@ import pyisolate as psi
 ## 2  Executing code
 
 ```python
-sb = psi.spawn("guest42", policy="defaults")
+sb = psi.spawn("guest42", policy="defaults", numa_node=0)
 sb.exec("from math import sqrt; post(sqrt(2))")
 result = sb.recv(timeout=0.1)      # 1.4142135623
 ```
@@ -41,7 +41,7 @@ cust = (Policy(mem="256MiB")
 cust.fs  # ["/srv/data/*.parquet"]
 cust.tcp # ["127.0.0.1:9200"]
 
-sb = psi.spawn("etl", policy=cust)
+sb = psi.spawn("etl", policy=cust, numa_node=1)
 ```
 
 ## 4  Metrics & events

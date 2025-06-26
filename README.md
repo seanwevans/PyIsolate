@@ -16,6 +16,7 @@
 * **Authenticated broker** — X25519 + ChaCha20‑Poly1305 secure control channel with replay counters.
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
 * **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+* **NUMA‑aware scheduling** — bind sandboxes to the CPUs of a chosen node on multi‑socket hosts.
 
 ---
 
