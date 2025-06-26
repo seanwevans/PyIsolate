@@ -54,8 +54,13 @@ class BPFManager:
         """Refresh maps based on a policy JSON file."""
         if not self.loaded:
             raise RuntimeError("BPF not loaded")
-        with open(policy_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        try:
+            with open(policy_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Policy file not found: {policy_path}") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid JSON in policy file {policy_path}") from exc
         # Replace the active policy entirely to drop removed entries
         self.policy_maps = data
         for key, val in data.items():
