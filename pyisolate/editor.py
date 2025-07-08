@@ -1,4 +1,8 @@
-"""Simple visual policy editor and debugger."""
+"""Simple visual policy editor and debugger.
+
+Pass a token to :class:`PolicyEditor` or :meth:`reload` to authenticate hot
+reloads against the running supervisor.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ import fnmatch
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 from .policy import refresh
 from .policy import yaml as policy_yaml
@@ -55,11 +59,12 @@ def check_tcp(policy: dict, addr: str) -> bool:
 class PolicyEditor(tk.Tk):
     """Minimal Tk-based policy editor and debugger."""
 
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None, token: str | None = None):
         super().__init__()
         self.title("PyIsolate Policy Editor")
         self.geometry("600x400")
         self.path = Path(path).resolve() if path else None
+        self.token = token
 
         self.text = tk.Text(self, wrap="none")
         self.text.pack(fill=tk.BOTH, expand=True)
@@ -112,14 +117,25 @@ class PolicyEditor(tk.Tk):
         else:
             messagebox.showinfo("Valid", "Policy OK")
 
-    def reload(self) -> None:
+    def reload(self, token: str | None = None) -> None:
+        """Write edits to disk and hot-reload the policy."""
+
         if self.path is None:
             messagebox.showerror("Error", "No policy file loaded")
             return
+
         with open(self.path, "w", encoding="utf-8") as fh:
             fh.write(self.text.get("1.0", tk.END))
+
+        tok = token or self.token
+        if tok is None:
+            tok = simpledialog.askstring("Token", "Policy token:", show="*")
+            if tok is None:
+                return
+            self.token = tok
+
         try:
-            refresh(str(self.path))
+            refresh(str(self.path), token=tok)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Reload failed", str(exc))
         else:

@@ -145,7 +145,7 @@ class SandboxThread(threading.Thread):
                 f"payload = json.loads({payload!r})",
                 "module_name, func_name = payload['func'].rsplit('.', 1)",
                 "mod = __import__(module_name, fromlist=['_'])",
-                "res = getattr(mod, func_name)(*payload['args'], **payload['kwargs'])",
+                "res = mod.__dict__[func_name](*payload['args'], **payload['kwargs'])",
                 "post(res)",
             ]
         )
@@ -216,22 +216,16 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._start_time = None
 
-        local_vars = {"post": self._outbox.put}
+        local_vars = {"post": self._outbox.put, "__builtins__": _SAFE_BUILTINS.copy()}
         if self.allowed_imports is not None:
             from .imports import CapabilityImporter
-            import builtins as _builtins
-
-            builtins_dict = _builtins.__dict__.copy()
-            builtins_dict["__import__"] = CapabilityImporter(self.allowed_imports)
-            local_vars["__builtins__"] = builtins_dict
+            local_vars["__builtins__"]["__import__"] = CapabilityImporter(self.allowed_imports)
 
 
         allowed_tcp = set()
         if self.policy is not None and getattr(self.policy, "tcp", None):
             allowed_tcp = set(self.policy.tcp)
         _thread_local.tcp = allowed_tcp
-
-        local_vars = {"post": self._outbox.put, "__builtins__": _SAFE_BUILTINS}
 
         if self.numa_node is not None:
             bind_current_thread(self.numa_node)
