@@ -108,6 +108,10 @@ def test_templates_parse(monkeypatch, name):
         "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
     )
     path = ROOT / "policy" / name
+    compiled = policy.compile_policy(str(path))
+    assert compiled.sandboxes
+    import pyisolate as iso
+    iso.set_policy_token("tok")
     policy.refresh(str(path), token="tok")
 
 

@@ -99,18 +99,22 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
 
     with open(path, "r", encoding="utf-8") as fh:
         text = fh.read()
-        if "sandboxes:" in text and not hasattr(yaml, "__file__"):
+
+    if hasattr(yaml, "__file__"):
+        data = yaml.safe_load(text) or {}
+    else:
+        if "sandboxes:" in text:
             data = _simple_parse(text)
         else:
-            data = yaml.safe_load(text) or {}
+            data = yaml.safe_load(text)
 
     if not isinstance(data, dict):
         raise PolicyCompilerError("policy document must be a mapping")
 
     sandboxes = data.get("sandboxes")
     if sandboxes is None:
-        sandboxes = {"default": {k: v for k, v in data.items() if k != "version"}}
-
+        sb_cfg = {k: v for k, v in data.items() if k != "version"}
+        sandboxes = {"default": sb_cfg}
     if not isinstance(sandboxes, dict):
         raise PolicyCompilerError("missing or invalid 'sandboxes' section")
 
