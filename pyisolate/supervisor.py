@@ -126,6 +126,8 @@ class Supervisor:
                     cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
                 )
+                thread._on_violation = self._alerts.notify
+                thread._tracer = self._tracer
             else:
                 thread = SandboxThread(
                     name=name,
@@ -164,6 +166,7 @@ class Supervisor:
 
     def reload_policy(self, policy_path: str, token: str | RootCapability) -> None:
         """Hot-reload policy via the BPF manager if *token* matches."""
+
         if isinstance(token, RootCapability):
             pass
         else:

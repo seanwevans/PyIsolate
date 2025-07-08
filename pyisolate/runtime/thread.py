@@ -216,7 +216,7 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._start_time = None
 
-        local_vars = {"post": self._outbox.put}
+        local_vars = {"post": self._outbox.put, "__builtins__": _SAFE_BUILTINS.copy()}
         if self.allowed_imports is not None:
             from .imports import CapabilityImporter
             import builtins as _builtins
@@ -226,6 +226,7 @@ class SandboxThread(threading.Thread):
             local_vars["__builtins__"] = builtins_dict
         else:
             local_vars["__builtins__"] = _SAFE_BUILTINS
+            local_vars["__builtins__"]["__import__"] = CapabilityImporter(self.allowed_imports)
 
         allowed_tcp = set()
         if self.policy is not None and getattr(self.policy, "tcp", None):
