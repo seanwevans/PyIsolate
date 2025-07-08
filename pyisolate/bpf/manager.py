@@ -75,6 +75,7 @@ class BPFManager:
             str(self._guard_obj),
         ]
         ok = True
+
         if self._src not in self._SKEL_CACHE:
             ok &= self._run(dummy_compile)
             skel_cmd = [
