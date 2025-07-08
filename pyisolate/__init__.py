@@ -20,7 +20,6 @@ from .supervisor import (
     set_policy_token,
     spawn,
     shutdown,
-    spawn,
 )
 
 from .sdk import Pipeline, sandbox
