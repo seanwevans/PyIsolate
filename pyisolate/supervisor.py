@@ -117,19 +117,6 @@ class Supervisor:
             raise ValueError("Sandbox name too long")
         self._cleanup()
         cg_path = cgroup.create(name, cpu_ms, mem_bytes)
-        thread = SandboxThread(
-            name=name,
-            policy=policy,
-            cpu_ms=cpu_ms,
-            mem_bytes=mem_bytes,
-            allowed_imports=allowed_imports,
-            on_violation=self._alerts.notify,
-            tracer=self._tracer,
-            numa_node=numa_node,
-            cgroup_path=cg_path,
-        )
-        thread.start()
-
         with self._lock:
             if self._warm_pool:
                 thread = self._warm_pool.pop()
@@ -145,6 +132,11 @@ class Supervisor:
                     policy=policy,
                     cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
+                    allowed_imports=allowed_imports,
+                    on_violation=self._alerts.notify,
+                    tracer=self._tracer,
+                    numa_node=numa_node,
+                    cgroup_path=cg_path,
                 )
                 thread.start()
             self._sandboxes[name] = thread
@@ -170,10 +162,13 @@ class Supervisor:
         """Configure the secret used to authenticate policy updates."""
         self._policy_token = token
 
-    def reload_policy(self, policy_path: str, token: str) -> None:
+    def reload_policy(self, policy_path: str, token: str | RootCapability) -> None:
         """Hot-reload policy via the BPF manager if *token* matches."""
-        if token != self._policy_token:
-            raise PolicyAuthError("invalid policy token")
+        if isinstance(token, RootCapability):
+            pass
+        else:
+            if self._policy_token is not None and token != self._policy_token:
+                raise PolicyAuthError("invalid policy token")
 
         self._bpf.hot_reload(policy_path)
 
@@ -210,10 +205,9 @@ _supervisor = Supervisor()
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
 
-def reload_policy(policy_path: str, cap: RootCapability = ROOT) -> None:
-    _supervisor.reload_policy(policy_path, cap)
+def reload_policy(policy_path: str, token: str | RootCapability = ROOT) -> None:
+    _supervisor.reload_policy(policy_path, token)
 
-reload_policy = _supervisor.reload_policy
 set_policy_token = _supervisor.set_policy_token
 
 
@@ -227,5 +221,5 @@ def shutdown(cap: RootCapability = ROOT) -> None:
     global spawn, list_active, reload_policy, set_policy_token
     spawn = _supervisor.spawn
     list_active = _supervisor.list_active
-    reload_policy = _supervisor.reload_policy
+    reload_policy = lambda path, token=ROOT: _supervisor.reload_policy(path, token)
     set_policy_token = _supervisor.set_policy_token

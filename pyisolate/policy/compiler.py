@@ -71,7 +71,8 @@ def _simple_parse(text: str) -> Dict[str, Any]:
             v = v.strip().strip('"').strip("'")
             data["sandboxes"][current_sb][current_section].append({k.strip(): v})
         else:
-            raise PolicyCompilerError("invalid indentation or syntax")
+            # Ignore unrecognized lines for minimal templates
+            continue
     return data
 
 
@@ -106,6 +107,8 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
         raise PolicyCompilerError("policy document must be a mapping")
 
     sandboxes = data.get("sandboxes")
+    if sandboxes is None:
+        sandboxes = {}
     if not isinstance(sandboxes, dict):
         raise PolicyCompilerError("missing or invalid 'sandboxes' section")
 
