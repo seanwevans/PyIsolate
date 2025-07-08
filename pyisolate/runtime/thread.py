@@ -145,7 +145,7 @@ class SandboxThread(threading.Thread):
                 f"payload = json.loads({payload!r})",
                 "module_name, func_name = payload['func'].rsplit('.', 1)",
                 "mod = __import__(module_name, fromlist=['_'])",
-                "res = mod.__dict__[func_name](*payload['args'], **payload['kwargs'])",
+                "res = object.__getattribute__(mod, func_name)(*payload['args'], **payload['kwargs'])",
                 "post(res)",
             ]
         )

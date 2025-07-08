@@ -166,12 +166,12 @@ class Supervisor:
 
     def reload_policy(self, policy_path: str, token: str | RootCapability) -> None:
         """Hot-reload policy via the BPF manager if *token* matches."""
-        if (
-            self._policy_token is not None
-            and not isinstance(token, RootCapability)
-            and token != self._policy_token
-        ):
-            raise PolicyAuthError("invalid policy token")
+
+        if isinstance(token, RootCapability):
+            pass
+        else:
+            if self._policy_token is not None and token != self._policy_token:
+                raise PolicyAuthError("invalid policy token")
 
         self._bpf.hot_reload(policy_path)
 
@@ -208,10 +208,9 @@ _supervisor = Supervisor()
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
 
-def reload_policy(policy_path: str, cap: RootCapability = ROOT) -> None:
-    _supervisor.reload_policy(policy_path, cap)
+def reload_policy(policy_path: str, token: str | RootCapability = ROOT) -> None:
+    _supervisor.reload_policy(policy_path, token)
 
-reload_policy = _supervisor.reload_policy
 set_policy_token = _supervisor.set_policy_token
 
 
@@ -225,5 +224,5 @@ def shutdown(cap: RootCapability = ROOT) -> None:
     global spawn, list_active, reload_policy, set_policy_token
     spawn = _supervisor.spawn
     list_active = _supervisor.list_active
-    reload_policy = _supervisor.reload_policy
+    reload_policy = lambda path, token=ROOT: _supervisor.reload_policy(path, token)
     set_policy_token = _supervisor.set_policy_token

@@ -76,8 +76,10 @@ class BPFManager:
         ]
         ok = True
 
+        compile_cmd = dummy_compile
         if self._src not in self._SKEL_CACHE:
-            ok &= self._run(dummy_compile)
+            ok &= self._run(compile_cmd)
+
             skel_cmd = [
                 "sh",
                 "-c",
