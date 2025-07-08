@@ -97,15 +97,18 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
     """Parse and validate a policy YAML file."""
 
     with open(path, "r", encoding="utf-8") as fh:
-        if hasattr(yaml, "__file__"):
-            data = yaml.safe_load(fh) or {}
+        text = fh.read()
+        if "sandboxes:" in text and not hasattr(yaml, "__file__"):
+            data = _simple_parse(text)
         else:
-            data = _simple_parse(fh.read())
+            data = yaml.safe_load(text) or {}
 
     if not isinstance(data, dict):
         raise PolicyCompilerError("policy document must be a mapping")
 
     sandboxes = data.get("sandboxes")
+    if sandboxes is None:
+        sandboxes = {"default": {k: v for k, v in data.items() if k != "version"}}
     if not isinstance(sandboxes, dict):
         raise PolicyCompilerError("missing or invalid 'sandboxes' section")
 
