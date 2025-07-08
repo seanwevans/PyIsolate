@@ -98,6 +98,8 @@ Run a minimal GUI to tweak and hot‑reload YAML policies:
 python -m pyisolate.editor policy/example.yml
 ```
 The debug box lets you test file paths or addresses against the live policy.
+When you click **Reload**, the editor will ask for the policy token unless one
+was supplied via ``PolicyEditor(token="…")``.
 
 ### Policy templates
 

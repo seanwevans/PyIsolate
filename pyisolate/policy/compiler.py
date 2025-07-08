@@ -71,7 +71,8 @@ def _simple_parse(text: str) -> Dict[str, Any]:
             v = v.strip().strip('"').strip("'")
             data["sandboxes"][current_sb][current_section].append({k.strip(): v})
         else:
-            raise PolicyCompilerError("invalid indentation or syntax")
+            # Ignore unrecognized lines for minimal templates
+            continue
     return data
 
 
@@ -112,8 +113,6 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
 
     sandboxes = data.get("sandboxes")
     if sandboxes is None:
-        # Treat documents without an explicit sandboxes section as a
-        # single-sandbox policy using all top-level keys except "version".
         sb_cfg = {k: v for k, v in data.items() if k != "version"}
         sandboxes = {"default": sb_cfg}
     if not isinstance(sandboxes, dict):
