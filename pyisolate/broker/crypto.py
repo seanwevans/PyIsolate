@@ -116,7 +116,7 @@ class CryptoBroker:
             raise ValueError("decryption failed") from None
         self._rx_ctr += 1
 
-        return self._aead.decrypt(nonce, data[12:], b"")
+        return plaintext
 
 
 def handshake(peer_key: bytes, *, private_key: bytes | None = None, pq_secret: bytes | None = None) -> tuple[bytes, CryptoBroker]:
