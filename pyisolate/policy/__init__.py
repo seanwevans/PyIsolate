@@ -107,12 +107,12 @@ def refresh(path: str, token: str) -> None:
     # Compile and validate the YAML policy first
     compiled = compile_policy(path)
 
-    # Write the compiled representation to a JSON file for the BPF manager
-    json_path = Path(path).with_suffix(".json")
-    with open(json_path, "w", encoding="utf-8") as fh:
-        import json
+    import json
 
-        json.dump(asdict(compiled), fh)
+    # Write the compiled representation for the BPF manager
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp:
+        json.dump(asdict(compiled), tmp)
+        json_path = Path(tmp.name)
 
     # Fail fast if the YAML is malformed before touching BPF maps
     with open(path, "r", encoding="utf-8") as fh:
@@ -124,7 +124,13 @@ def refresh(path: str, token: str) -> None:
     _validate(data)
 
     # Upon successful parse, swap the live maps via the supervisor
-    reload_policy(str(json_path.resolve()), token)
+    try:
+        reload_policy(str(json_path.resolve()), token)
+    finally:
+        try:
+            os.unlink(json_path)
+        except OSError:
+            pass
 
 
 def refresh_remote(url: str, token: str) -> None:
