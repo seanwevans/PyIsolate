@@ -108,8 +108,6 @@ templates cover common scenarios:
 Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑load any of these files at runtime.
 
 
-
-
 ---
 
 ## Architecture
@@ -155,6 +153,12 @@ See **SECURITY.md** for a full threat‑model walkthrough.
 
 ---
 
+## Kubernetes deployment
+
+A `Dockerfile` and experimental operator are included. See [docs/kubernetes.md](docs/kubernetes.md) for details.
+
+---
+
 ## Roadmap
 
 * [ ] Land Landlock fallback for unprivileged kernels
@@ -171,15 +175,6 @@ See **SECURITY.md** for a full threat‑model walkthrough.
 3. Run `pre-commit run --all-files` and ensure CI passes.
 4. Submit a PR with docs & tests.
 
-### Community
-
-* Discord: **#pyisolate**
-* Matrix: `#pyisolate:matrix.org`
-
-## Kubernetes deployment
-
-A `Dockerfile` and experimental operator are included. See [docs/kubernetes.md](docs/kubernetes.md) for details.
-
 ---
 
 ## License
@@ -188,4 +183,4 @@ MIT – see `LICENSE`.
 
 ## Acknowledgements
 
-Inspired by PyO3, Tetragon, libsodium, and decades of sandbox research.
+Inspired by PyO3, Tetragon and libsodium.
