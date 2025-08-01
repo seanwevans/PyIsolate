@@ -33,6 +33,7 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
                     raise ValueError("invalid YAML line")
                 k, v = item.split(":", 1)
                 from typing import cast, List, Dict
+
                 assert isinstance(result[current], list)
                 lst = cast(list[dict[str, str]], result[current])
                 lst.append({k.strip(): _unquote(v.strip())})
@@ -62,7 +63,6 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
 
 
 from .compiler import PolicyCompilerError, compile_policy
-
 
 
 @dataclass
@@ -147,10 +147,11 @@ def refresh_remote(url: str, token: str) -> None:
     finally:
         os.unlink(tmp_path)
 
+
 __all__ = [
     "Policy",
     "refresh",
     "compile_policy",
     "PolicyCompilerError",
-    "refresh_remote"
+    "refresh_remote",
 ]

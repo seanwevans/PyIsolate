@@ -14,8 +14,8 @@ from pyisolate.bpf.manager import BPFManager
 
 
 def random_text(max_len=20):
-    letters = string.ascii_letters + string.digits + '\n: -'
-    return ''.join(random.choice(letters) for _ in range(random.randint(1, max_len)))
+    letters = string.ascii_letters + string.digits + "\n: -"
+    return "".join(random.choice(letters) for _ in range(random.randint(1, max_len)))
 
 
 def test_policy_parser_fuzz():

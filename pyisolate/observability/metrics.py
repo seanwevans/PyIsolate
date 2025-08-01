@@ -19,9 +19,7 @@ class MetricsExporter:
             stats = sb.stats
             lines.append(f'pyisolate_cpu_ms{{sandbox="{name}"}} {stats.cpu_ms:.0f}')
             lines.append(f'pyisolate_mem_bytes{{sandbox="{name}"}} {stats.mem_bytes}')
-            lines.append(
-                f'pyisolate_errors_total{{sandbox="{name}"}} {stats.errors}'
-            )
+            lines.append(f'pyisolate_errors_total{{sandbox="{name}"}} {stats.errors}')
             lines.append(f'pyisolate_cost{{sandbox="{name}"}} {stats.cost:.6f}')
             cumul = 0
             for le, count in stats.latency.items():

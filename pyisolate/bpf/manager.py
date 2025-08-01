@@ -111,7 +111,13 @@ class BPFManager:
             ]
         )
         ok &= self._run(
-            ["bpftool", "prog", "load", str(self._guard_obj), "/sys/fs/bpf/resource_guard"]
+            [
+                "bpftool",
+                "prog",
+                "load",
+                str(self._guard_obj),
+                "/sys/fs/bpf/resource_guard",
+            ]
         )
         self.loaded = ok
 

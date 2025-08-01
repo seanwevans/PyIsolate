@@ -235,7 +235,6 @@ class SandboxThread(threading.Thread):
 
         if self.numa_node is not None:
             bind_current_thread(self.numa_node)
-            
 
         while not self._stop_event.is_set():
             try:

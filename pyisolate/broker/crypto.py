@@ -46,14 +46,18 @@ def kyber_decapsulate(ciphertext: bytes, secret_key: bytes) -> bytes:
 class CryptoBroker:
     """Broker side of the authenticated channel."""
 
-    def __init__(self, private_key: bytes, peer_key: bytes, *, pq_secret: bytes | None = None):
+    def __init__(
+        self, private_key: bytes, peer_key: bytes, *, pq_secret: bytes | None = None
+    ):
         self.rotate(private_key, peer_key, pq_secret=pq_secret)
 
     @staticmethod
     def _nonce(counter: int) -> bytes:
         return counter.to_bytes(12, "little")
 
-    def rotate(self, private_key: bytes, peer_key: bytes, *, pq_secret: bytes | None = None) -> None:
+    def rotate(
+        self, private_key: bytes, peer_key: bytes, *, pq_secret: bytes | None = None
+    ) -> None:
         """Derive a new AEAD key and reset counters."""
         priv = x25519.X25519PrivateKey.from_private_bytes(private_key)
         try:
@@ -119,7 +123,9 @@ class CryptoBroker:
         return plaintext
 
 
-def handshake(peer_key: bytes, *, private_key: bytes | None = None, pq_secret: bytes | None = None) -> tuple[bytes, CryptoBroker]:
+def handshake(
+    peer_key: bytes, *, private_key: bytes | None = None, pq_secret: bytes | None = None
+) -> tuple[bytes, CryptoBroker]:
     """Perform a one-shot X25519 handshake and return ``(public_key, broker)``.
 
     If ``private_key`` is ``None``, a fresh keypair is generated. The returned

@@ -101,6 +101,7 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
 
 def test_load_failure_keeps_unloaded(monkeypatch):
     BPFManager._SKEL_CACHE = {}
+
     def fake_run(self, cmd):
         return False if "bpftool" in cmd else True
 

@@ -11,6 +11,5 @@ def setup_structured_logging(level: int = logging.INFO) -> None:
     logging.basicConfig(
         level=level,
         format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", '
-               '"component": "%(name)s", "message": "%(message)s"}',
+        '"component": "%(name)s", "message": "%(message)s"}',
     )
-

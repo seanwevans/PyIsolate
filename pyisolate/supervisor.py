@@ -24,7 +24,6 @@ from . import cgroup
 logger = logging.getLogger(__name__)
 
 
-
 class Sandbox:
     """Handle to a sandbox thread."""
 
@@ -208,11 +207,12 @@ _supervisor = Supervisor()
 spawn = _supervisor.spawn
 list_active = _supervisor.list_active
 
+
 def reload_policy(policy_path: str, token: str | RootCapability = ROOT) -> None:
     _supervisor.reload_policy(policy_path, token)
 
-set_policy_token = _supervisor.set_policy_token
 
+set_policy_token = _supervisor.set_policy_token
 
 
 def shutdown(cap: RootCapability = ROOT) -> None:

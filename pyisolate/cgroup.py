@@ -19,7 +19,9 @@ def _write(file: Path, val: str) -> None:
         pass
 
 
-def create(name: str, cpu_ms: int | None = None, mem_bytes: int | None = None) -> Path | None:
+def create(
+    name: str, cpu_ms: int | None = None, mem_bytes: int | None = None
+) -> Path | None:
     """Create a cgroup and apply optional limits."""
     path = _BASE / name
     try:

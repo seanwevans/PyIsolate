@@ -9,11 +9,11 @@ from typing import Set
 def _parse_cpu_list(text: str) -> set[int]:
     """Parse Linux cpulist format like ``0-3,8``."""
     cpus: set[int] = set()
-    for part in text.strip().split(','):
+    for part in text.strip().split(","):
         if not part:
             continue
-        if '-' in part:
-            start_str, end_str = part.split('-')
+        if "-" in part:
+            start_str, end_str = part.split("-")
             start, end = int(start_str), int(end_str)
             cpus.update(range(start, end + 1))
         else:

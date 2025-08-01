@@ -24,6 +24,7 @@ def test_alert_on_policy_violation():
 
 from contextlib import contextmanager
 
+
 @contextmanager
 def assert_policy_error():
     try:

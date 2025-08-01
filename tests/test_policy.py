@@ -28,6 +28,7 @@ def test_policy_methods_chain():
 def test_policy_refresh_invalid(tmp_path):
     policy = load_policy(no_yaml=True)
     import pyisolate as iso
+
     iso.set_policy_token("tok")
     bad = tmp_path / "bad.yml"
     bad.write_text("invalid")
@@ -38,6 +39,7 @@ def test_policy_refresh_invalid(tmp_path):
 def test_refresh_bad_token(tmp_path):
     policy = load_policy(no_yaml=True)
     import pyisolate as iso
+
     iso.set_policy_token("tok")
     good = tmp_path / "p.yml"
     good.write_text("version: 0.1\n")
@@ -52,7 +54,6 @@ def test_list_parsing_without_pyyaml():
     assert result == {"net": [{"connect": "127.0.0.1:6379"}]}
 
 
-
 def test_compile_policy_detects_conflict(tmp_path):
     import pyisolate.policy as policy
 
@@ -60,8 +61,8 @@ def test_compile_policy_detects_conflict(tmp_path):
         "sandboxes:\n"
         "  sb:\n"
         "    fs:\n"
-        "      - allow: \"/tmp/data\"\n"
-        "      - deny: \"/tmp/data\"\n"
+        '      - allow: "/tmp/data"\n'
+        '      - deny: "/tmp/data"\n'
     )
     f = tmp_path / "p.yml"
     f.write_text(doc)
@@ -73,12 +74,7 @@ def test_compile_policy_detects_conflict(tmp_path):
 def test_compile_policy_ok(tmp_path):
     import pyisolate.policy as policy
 
-    doc = (
-        "sandboxes:\n"
-        "  sb:\n"
-        "    fs:\n"
-        "      - allow: \"/tmp/data\"\n"
-    )
+    doc = "sandboxes:\n" "  sb:\n" "    fs:\n" '      - allow: "/tmp/data"\n'
     f = tmp_path / "p.yml"
     f.write_text(doc)
 
@@ -101,6 +97,7 @@ def test_validation_bad_section_type(tmp_path):
     with pytest.raises(ValueError, match="sandboxes"):
         policy.refresh(str(p), token="tok")
 
+
 @pytest.mark.parametrize("name", ["ml.yml", "web_scraper.yml"])
 def test_templates_parse(monkeypatch, name):
     policy = load_policy()
@@ -111,7 +108,6 @@ def test_templates_parse(monkeypatch, name):
     compiled = policy.compile_policy(str(path))
     assert compiled.sandboxes
     import pyisolate as iso
+
     iso.set_policy_token("tok")
     policy.refresh(str(path), token="tok")
-
-
