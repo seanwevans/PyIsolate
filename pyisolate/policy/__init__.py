@@ -32,7 +32,7 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
                 if ":" not in item:
                     raise ValueError("invalid YAML line")
                 k, v = item.split(":", 1)
-                from typing import Dict, List, cast
+                from typing import cast
 
                 assert isinstance(result[current], list)
                 lst = cast(list[dict[str, str]], result[current])
