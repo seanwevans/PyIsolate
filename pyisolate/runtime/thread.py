@@ -43,6 +43,7 @@ def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
     """Custom importer that provides a coarse timer to guests."""
     module = builtins.__import__(name, globals, locals, fromlist, level)
     if name == "time":
+
         def _perf_counter() -> float:
             return 0.0
 
