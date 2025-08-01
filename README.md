@@ -1,8 +1,6 @@
 # PyIsolate
 
-**Light‑weight, eBPF‑hardened sub‑interpreter sandbox for CPython 3.13 (no‑GIL)**
-
-> Docker‑class isolation, thread‑level granularity.
+**A Light‑weight, eBPF‑hardened sub‑interpreter sandbox for a no-GIL CPython**
 
 ## Features
 
