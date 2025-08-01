@@ -55,25 +55,7 @@ jobs:
           ret=${PIPESTATUS[0]}
           grep -oE 'rated at [0-9.]+' pylint.log | awk '{print $3}' > score.txt
           echo "score=$(cat score.txt)" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Generate pylint badge
-        run: |
-          python scripts/pylint_badge.py pylint.log docs/pylint.svg
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pylint-badge
-          path: docs/pylint.svg
-      - name: Commit pylint badge
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: |
-          if [ -n "$(git status --porcelain docs/pylint.svg)" ]; then
-            git pull
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add docs/pylint.svg
-            git commit -m "docs: update pylint badge" || true
-            git push
-          fi
+          exit 0      
       - name: Run flake8
         run: pre-commit run flake8 --all-files
 
@@ -92,22 +74,9 @@ jobs:
         run: coverage run -m pytest
       - name: Generate coverage report
         run: |
-          coverage xml -o coverage.xml
-          python scripts/coverage_badge.py coverage.xml docs/coverage.svg
+          coverage xml -o coverage.xml          
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: |
             coverage.xml
-            docs/coverage.svg
-      - name: Commit coverage badge
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && always()
-        run: |
-          if [ -n "$(git status --porcelain docs/coverage.svg)" ]; then
-            git pull
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add docs/coverage.svg
-            git commit -m "docs: update coverage badge" || true
-            git push
-          fi
