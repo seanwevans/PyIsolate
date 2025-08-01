@@ -1,9 +1,5 @@
 # PyIsolate
 
-[![CI](https://github.com/PyIsolate/PyIsolate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/PyIsolate/PyIsolate/actions/workflows/ci.yml)
-[![Coverage Status](docs/coverage.svg)](docs/coverage.svg)
-[![Pylint Score](docs/pylint.svg)](docs/pylint.svg)
-
 **Light‑weight, eBPF‑hardened sub‑interpreter sandbox for CPython 3.13 (no‑GIL)**
 
 > Docker‑class isolation, thread‑level granularity.
