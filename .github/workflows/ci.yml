@@ -43,7 +43,18 @@ jobs:
           python -m pip install -e .[dev]
           pre-commit install-hooks
       - name: Run isort
+        id: run_isort
+        continue-on-error: true
         run: pre-commit run isort --all-files
+      - name: Commit import sorting changes
+        if: steps.run_isort.outcome == 'failure'
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: sort imports"
+            git push
+          fi
 
   flake8:
     runs-on: ubuntu-latest
