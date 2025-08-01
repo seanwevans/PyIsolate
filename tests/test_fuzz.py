@@ -1,7 +1,7 @@
-import sys
 import json
 import random
 import string
+import sys
 from pathlib import Path
 
 import pytest

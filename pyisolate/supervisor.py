@@ -11,15 +11,14 @@ import logging
 import threading
 from typing import Dict, Optional
 
-from .capabilities import RootCapability, ROOT
-from .errors import PolicyAuthError
+from . import cgroup
 from .bpf.manager import BPFManager
-from .runtime.thread import SandboxThread
-from .watchdog import ResourceWatchdog
+from .capabilities import ROOT, RootCapability
+from .errors import PolicyAuthError
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
-from . import cgroup
-
+from .runtime.thread import SandboxThread
+from .watchdog import ResourceWatchdog
 
 logger = logging.getLogger(__name__)
 

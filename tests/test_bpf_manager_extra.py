@@ -1,4 +1,5 @@
 import pytest
+
 from pyisolate.bpf.manager import BPFManager
 
 

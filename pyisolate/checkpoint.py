@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import pickle
+
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-from .supervisor import spawn, Sandbox
+from .supervisor import Sandbox, spawn
 
 
 def checkpoint(sandbox: Sandbox, key: bytes) -> bytes:

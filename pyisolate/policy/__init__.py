@@ -1,12 +1,12 @@
 """Policy helpers stub."""
 
+import os
+import tempfile
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from ..supervisor import reload_policy
 
-import urllib.request
-import tempfile
-import os
+from ..supervisor import reload_policy
 
 try:
     import yaml  # type: ignore
@@ -32,7 +32,7 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
                 if ":" not in item:
                     raise ValueError("invalid YAML line")
                 k, v = item.split(":", 1)
-                from typing import cast, List, Dict
+                from typing import Dict, List, cast
 
                 assert isinstance(result[current], list)
                 lst = cast(list[dict[str, str]], result[current])

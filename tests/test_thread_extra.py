@@ -1,6 +1,7 @@
 import pytest
-from pyisolate.runtime.thread import _sigxcpu_handler
+
 from pyisolate import errors
+from pyisolate.runtime.thread import _sigxcpu_handler
 
 
 def test_sigxcpu_handler_raises():

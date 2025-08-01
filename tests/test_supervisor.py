@@ -4,9 +4,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import pytest
+
 import pyisolate as iso
 from pyisolate.bpf.manager import BPFManager
-import pytest
 
 
 def test_list_active_contains_spawned():

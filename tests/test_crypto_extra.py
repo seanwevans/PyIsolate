@@ -1,7 +1,8 @@
 import pytest
-from pyisolate.broker.crypto import CryptoBroker, CTR_LIMIT
-from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519
+
+from pyisolate.broker.crypto import CTR_LIMIT, CryptoBroker
 
 
 def make_pair():

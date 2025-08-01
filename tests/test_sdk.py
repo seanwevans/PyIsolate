@@ -4,8 +4,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from helper_module import add as plain_add
+from helper_module import stage_one, stage_two
+
 import pyisolate as iso
-from helper_module import add as plain_add, stage_one, stage_two
 
 add = iso.sandbox()(plain_add)
 

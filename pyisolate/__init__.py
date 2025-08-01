@@ -3,35 +3,31 @@
 This module exposes the high-level API described in API.md.
 """
 
+from .capabilities import ROOT, Capability, RootCapability, Token
+from .checkpoint import checkpoint, restore
 from .editor import PolicyEditor, check_fs, check_tcp, parse_policy
 from .errors import (
     CPUExceeded,
     MemoryExceeded,
-    PolicyError,
     PolicyAuthError,
+    PolicyError,
     SandboxError,
     TimeoutError,
 )
+from .logging import setup_structured_logging
+from .migration import migrate
+from .policy import refresh_remote
+from .sdk import Pipeline, sandbox
+from .subset import OwnershipError, RestrictedExec
 from .supervisor import (
     Sandbox,
     Supervisor,
     list_active,
     reload_policy,
     set_policy_token,
-    spawn,
     shutdown,
+    spawn,
 )
-
-from .sdk import Pipeline, sandbox
-
-from .subset import OwnershipError, RestrictedExec
-
-from .capabilities import ROOT, Capability, Token, RootCapability
-from .checkpoint import checkpoint, restore
-from .migration import migrate
-from .policy import refresh_remote
-from .logging import setup_structured_logging
-
 
 __all__ = [
     "spawn",

@@ -5,8 +5,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
 import pyisolate as iso
-from pyisolate.capabilities import ROOT, RootCapability
 from pyisolate.bpf.manager import BPFManager
+from pyisolate.capabilities import ROOT, RootCapability
 
 
 def test_root_cap_type() -> None:

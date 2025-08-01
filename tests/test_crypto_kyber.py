@@ -6,9 +6,9 @@ pq = pytest.importorskip("pqcrypto.kem.kyber768")
 
 from pyisolate.broker.crypto import (
     CryptoBroker,
-    kyber_keypair,
-    kyber_encapsulate,
     kyber_decapsulate,
+    kyber_encapsulate,
+    kyber_keypair,
 )
 
 

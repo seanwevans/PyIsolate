@@ -17,7 +17,7 @@ import threading
 import time
 import tracemalloc
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Iterable
+from typing import Any, Callable, Iterable, Optional
 
 from .. import errors
 from ..numa import bind_current_thread
@@ -218,8 +218,9 @@ class SandboxThread(threading.Thread):
 
         local_vars = {"post": self._outbox.put, "__builtins__": _SAFE_BUILTINS.copy()}
         if self.allowed_imports is not None:
-            from .imports import CapabilityImporter
             import builtins as _builtins
+
+            from .imports import CapabilityImporter
 
             builtins_dict = _builtins.__dict__.copy()
             builtins_dict["__import__"] = CapabilityImporter(self.allowed_imports)

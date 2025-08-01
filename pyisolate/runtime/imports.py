@@ -2,9 +2,8 @@ from __future__ import annotations
 
 """Capability-based import hook."""
 
-from typing import Iterable
-
 import builtins as _builtins
+from typing import Iterable
 
 from .. import errors
 

@@ -1,6 +1,6 @@
 import pytest
 
-from pyisolate import RestrictedExec, OwnershipError
+from pyisolate import OwnershipError, RestrictedExec
 
 
 def test_basic_arithmetic():
