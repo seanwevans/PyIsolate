@@ -5,8 +5,8 @@ minimal interface required by the tests. The functions mirror the API of the
 `pqcrypto` package but internally leverage X25519 for key agreement.
 """
 
-from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519
 
 
 def generate_keypair():

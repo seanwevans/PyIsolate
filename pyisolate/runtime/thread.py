@@ -24,7 +24,6 @@ from .. import errors
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
 
-
 _ORIG_OPEN = builtins.open
 
 
