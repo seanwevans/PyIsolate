@@ -215,13 +215,10 @@ set_policy_token = _supervisor.set_policy_token
 
 
 def shutdown(cap: RootCapability = ROOT) -> None:
-    """Stop the current supervisor and start a fresh one."""
-    global _supervisor
+    global _supervisor, spawn, list_active, set_policy_token
     old = _supervisor
     old.shutdown(cap)
     _supervisor = Supervisor()
-    global spawn, list_active, reload_policy, set_policy_token
     spawn = _supervisor.spawn
     list_active = _supervisor.list_active
-    reload_policy = reload_policy(path, token=ROOT)
     set_policy_token = _supervisor.set_policy_token
