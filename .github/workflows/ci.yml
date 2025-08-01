@@ -40,6 +40,7 @@ jobs:
         if: steps.run_black.outcome == 'failure'
         run: |
           if [ -n "$(git status --porcelain)" ]; then
+            git pull
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit -am "chore: format with black"
@@ -66,6 +67,7 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           if [ -n "$(git status --porcelain docs/pylint.svg)" ]; then
+            git pull
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/pylint.svg
