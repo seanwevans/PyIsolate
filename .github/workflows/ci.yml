@@ -6,33 +6,7 @@ on:
     branches: [ main ]
 
 jobs:
-  black:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          python -m pip install -e .[dev]
-          pre-commit install-hooks
-      - name: Run black
-        id: run_black
-        continue-on-error: true
-        run: pre-commit run black --all-files
-      - name: Commit formatting changes
-        if: steps.run_black.outcome == 'failure'
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -am "chore: format with black"
-            BRANCH=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
-            git push origin HEAD:$BRANCH
-          fi
-
-  isort:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -57,32 +31,20 @@ jobs:
             BRANCH=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
             git push origin HEAD:$BRANCH
           fi
-
-  flake8:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
+      - name: Run black
+        id: run_black
+        continue-on-error: true
+        run: pre-commit run black --all-files
+      - name: Commit formatting changes
+        if: steps.run_black.outcome == 'failure'
         run: |
-          python -m pip install -e .[dev]
-          pre-commit install-hooks
-      - name: Run flake8
-        run: pre-commit run flake8 --all-files
-
-  pylint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          python -m pip install -e .[dev]
-          pre-commit install-hooks
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: format with black"
+            BRANCH=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
+            git push origin HEAD:$BRANCH
+          fi
       - name: Run pylint
         id: pylint
         run: |
@@ -109,6 +71,8 @@ jobs:
             git commit -m "docs: update pylint badge" || true
             git push
           fi
+      - name: Run flake8
+        run: pre-commit run flake8 --all-files
 
   tests:
     runs-on: ubuntu-latest
