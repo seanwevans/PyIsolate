@@ -9,17 +9,16 @@ sys.path.insert(0, str(ROOT))
 import pyisolate as iso
 
 
-@pytest.mark.xfail(reason="Sandbox lacks real syscall filtering")
 def test_escape_attempt_file_read():
     sb = iso.spawn("escape1")
     try:
         sb.exec("import pathlib; post(pathlib.Path('/etc/hosts').read_text())")
-        sb.recv(timeout=1)
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
     finally:
         sb.close()
 
 
-@pytest.mark.xfail(reason="Side channel protections not implemented")
 def test_time_side_channel():
     sb = iso.spawn("escape2")
     try:

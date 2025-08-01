@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import json
 import logging
+import os
 import queue
 import signal
 import socket
@@ -22,6 +23,37 @@ from typing import Any, Callable, Iterable, Optional
 from .. import errors
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
+
+
+_ORIG_OPEN = builtins.open
+
+
+def _blocked_open(file, *args, **kwargs):
+    """Deny access to paths under ``/etc``."""
+    if isinstance(file, (str, bytes, os.PathLike)) and str(file).startswith("/etc"):
+        raise errors.PolicyError("file access blocked")
+    return _ORIG_OPEN(file, *args, **kwargs)
+
+
+import io
+
+io.open = _blocked_open
+
+
+def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """Custom importer that provides a coarse timer to guests."""
+    module = builtins.__import__(name, globals, locals, fromlist, level)
+    if name == "time":
+        def _perf_counter() -> float:
+            return 0.0
+
+        module = types.ModuleType("time", module.__doc__)
+        module.__dict__.update({k: getattr(time, k) for k in dir(time)})
+        module.perf_counter = _perf_counter
+    return module
+
+
+import types
 
 # Precompute a sanitized builtins dict for sandbox execution.
 _FORBIDDEN = {
@@ -39,6 +71,8 @@ _SAFE_BUILTINS = {
 }
 for name in _FORBIDDEN:
     _SAFE_BUILTINS.pop(name, None)
+_SAFE_BUILTINS["open"] = _blocked_open
+_SAFE_BUILTINS["__import__"] = _sandbox_import
 
 
 _thread_local = threading.local()
@@ -224,6 +258,7 @@ class SandboxThread(threading.Thread):
 
             builtins_dict = _builtins.__dict__.copy()
             builtins_dict["__import__"] = CapabilityImporter(self.allowed_imports)
+            builtins_dict["open"] = _blocked_open
             local_vars["__builtins__"] = builtins_dict
         else:
             # use sanitized builtins without import restrictions
