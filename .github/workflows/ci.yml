@@ -93,7 +93,7 @@ jobs:
       - name: Generate coverage report
         run: |
           coverage xml -o coverage.xml
-          coverage-badge -f -o docs/coverage.svg
+          python scripts/coverage_badge.py coverage.xml docs/coverage.svg
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
