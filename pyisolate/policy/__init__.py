@@ -93,8 +93,9 @@ def _validate(data: object) -> None:
     if "version" not in data:
         raise ValueError('policy missing "version" key')
 
-    if data.get("version") != "0.1":
-        raise ValueError(f"unsupported policy version: {data.get('version')}")
+    version = data.get("version")
+    if str(version) != "0.1":
+        raise ValueError(f"unsupported policy version: {version}")
 
     for section in ("defaults", "sandboxes"):
         if section in data and not isinstance(data[section], dict):
