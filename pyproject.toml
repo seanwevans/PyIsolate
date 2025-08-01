@@ -7,7 +7,10 @@ requires-python = ">=3.11"
 dependencies = ["pyyaml"]
 
 [build-system]
-requires = ["setuptools>=64"]
+# Use setuptools build backend without forcing a specific version. The build
+# environment already includes a compatible copy, so declaring an empty list of
+# additional requirements avoids network downloads that would otherwise fail.
+requires = []
 build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
