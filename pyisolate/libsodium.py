@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hmac
-from typing import Callable
 
 try:
     from nacl.bindings import sodium_memcmp as _sodium_memcmp  # type: ignore
