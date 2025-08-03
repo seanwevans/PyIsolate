@@ -114,6 +114,13 @@ class Supervisor:
         if len(name) > 64:
             raise ValueError("Sandbox name too long")
         self._cleanup()
+
+        if policy is not None and getattr(policy, "imports", None):
+            imports = set(policy.imports)
+            if allowed_imports is not None:
+                imports.update(allowed_imports)
+            allowed_imports = list(imports)
+
         cg_path = cgroup.create(name, cpu_ms, mem_bytes)
         with self._lock:
             if self._warm_pool:
@@ -123,6 +130,7 @@ class Supervisor:
                     policy=policy,
                     cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
+                    allowed_imports=allowed_imports,
                 )
                 thread._on_violation = self._alerts.notify
                 thread._tracer = self._tracer

@@ -24,13 +24,25 @@ from .. import errors
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
 
+_thread_local = threading.local()
+
 _ORIG_OPEN = builtins.open
 
 
 def _blocked_open(file, *args, **kwargs):
-    """Deny access to paths under ``/etc``."""
-    if isinstance(file, (str, bytes, os.PathLike)) and str(file).startswith("/etc"):
-        raise errors.PolicyError("file access blocked")
+    """Restrict file access based on the current thread's policy."""
+
+    if isinstance(file, (str, bytes, os.PathLike)):
+        path = os.path.abspath(os.fspath(file))
+
+        allowed = getattr(_thread_local, "fs", None)
+
+        if allowed is not None:
+            if not any(path.startswith(a) for a in allowed):
+                raise errors.PolicyError("file access blocked")
+        elif path.startswith("/etc"):
+            raise errors.PolicyError("file access blocked")
+
     return _ORIG_OPEN(file, *args, **kwargs)
 
 
@@ -75,7 +87,6 @@ _SAFE_BUILTINS["open"] = _blocked_open
 _SAFE_BUILTINS["__import__"] = _sandbox_import
 
 
-_thread_local = threading.local()
 _orig_connect = socket.socket.connect
 
 
@@ -211,12 +222,18 @@ class SandboxThread(threading.Thread):
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        allowed_imports: Optional[list[str]] = None,
     ) -> None:
         """Reuse this thread for a new sandbox."""
         self.name = name
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
         self.mem_quota_bytes = mem_bytes
+        if allowed_imports is not None:
+            self.allowed_imports = set(allowed_imports)
+            self.allowed_imports.add("json")
+        else:
+            self.allowed_imports = None
         self._cpu_time = 0.0
         self._mem_peak = 0
 
@@ -250,24 +267,7 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._start_time = None
 
-        local_vars = {"post": self._outbox.put, "__builtins__": _SAFE_BUILTINS.copy()}
-        if self.allowed_imports is not None:
-            import builtins as _builtins
-
-            from .imports import CapabilityImporter
-
-            builtins_dict = _builtins.__dict__.copy()
-            builtins_dict["__import__"] = CapabilityImporter(self.allowed_imports)
-            builtins_dict["open"] = _blocked_open
-            local_vars["__builtins__"] = builtins_dict
-        else:
-            # use sanitized builtins without import restrictions
-            local_vars["__builtins__"] = _SAFE_BUILTINS.copy()
-
-        allowed_tcp = set()
-        if self.policy is not None and getattr(self.policy, "tcp", None):
-            allowed_tcp = set(self.policy.tcp)
-        _thread_local.tcp = allowed_tcp
+        local_vars = {"post": self._outbox.put}
 
         if self.numa_node is not None:
             bind_current_thread(self.numa_node)
@@ -277,6 +277,27 @@ class SandboxThread(threading.Thread):
                 src = self._inbox.get(timeout=0.1)
             except queue.Empty:
                 continue
+
+            allowed_tcp = set()
+            allowed_fs = None
+            if self.policy is not None:
+                if getattr(self.policy, "tcp", None):
+                    allowed_tcp = set(self.policy.tcp)
+                if getattr(self.policy, "fs", None):
+                    allowed_fs = [os.path.abspath(p) for p in self.policy.fs]
+            _thread_local.tcp = allowed_tcp
+            _thread_local.fs = allowed_fs
+
+            if self.allowed_imports is not None:
+                import builtins as _builtins
+                from .imports import CapabilityImporter
+
+                builtins_dict = _builtins.__dict__.copy()
+                builtins_dict["__import__"] = CapabilityImporter(self.allowed_imports)
+                builtins_dict["open"] = _blocked_open
+                local_vars["__builtins__"] = builtins_dict
+            else:
+                local_vars["__builtins__"] = _SAFE_BUILTINS.copy()
 
             self._ops += 1
             op_start = time.monotonic()
