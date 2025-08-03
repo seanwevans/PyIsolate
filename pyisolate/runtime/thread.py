@@ -290,6 +290,7 @@ class SandboxThread(threading.Thread):
 
             if self.allowed_imports is not None:
                 import builtins as _builtins
+
                 from .imports import CapabilityImporter
 
                 builtins_dict = _builtins.__dict__.copy()
