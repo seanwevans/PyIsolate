@@ -223,8 +223,10 @@ class SandboxThread(threading.Thread):
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
         allowed_imports: Optional[list[str]] = None,
+        cgroup_path=None,
     ) -> None:
         """Reuse this thread for a new sandbox."""
+        old_path = getattr(self, "_cgroup_path", None)
         self.name = name
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
@@ -236,6 +238,16 @@ class SandboxThread(threading.Thread):
             self.allowed_imports = None
         self._cpu_time = 0.0
         self._mem_peak = 0
+        self._cgroup_path = cgroup_path
+        try:
+            from .. import cgroup
+
+            if cgroup_path is not None:
+                cgroup.attach_current(cgroup_path)
+            if old_path and old_path != cgroup_path:
+                cgroup.delete(old_path)
+        except Exception:
+            pass
 
     @property
     def stats(self):
