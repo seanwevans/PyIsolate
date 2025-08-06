@@ -37,3 +37,26 @@ def test_policy_import_and_fs(tmp_path):
             sb.recv(timeout=1)
     finally:
         sb.close()
+
+
+def test_fs_sibling_not_allowed(tmp_path):
+    allowed_dir = tmp_path / "foo"
+    allowed_dir.mkdir()
+    (allowed_dir / "data.txt").write_text("ok")
+
+    sibling_dir = tmp_path / "foobar"
+    sibling_dir.mkdir()
+    bad_file = sibling_dir / "data.txt"
+    bad_file.write_text("nope")
+
+    p = policy.Policy().allow_fs(str(allowed_dir))
+    sb = iso.spawn("pifs-sibling", policy=p)
+    try:
+        sb.exec(f"post(open({str((allowed_dir / 'data.txt').resolve())!r}).read())")
+        assert sb.recv(timeout=1) == "ok"
+
+        sb.exec(f"post(open({str(bad_file.resolve())!r}).read())")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
