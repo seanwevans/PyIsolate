@@ -326,10 +326,12 @@ class SandboxThread(threading.Thread):
                     self._mem_peak = max(self._mem_peak, peak - self._mem_base)
                 except Exception as exc:  # real impl would sanitize
                     self._errors += 1
+                    self._start_time = None
                     if self._on_violation and isinstance(exc, errors.PolicyError):
                         self._on_violation(self.name, exc)
                     self._outbox.put(exc)
                 finally:
+                    self._start_time = None
                     duration = (time.monotonic() - op_start) * 1000
                     self._latency_sum += duration
                     if duration <= 0.5:
