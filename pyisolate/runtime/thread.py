@@ -18,6 +18,7 @@ import threading
 import time
 import tracemalloc
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from .. import errors
@@ -33,14 +34,14 @@ def _blocked_open(file, *args, **kwargs):
     """Restrict file access based on the current thread's policy."""
 
     if isinstance(file, (str, bytes, os.PathLike)):
-        path = os.path.abspath(os.fspath(file))
+        path = Path(file).resolve()
 
         allowed = getattr(_thread_local, "fs", None)
 
         if allowed is not None:
-            if not any(path.startswith(a) for a in allowed):
+            if not any(path.is_relative_to(a) for a in allowed):
                 raise errors.PolicyError("file access blocked")
-        elif path.startswith("/etc"):
+        elif path.is_relative_to(Path("/etc")):
             raise errors.PolicyError("file access blocked")
 
     return _ORIG_OPEN(file, *args, **kwargs)
@@ -296,7 +297,7 @@ class SandboxThread(threading.Thread):
                 if getattr(self.policy, "tcp", None):
                     allowed_tcp = set(self.policy.tcp)
                 if getattr(self.policy, "fs", None):
-                    allowed_fs = [os.path.abspath(p) for p in self.policy.fs]
+                    allowed_fs = [Path(p).resolve() for p in self.policy.fs]
             _thread_local.tcp = allowed_tcp
             _thread_local.fs = allowed_fs
 
