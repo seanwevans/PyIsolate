@@ -131,6 +131,7 @@ class Supervisor:
                     cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
                     allowed_imports=allowed_imports,
+                    cgroup_path=cg_path,
                 )
                 thread._on_violation = self._alerts.notify
                 thread._tracer = self._tracer
