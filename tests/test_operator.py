@@ -71,4 +71,3 @@ def test_operator_add_delete(monkeypatch):
 
     assert "sb" in spawned
     assert spawned["sb"].closed
-
