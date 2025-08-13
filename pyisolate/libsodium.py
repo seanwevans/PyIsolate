@@ -17,4 +17,6 @@ except Exception:  # pragma: no cover - fallback when PyNaCl/libsodium missing
 
     def constant_compare(a: bytes, b: bytes) -> bool:
         """Fallback to ``hmac.compare_digest`` if libsodium is unavailable."""
+        if len(a) != len(b):
+            return False
         return hmac.compare_digest(a, b)
