@@ -3,6 +3,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
 from pyisolate.broker.crypto import CTR_LIMIT, CryptoBroker
+from pyisolate.libsodium import constant_compare
 
 
 def make_pair():
@@ -31,6 +32,10 @@ def make_pair():
         ),
     )
     return a, b
+
+
+def test_constant_compare_length_mismatch():
+    assert not constant_compare(b"a", b"ab")
 
 
 def test_unframe_short_frame():
