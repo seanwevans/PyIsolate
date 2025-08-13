@@ -110,6 +110,9 @@ def _sigxcpu_handler(signum, frame):
 signal.signal(signal.SIGXCPU, _sigxcpu_handler)
 
 
+_STOP = object()
+
+
 @dataclass
 class Stats:
     cpu_ms: float
@@ -215,6 +218,7 @@ class SandboxThread(threading.Thread):
 
     def stop(self, timeout: float = 0.2) -> None:
         self._stop_event.set()
+        self._inbox.put(_STOP)
         self.join(timeout)
 
     def reset(
@@ -285,11 +289,10 @@ class SandboxThread(threading.Thread):
         if self.numa_node is not None:
             bind_current_thread(self.numa_node)
 
-        while not self._stop_event.is_set():
-            try:
-                src = self._inbox.get(timeout=0.1)
-            except queue.Empty:
-                continue
+        while True:
+            src = self._inbox.get()
+            if src is _STOP:
+                break
 
             allowed_tcp = set()
             allowed_fs = None
