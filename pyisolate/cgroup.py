@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import threading
 from pathlib import Path
 
 __all__ = ["create", "attach_current", "delete"]
@@ -38,14 +39,22 @@ def create(
 
 
 def attach_current(path: Path | None) -> None:
-    """Move the current thread into the given cgroup."""
+    """Move the current thread into the given cgroup.
+
+    Uses :func:`threading.get_native_id` to determine the thread ID. For
+    Python versions lacking this API, falls back to a raw ``syscall`` via
+    ``ctypes``.
+    """
     if path is None:
         return
-    if hasattr(os, "gettid"):
-        tid = os.gettid()
-    else:
-        libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        tid = libc.syscall(186)
+    try:
+        tid = threading.get_native_id()
+    except AttributeError:  # Python < 3.8
+        if hasattr(os, "gettid"):
+            tid = os.gettid()
+        else:
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            tid = libc.syscall(186)
     try:
         (path / "cgroup.threads").write_text(str(tid))
     except (OSError, PermissionError, FileNotFoundError):
