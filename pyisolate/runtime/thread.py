@@ -164,6 +164,15 @@ class SandboxThread(threading.Thread):
         self._trace_enabled = False
         self._syscall_log: list[str] = []
 
+    def snapshot(self) -> dict:
+        """Return serializable configuration state."""
+        return {
+            "name": self.name,
+            "policy": self.policy,
+            "cpu_ms": self.cpu_quota_ms,
+            "mem_bytes": self.mem_quota_bytes,
+        }
+
     def enable_tracing(self) -> None:
         """Start recording guest operations."""
         self._trace_enabled = True

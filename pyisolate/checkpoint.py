@@ -15,12 +15,7 @@ def checkpoint(sandbox: Sandbox, key: bytes) -> bytes:
 
     The sandbox is closed after its state is captured.
     """
-    state = {
-        "name": sandbox._thread.name,
-        "policy": sandbox._thread.policy,
-        "cpu_ms": sandbox._thread.cpu_quota_ms,
-        "mem_bytes": sandbox._thread.mem_quota_bytes,
-    }
+    state = sandbox.snapshot()
     data = pickle.dumps(state)
     aead = ChaCha20Poly1305(key)
     nonce = os.urandom(12)
@@ -37,9 +32,9 @@ def restore(blob: bytes, key: bytes) -> Sandbox:
     state = pickle.loads(data)
     return spawn(
         state["name"],
-        policy=state["policy"],
-        cpu_ms=state["cpu_ms"],
-        mem_bytes=state["mem_bytes"],
+        policy=state.get("policy"),
+        cpu_ms=state.get("cpu_ms"),
+        mem_bytes=state.get("mem_bytes"),
     )
 
 

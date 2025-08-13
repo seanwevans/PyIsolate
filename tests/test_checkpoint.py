@@ -15,9 +15,11 @@ def test_checkpoint_roundtrip():
     try:
         sb.exec("post(5)")
         assert sb.recv(timeout=0.5) == 5
+        snap = sb.snapshot()
         blob = iso.checkpoint(sb, key)
         sb2 = iso.restore(blob, key)
         try:
+            assert sb2.snapshot() == snap
             sb2.exec("post(6)")
             assert sb2.recv(timeout=0.5) == 6
         finally:

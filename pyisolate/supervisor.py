@@ -53,6 +53,10 @@ class Sandbox:
     def profile(self):
         return self._thread.profile()
 
+    def snapshot(self) -> dict:
+        """Return serializable state for checkpointing."""
+        return self._thread.snapshot()
+
     # allow ``with spawn(...) as sb:`` usage
     def __enter__(self) -> "Sandbox":
         return self
