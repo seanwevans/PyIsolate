@@ -1,7 +1,14 @@
 """Kubernetes operator for PyIsolate sandboxes."""
 from __future__ import annotations
 
+import logging
+from typing import Dict
+
+from ..supervisor import Supervisor
+
 __all__ = ["run_operator", "scale_sandboxes"]
+
+logger = logging.getLogger(__name__)
 
 
 def run_operator(namespace: str = "default") -> None:
@@ -11,6 +18,8 @@ def run_operator(namespace: str = "default") -> None:
     config.load_incluster_config()
     api = client.CustomObjectsApi()
     w = watch.Watch()
+    sup = Supervisor()
+    sandboxes: Dict[str, object] = {}
     for event in w.stream(
         api.list_namespaced_custom_object,
         group="pyisolate.dev",
@@ -21,8 +30,16 @@ def run_operator(namespace: str = "default") -> None:
         obj = event["object"]
         op = event["type"]
         name = obj["metadata"]["name"]
-        # TODO: integrate with supervisor to schedule sandbox
-        print(f"received {op} for sandbox {name}")
+        logger.info("received %s for sandbox %s", op, name)
+        try:
+            if op == "ADDED":
+                sandboxes[name] = sup.spawn(name)
+            elif op == "DELETED":
+                sb = sandboxes.pop(name, None)
+                if sb:
+                    sb.close()
+        except Exception as exc:  # pragma: no cover - logging path
+            logger.error("failed to handle %s for %s: %s", op, name, exc)
 
 
 def scale_sandboxes(target: int) -> None:
