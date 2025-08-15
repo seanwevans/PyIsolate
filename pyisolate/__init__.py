@@ -8,11 +8,14 @@ from .capabilities import ROOT, Capability, RootCapability, Token
 try:
     from .checkpoint import checkpoint, restore
 except Exception:  # pragma: no cover - optional dependency
+
     def checkpoint(*args, **kwargs):  # type: ignore[no-redef]
         raise ModuleNotFoundError("cryptography is required for checkpoint support")
 
     def restore(*args, **kwargs):  # type: ignore[no-redef]
         raise ModuleNotFoundError("cryptography is required for checkpoint support")
+
+
 from .editor import PolicyEditor, check_fs, check_tcp, parse_policy
 from .errors import (
     CPUExceeded,
@@ -27,8 +30,11 @@ from .logging import setup_structured_logging
 try:
     from .migration import migrate
 except Exception:  # pragma: no cover - optional dependency
+
     def migrate(*args, **kwargs):  # type: ignore[no-redef]
         raise ModuleNotFoundError("cryptography is required for migration support")
+
+
 from .policy import refresh_remote
 from .sdk import Pipeline, sandbox
 from .subset import OwnershipError, RestrictedExec
