@@ -6,8 +6,6 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from ..supervisor import reload_policy
-
 try:
     import yaml  # type: ignore
 except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
@@ -126,6 +124,8 @@ def refresh(path: str, token: str) -> None:
 
     # Upon successful parse, swap the live maps via the supervisor
     try:
+        from ..supervisor import reload_policy
+
         reload_policy(str(json_path.resolve()), token)
     finally:
         try:
