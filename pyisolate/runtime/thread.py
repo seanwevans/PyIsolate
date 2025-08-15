@@ -337,6 +337,18 @@ class SandboxThread(threading.Thread):
                     self._start_time = None
                     cur, peak = tracemalloc.get_traced_memory()
                     self._mem_peak = max(self._mem_peak, peak - self._mem_base)
+                    if (
+                        self.cpu_quota_ms is not None
+                        and self._cpu_time > self.cpu_quota_ms
+                    ):
+                        self._outbox.put(errors.CPUExceeded())
+                        break
+                    if (
+                        self.mem_quota_bytes is not None
+                        and self._mem_peak > self.mem_quota_bytes
+                    ):
+                        self._outbox.put(errors.MemoryExceeded())
+                        break
                 except Exception as exc:  # real impl would sanitize
                     self._errors += 1
                     self._start_time = None
