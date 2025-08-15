@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
@@ -78,3 +80,62 @@ def test_handshake_helper():
 
     msg = b"hi"
     assert broker_b.unframe(broker_a.frame(msg)) == msg
+
+
+def test_concurrent_roundtrip():
+    a, b = make_pair()
+    results = [None] * 100
+
+    def worker(i: int) -> None:
+        msg = f"hi{i}".encode()
+        frame = a.frame(msg)
+        results[i] = b.unframe(frame)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(100)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert results == [f"hi{i}".encode() for i in range(100)]
+
+
+def test_concurrent_rotate():
+    a, b = make_pair()
+    new_priv_a = x25519.X25519PrivateKey.generate()
+    new_priv_b = x25519.X25519PrivateKey.generate()
+    new_pub_a = new_priv_a.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    new_pub_b = new_priv_b.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    priv_a_bytes = new_priv_a.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    priv_b_bytes = new_priv_b.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    threads = []
+    for _ in range(10):
+        threads.append(
+            threading.Thread(target=a.rotate, args=(priv_a_bytes, new_pub_b))
+        )
+        threads.append(
+            threading.Thread(target=b.rotate, args=(priv_b_bytes, new_pub_a))
+        )
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    msg = b"rotated"
+    assert b.unframe(a.frame(msg)) == msg
