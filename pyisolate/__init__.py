@@ -4,6 +4,7 @@ This module exposes the high-level API described in API.md.
 """
 
 from .capabilities import ROOT, Capability, RootCapability, Token
+
 try:
     from .checkpoint import checkpoint, restore
 except Exception:  # pragma: no cover - optional dependency
@@ -22,6 +23,7 @@ from .errors import (
     TimeoutError,
 )
 from .logging import setup_structured_logging
+
 try:
     from .migration import migrate
 except Exception:  # pragma: no cover - optional dependency
