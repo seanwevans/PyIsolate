@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 from typing import Dict, Optional
 
 from . import cgroup
@@ -184,7 +185,13 @@ class Supervisor:
             if self._policy_token is not None and token != self._policy_token:
                 raise PolicyAuthError("invalid policy token")
 
-        self._bpf.hot_reload(policy_path)
+        if not Path(policy_path).is_file():
+            raise FileNotFoundError(policy_path)
+
+        try:
+            self._bpf.hot_reload(policy_path)
+        except Exception as exc:  # broad: surface as auth failure
+            raise PolicyAuthError(f"failed to reload policy: {exc}") from exc
 
     def shutdown(self, cap: RootCapability = ROOT) -> None:
         """Stop watchdog and terminate all running sandboxes.

@@ -278,7 +278,7 @@ class SandboxThread(threading.Thread):
     def run(self) -> None:
         import io
         import socket
-
+        
         orig_builtin_open = builtins.open
         orig_io_open = io.open
         orig_connect = socket.socket.connect

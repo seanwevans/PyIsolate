@@ -111,3 +111,20 @@ def test_templates_parse(monkeypatch, name):
 
     iso.set_policy_token("tok")
     policy.refresh(str(path), token="tok")
+
+
+def test_reload_policy_missing_path(tmp_path):
+    import pyisolate as iso
+
+    missing = tmp_path / "nope.json"
+    with pytest.raises(FileNotFoundError):
+        iso.reload_policy(str(missing))
+
+
+def test_reload_policy_malformed_json(tmp_path):
+    import pyisolate as iso
+
+    bad = tmp_path / "bad.json"
+    bad.write_text("not-json")
+    with pytest.raises(iso.PolicyAuthError, match="failed to reload policy"):
+        iso.reload_policy(str(bad))
