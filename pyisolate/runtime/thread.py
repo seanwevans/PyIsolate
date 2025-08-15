@@ -278,7 +278,7 @@ class SandboxThread(threading.Thread):
     def run(self) -> None:
         import io
         import socket
-        
+
         orig_builtin_open = builtins.open
         orig_io_open = io.open
         orig_connect = socket.socket.connect
@@ -329,7 +329,9 @@ class SandboxThread(threading.Thread):
                     from .imports import CapabilityImporter
 
                     builtins_dict = _builtins.__dict__.copy()
-                    builtins_dict["__import__"] = CapabilityImporter(self.allowed_imports)
+                    builtins_dict["__import__"] = CapabilityImporter(
+                        self.allowed_imports
+                    )
                     builtins_dict["open"] = _blocked_open
                     local_vars["__builtins__"] = builtins_dict
                 else:
