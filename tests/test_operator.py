@@ -7,11 +7,24 @@ from pathlib import Path
 def load_operator():
     pkg = types.ModuleType("pyisolate")
     pkg.__path__ = [str(Path(__file__).resolve().parent.parent / "pyisolate")]
-    sys.modules["pyisolate"] = pkg
     supervisor_stub = types.ModuleType("pyisolate.supervisor")
     supervisor_stub.Supervisor = object  # placeholder to satisfy import
+    orig_pkg = sys.modules.get("pyisolate")
+    orig_supervisor = sys.modules.get("pyisolate.supervisor")
+    sys.modules["pyisolate"] = pkg
     sys.modules["pyisolate.supervisor"] = supervisor_stub
-    return importlib.import_module("pyisolate.operator")
+    sys.modules.pop("pyisolate.operator", None)
+    try:
+        return importlib.import_module("pyisolate.operator")
+    finally:
+        if orig_pkg is not None:
+            sys.modules["pyisolate"] = orig_pkg
+        else:
+            sys.modules.pop("pyisolate", None)
+        if orig_supervisor is not None:
+            sys.modules["pyisolate.supervisor"] = orig_supervisor
+        else:
+            sys.modules.pop("pyisolate.supervisor", None)
 
 
 def test_operator_module():
