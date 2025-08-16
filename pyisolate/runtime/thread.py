@@ -47,9 +47,6 @@ def _blocked_open(file, *args, **kwargs):
     return _ORIG_OPEN(file, *args, **kwargs)
 
 
-import io
-
-
 def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
     """Custom importer that provides a coarse timer to guests."""
     module = builtins.__import__(name, globals, locals, fromlist, level)
@@ -275,8 +272,7 @@ class SandboxThread(threading.Thread):
         )
 
     # internal thread run loop
-    def run(self) -> None:
-        import io
+    def run(self) -> None:        
         import socket
 
         orig_builtin_open = builtins.open
@@ -349,15 +345,9 @@ class SandboxThread(threading.Thread):
                         self._start_time = None
                         cur, peak = tracemalloc.get_traced_memory()
                         self._mem_peak = max(self._mem_peak, peak - self._mem_base)
-                        if (
-                            self.cpu_quota_ms is not None
-                            and self._cpu_time > self.cpu_quota_ms
-                        ):
+                        if self.cpu_quota_ms is not None and self._cpu_time > self.cpu_quota_ms:
                             raise errors.CPUExceeded()
-                        if (
-                            self.mem_quota_bytes is not None
-                            and self._mem_peak > self.mem_quota_bytes
-                        ):
+                        if self.mem_quota_bytes is not None and self._mem_peak > self.mem_quota_bytes:
                             raise errors.MemoryExceeded()
                     except Exception as exc:  # real impl would sanitize
                         self._errors += 1
