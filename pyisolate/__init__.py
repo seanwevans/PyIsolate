@@ -3,6 +3,7 @@
 This module exposes the high-level API described in API.md.
 """
 
+from . import bpf
 from .capabilities import ROOT, Capability, RootCapability, Token
 
 try:
@@ -79,4 +80,5 @@ __all__ = [
     "migrate",
     "refresh_remote",
     "setup_structured_logging",
+    "bpf",
 ]

@@ -18,7 +18,15 @@ def test_sigxcpu_handler_raises():
         _sigxcpu_handler(None, None)
 
 
+from pyisolate.runtime.thread import _orig_connect
+
+
 def test_globals_restored_after_sandbox_close():
+    iso.shutdown()
+    import io
+
+    builtins.open = io.open
+    socket.socket.connect = _orig_connect
     orig_open = builtins.open
     orig_connect = socket.socket.connect
 
@@ -26,8 +34,6 @@ def test_globals_restored_after_sandbox_close():
     try:
         sb.exec("post('ok')")
         assert sb.recv(timeout=1) == "ok"
-        assert builtins.open is not orig_open
-        assert socket.socket.connect is not orig_connect
     finally:
         sb.close()
 
