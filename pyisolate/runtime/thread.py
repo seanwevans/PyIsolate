@@ -17,6 +17,7 @@ import socket
 import threading
 import time
 import tracemalloc
+import io
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -116,6 +117,13 @@ class Stats:
     cost: float
 
 
+@dataclass
+class _CgroupAttach:
+    """Control message to (re)attach the sandbox thread to a cgroup."""
+
+    old_path: Path | None
+
+
 class SandboxThread(threading.Thread):
     """Thread that runs guest code and communicates via a queue."""
 
@@ -133,7 +141,7 @@ class SandboxThread(threading.Thread):
     ):
         super().__init__(name=name, daemon=True)
         self._logger = logging.getLogger(f"pyisolate.{name}")
-        self._inbox: "queue.Queue[str]" = queue.Queue()
+        self._inbox: "queue.Queue[Any]" = queue.Queue()
         self._outbox: "queue.Queue[Any]" = queue.Queue()
         self._stop_event = threading.Event()
         self.policy = policy
@@ -245,15 +253,9 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._mem_peak = 0
         self._cgroup_path = cgroup_path
-        try:
-            from .. import cgroup
-
-            if cgroup_path is not None:
-                cgroup.attach_current(cgroup_path)
-            if old_path and old_path != cgroup_path:
-                cgroup.delete(old_path)
-        except Exception:
-            pass
+        # Request the sandbox thread to (re)attach itself to the new cgroup.
+        # The attachment must happen from the sandbox thread's context.
+        self._inbox.put(_CgroupAttach(old_path))
 
     @property
     def stats(self):
@@ -308,6 +310,16 @@ class SandboxThread(threading.Thread):
                 src = self._inbox.get()
                 if src is _STOP:
                     break
+                if isinstance(src, _CgroupAttach):
+                    try:
+                        from .. import cgroup
+
+                        cgroup.attach_current(self._cgroup_path)
+                        if src.old_path and src.old_path != self._cgroup_path:
+                            cgroup.delete(src.old_path)
+                    except Exception:
+                        pass
+                    continue
 
                 allowed_tcp = set()
                 allowed_fs = None
