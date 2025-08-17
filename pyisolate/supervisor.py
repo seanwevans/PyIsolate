@@ -179,10 +179,11 @@ class Supervisor:
     def reload_policy(self, policy_path: str, token: str | RootCapability) -> None:
         """Hot-reload policy via the BPF manager if *token* matches."""
 
-        if isinstance(token, RootCapability):
+        if token is ROOT:
             pass
         else:
             if self._policy_token is not None and token != self._policy_token:
+                logger.warning("policy reload rejected: invalid token")
                 raise PolicyAuthError("invalid policy token")
 
         if not Path(policy_path).is_file():

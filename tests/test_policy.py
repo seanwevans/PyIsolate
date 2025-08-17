@@ -128,3 +128,35 @@ def test_reload_policy_malformed_json(tmp_path):
     bad.write_text("not-json")
     with pytest.raises(iso.PolicyAuthError, match="failed to reload policy"):
         iso.reload_policy(str(bad))
+
+
+def test_reload_policy_accepts_root_token(monkeypatch, tmp_path):
+    import pyisolate as iso
+    from pyisolate.capabilities import ROOT
+
+    monkeypatch.setattr(
+        "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
+    )
+    iso.set_policy_token("tok")
+    path = tmp_path / "p.json"
+    path.write_text("{}")
+
+    iso.reload_policy(str(path), token=ROOT)
+
+
+def test_reload_policy_rejects_non_canonical_root(monkeypatch, tmp_path, caplog):
+    import pyisolate as iso
+    from pyisolate.capabilities import RootCapability
+
+    monkeypatch.setattr(
+        "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
+    )
+    iso.set_policy_token("tok")
+    path = tmp_path / "p.json"
+    path.write_text("{}")
+
+    fake = RootCapability(name="root")
+    with caplog.at_level("WARNING"):
+        with pytest.raises(iso.PolicyAuthError):
+            iso.reload_policy(str(path), token=fake)
+    assert "invalid token" in caplog.text
