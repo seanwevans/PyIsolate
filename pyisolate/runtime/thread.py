@@ -8,6 +8,7 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 from __future__ import annotations
 
 import builtins
+import io
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ import socket
 import threading
 import time
 import tracemalloc
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -41,7 +43,7 @@ def _blocked_open(file, *args, **kwargs):
         if allowed is not None:
             if not any(path.is_relative_to(a) for a in allowed):
                 raise errors.PolicyError("file access blocked")
-        elif path.is_relative_to(Path("/etc")):
+        elif getattr(_thread_local, "active", False) and path.is_relative_to(Path("/etc")):
             raise errors.PolicyError("file access blocked")
 
     return _ORIG_OPEN(file, *args, **kwargs)
@@ -83,16 +85,14 @@ _SAFE_BUILTINS["open"] = _blocked_open
 _SAFE_BUILTINS["__import__"] = _sandbox_import
 
 
-_orig_connect = socket.socket.connect
-
-
-def _guarded_connect(self: socket.socket, address: Iterable[str]) -> Any:
-    allowed = getattr(_thread_local, "tcp", None)
-    if allowed is not None:
-        host, port = address
-        if f"{host}:{port}" not in allowed:
-            raise errors.PolicyError(f"connect blocked: {host}:{port}")
-    return _orig_connect(self, address)
+@contextmanager
+def _patch(obj, attr: str, value):
+    original = getattr(obj, attr)
+    setattr(obj, attr, value)
+    try:
+        yield
+    finally:
+        setattr(obj, attr, original)
 
 
 def _sigxcpu_handler(signum, frame):
@@ -275,18 +275,26 @@ class SandboxThread(threading.Thread):
     def run(self) -> None:
         import socket
 
-        orig_builtin_open = builtins.open
-        orig_io_open = io.open
-        orig_connect = socket.socket.connect
+        with ExitStack() as stack:
+            stack.enter_context(_patch(builtins, "open", _blocked_open))
+            stack.enter_context(_patch(io, "open", _blocked_open))
 
-        global _orig_connect
-        _orig_connect = orig_connect
+            orig_connect = socket.socket.connect
 
-        builtins.open = _blocked_open
-        io.open = _blocked_open
-        socket.socket.connect = _guarded_connect
+            def _guarded_connect(self_socket: socket.socket, address: Iterable[str]) -> Any:
+                allowed = getattr(_thread_local, "tcp", None)
+                if allowed is not None:
+                    host, port = address
+                    if f"{host}:{port}" not in allowed:
+                        raise errors.PolicyError(f"connect blocked: {host}:{port}")
+                return orig_connect(self_socket, address)
 
-        try:
+            stack.enter_context(
+                _patch(socket.socket, "connect", _guarded_connect)
+            )
+
+            _thread_local.active = True
+
             if not tracemalloc.is_tracing():
                 tracemalloc.start()
             try:
@@ -375,7 +383,5 @@ class SandboxThread(threading.Thread):
                             self._latency["10"] += 1
                         else:
                             self._latency["inf"] += 1
-        finally:
-            socket.socket.connect = orig_connect
-            io.open = orig_io_open
-            builtins.open = orig_builtin_open
+
+            _thread_local.active = False
