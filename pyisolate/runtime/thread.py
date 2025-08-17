@@ -8,6 +8,7 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 from __future__ import annotations
 
 import builtins
+import io
 import json
 import logging
 import os
@@ -97,9 +98,6 @@ def _guarded_connect(self: socket.socket, address: Iterable[str]) -> Any:
 
 def _sigxcpu_handler(signum, frame):
     raise errors.CPUExceeded()
-
-
-signal.signal(signal.SIGXCPU, _sigxcpu_handler)
 
 
 _STOP = object()
@@ -278,6 +276,10 @@ class SandboxThread(threading.Thread):
         orig_builtin_open = builtins.open
         orig_io_open = io.open
         orig_connect = socket.socket.connect
+        try:
+            prev_handler = signal.signal(signal.SIGXCPU, _sigxcpu_handler)
+        except ValueError:
+            prev_handler = None
 
         global _orig_connect
         _orig_connect = orig_connect
@@ -376,6 +378,8 @@ class SandboxThread(threading.Thread):
                         else:
                             self._latency["inf"] += 1
         finally:
+            if prev_handler is not None:
+                signal.signal(signal.SIGXCPU, prev_handler)
             socket.socket.connect = orig_connect
             io.open = orig_io_open
             builtins.open = orig_builtin_open
