@@ -1,3 +1,4 @@
+import signal
 import pytest
 
 from pyisolate import errors
@@ -31,3 +32,15 @@ def test_memory_quota_enforced_without_watchdog():
             sb.recv(timeout=1)
     finally:
         sb.stop()
+
+
+def test_sigxcpu_handler_scoped_to_sandbox_thread():
+    orig = signal.getsignal(signal.SIGXCPU)
+    assert orig is not thread._sigxcpu_handler
+
+    sb = thread.SandboxThread("handler")
+    sb._inbox.put("import signal; post(signal.getsignal(signal.SIGXCPU))")
+    sb._inbox.put(thread._STOP)
+    sb.run()
+    assert sb.recv(timeout=1) is thread._sigxcpu_handler
+    assert signal.getsignal(signal.SIGXCPU) is orig

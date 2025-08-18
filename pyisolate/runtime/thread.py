@@ -99,9 +99,6 @@ def _sigxcpu_handler(signum, frame):
     raise errors.CPUExceeded()
 
 
-signal.signal(signal.SIGXCPU, _sigxcpu_handler)
-
-
 _STOP = object()
 
 
@@ -275,9 +272,19 @@ class SandboxThread(threading.Thread):
     def run(self) -> None:
         import socket
 
+
+        orig_builtin_open = builtins.open
+        orig_io_open = io.open
+        orig_connect = socket.socket.connect
+        try:
+            prev_handler = signal.signal(signal.SIGXCPU, _sigxcpu_handler)
+        except ValueError:
+            prev_handler = None
+
         with ExitStack() as stack:
             stack.enter_context(_patch(builtins, "open", _blocked_open))
             stack.enter_context(_patch(io, "open", _blocked_open))
+
 
             orig_connect = socket.socket.connect
 
@@ -385,6 +392,8 @@ class SandboxThread(threading.Thread):
                             self._latency["inf"] += 1
             _thread_local.active = False
         finally:
+            if prev_handler is not None:
+                signal.signal(signal.SIGXCPU, prev_handler)
             socket.socket.connect = orig_connect
             io.open = orig_io_open
             builtins.open = orig_builtin_open
