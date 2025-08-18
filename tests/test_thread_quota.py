@@ -1,4 +1,5 @@
 import signal
+
 import pytest
 
 from pyisolate import errors
