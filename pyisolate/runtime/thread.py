@@ -18,7 +18,6 @@ import socket
 import threading
 import time
 import tracemalloc
-import io
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
