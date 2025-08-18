@@ -8,6 +8,7 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 from __future__ import annotations
 
 import builtins
+import io
 import json
 import logging
 import os
@@ -187,7 +188,7 @@ class SandboxThread(threading.Thread):
         self._logger.debug("exec", extra={"code": src})
         self._inbox.put(src)
 
-    def call(self, func: str, *args, **kwargs):
+    def call(self, func: str, *args, timeout: float | None = None, **kwargs) -> Any:
         payload = json.dumps({"func": func, "args": args, "kwargs": kwargs})
         code = "\n".join(
             [
@@ -201,7 +202,7 @@ class SandboxThread(threading.Thread):
         )
         self.exec(code)
         try:
-            result = self.recv()
+            result = self.recv(timeout)
         except Exception as exc:  # sandbox raised
             if isinstance(exc, errors.SandboxError):
                 raise exc
@@ -376,6 +377,6 @@ class SandboxThread(threading.Thread):
                         else:
                             self._latency["inf"] += 1
         finally:
-            socket.socket.connect = orig_connect
-            io.open = orig_io_open
-            builtins.open = orig_builtin_open
+            socket.socket.connect = orig_connect  # type: ignore[method-assign]
+            io.open = orig_io_open  # type: ignore[method-assign]
+            builtins.open = orig_builtin_open  # type: ignore[method-assign]
