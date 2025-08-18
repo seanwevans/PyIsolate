@@ -1,6 +1,9 @@
 import json
+import logging
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -144,3 +147,31 @@ def test_load_skips_when_cached(monkeypatch):
 
     assert compile_cmd not in calls
     assert skel_cmd not in calls
+
+
+def test_hot_reload_failure_raises(monkeypatch, tmp_path):
+    BPFManager._SKEL_CACHE = {}
+    mgr = BPFManager()
+    mgr.loaded = True
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"cpu": "100ms", "mem": "64MiB"}))
+
+    def fail_on_cpu(self, cmd):
+        return not any("cpu" in part for part in cmd)
+
+    monkeypatch.setattr(BPFManager, "_run", fail_on_cpu)
+    with pytest.raises(RuntimeError) as exc:
+        mgr.hot_reload(str(policy))
+    assert "cpu" in str(exc.value)
+
+
+def test_hot_reload_logs_updates(tmp_path, monkeypatch, caplog):
+    BPFManager._SKEL_CACHE = {}
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+    mgr = BPFManager()
+    mgr.load()
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"cpu": "100ms"}))
+    caplog.set_level(logging.INFO)
+    mgr.hot_reload(str(policy))
+    assert any("cpu" in rec.getMessage() for rec in caplog.records)

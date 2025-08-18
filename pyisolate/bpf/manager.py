@@ -7,8 +7,11 @@ available on the test system; any missing executables are therefore ignored.
 """
 
 import json
+import logging
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class BPFManager:
@@ -135,7 +138,8 @@ class BPFManager:
         # Replace the active policy entirely to drop removed entries
         self.policy_maps = data
         for key, val in data.items():
-            self._run(
+            logger.info("updating map %s -> %s", key, val)
+            ok = self._run(
                 [
                     "bpftool",
                     "map",
@@ -149,6 +153,8 @@ class BPFManager:
                     "any",
                 ]
             )
+            if not ok:
+                raise RuntimeError(f"BPF map update failed for {key}")
 
     def open_ring_buffer(self):
         """Return an iterator over resource guard events."""
