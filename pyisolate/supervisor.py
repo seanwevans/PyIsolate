@@ -34,9 +34,9 @@ class Sandbox:
         """Execute Python source inside the sandbox."""
         self._thread.exec(src)
 
-    def call(self, func: str, *args, **kwargs):
+    def call(self, func: str, *args, timeout: float | None = None, **kwargs):
         """Call a dotted function inside the sandbox."""
-        return self._thread.call(func, *args, **kwargs)
+        return self._thread.call(func, *args, timeout=timeout, **kwargs)
 
     def recv(self, timeout: Optional[float] = None):
         """Receive a posted object from the sandbox."""

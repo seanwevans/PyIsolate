@@ -9,7 +9,7 @@ from helper_module import stage_one, stage_two
 
 import pyisolate as iso
 
-add = iso.sandbox()(plain_add)
+add = iso.sandbox(timeout=0.1)(plain_add)
 
 
 def test_sandbox_decorator():
