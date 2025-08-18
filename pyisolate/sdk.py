@@ -8,15 +8,29 @@ from .supervisor import spawn
 
 
 def sandbox(
-    policy: str | None = None, timeout: str | None = None
+    policy: str | None = None, timeout: float | None = None
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Decorate a function to run inside a sandbox when called."""
+    """Decorate a function to run inside a sandbox when called.
+
+    Parameters
+    ----------
+    policy:
+        Name of the policy to apply to the sandbox.
+    timeout:
+        Seconds to wait for the sandboxed call to complete before raising
+        :class:`pyisolate.errors.TimeoutError`.
+    """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             sb = spawn(func.__name__, policy=policy)
             try:
-                return sb.call(f"{func.__module__}.{func.__name__}", *args, **kwargs)
+                return sb.call(
+                    f"{func.__module__}.{func.__name__}",
+                    *args,
+                    timeout=timeout,
+                    **kwargs,
+                )
             finally:
                 sb.close()
 

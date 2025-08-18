@@ -187,7 +187,7 @@ class SandboxThread(threading.Thread):
         self._logger.debug("exec", extra={"code": src})
         self._inbox.put(src)
 
-    def call(self, func: str, *args, **kwargs):
+    def call(self, func: str, *args, timeout: float | None = None, **kwargs) -> Any:
         payload = json.dumps({"func": func, "args": args, "kwargs": kwargs})
         code = "\n".join(
             [
@@ -201,7 +201,7 @@ class SandboxThread(threading.Thread):
         )
         self.exec(code)
         try:
-            result = self.recv()
+            result = self.recv(timeout)
         except Exception as exc:  # sandbox raised
             if isinstance(exc, errors.SandboxError):
                 raise exc
@@ -383,5 +383,8 @@ class SandboxThread(threading.Thread):
                             self._latency["10"] += 1
                         else:
                             self._latency["inf"] += 1
-
             _thread_local.active = False
+        finally:
+            socket.socket.connect = orig_connect
+            io.open = orig_io_open
+            builtins.open = orig_builtin_open
