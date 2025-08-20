@@ -282,126 +282,126 @@ class SandboxThread(threading.Thread):
         except ValueError:
             prev_handler = None
 
-        with ExitStack() as stack:
-            stack.enter_context(_patch(builtins, "open", _blocked_open))
-            stack.enter_context(_patch(io, "open", _blocked_open))
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(_patch(builtins, "open", _blocked_open))
+                stack.enter_context(_patch(io, "open", _blocked_open))
 
+                orig_connect = socket.socket.connect
 
-            orig_connect = socket.socket.connect
+                def _guarded_connect(self_socket: socket.socket, address: Iterable[str]) -> Any:
+                    allowed = getattr(_thread_local, "tcp", None)
+                    if allowed is not None:
+                        host, port = address
+                        if f"{host}:{port}" not in allowed:
+                            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+                    return orig_connect(self_socket, address)
 
-            def _guarded_connect(self_socket: socket.socket, address: Iterable[str]) -> Any:
-                allowed = getattr(_thread_local, "tcp", None)
-                if allowed is not None:
-                    host, port = address
-                    if f"{host}:{port}" not in allowed:
-                        raise errors.PolicyError(f"connect blocked: {host}:{port}")
-                return orig_connect(self_socket, address)
+                stack.enter_context(
+                    _patch(socket.socket, "connect", _guarded_connect)
+                )
 
-            stack.enter_context(
-                _patch(socket.socket, "connect", _guarded_connect)
-            )
+                _thread_local.active = True
 
-            _thread_local.active = True
+                if not tracemalloc.is_tracing():
+                    tracemalloc.start()
+                try:
+                    from .. import cgroup
 
-            if not tracemalloc.is_tracing():
-                tracemalloc.start()
-            try:
-                from .. import cgroup
+                    cgroup.attach_current(self._cgroup_path)
+                except Exception:
+                    pass
+                self._mem_base = tracemalloc.get_traced_memory()[0]
+                self._cpu_time = 0.0
+                self._start_time = None
 
-                cgroup.attach_current(self._cgroup_path)
-            except Exception:
-                pass
-            self._mem_base = tracemalloc.get_traced_memory()[0]
-            self._cpu_time = 0.0
-            self._start_time = None
+                local_vars = {"post": self._outbox.put}
 
-            local_vars = {"post": self._outbox.put}
+                if self.numa_node is not None:
+                    bind_current_thread(self.numa_node)
 
-            if self.numa_node is not None:
-                bind_current_thread(self.numa_node)
+                while True:
+                    src = self._inbox.get()
+                    if src is _STOP:
+                        break
+                    if isinstance(src, _CgroupAttach):
+                        try:
+                            from .. import cgroup
 
-            while True:
-                src = self._inbox.get()
-                if src is _STOP:
-                    break
-                if isinstance(src, _CgroupAttach):
-                    try:
-                        from .. import cgroup
+                            cgroup.attach_current(self._cgroup_path)
+                            if src.old_path and src.old_path != self._cgroup_path:
+                                cgroup.delete(src.old_path)
+                        except Exception:
+                            pass
+                        continue
 
-                        cgroup.attach_current(self._cgroup_path)
-                        if src.old_path and src.old_path != self._cgroup_path:
-                            cgroup.delete(src.old_path)
-                    except Exception:
-                        pass
-                    continue
+                    allowed_tcp = set()
+                    allowed_fs = None
+                    if self.policy is not None:
+                        if getattr(self.policy, "tcp", None):
+                            allowed_tcp = set(self.policy.tcp)
+                        if getattr(self.policy, "fs", None):
+                            allowed_fs = [Path(p).resolve() for p in self.policy.fs]
+                    _thread_local.tcp = allowed_tcp
+                    _thread_local.fs = allowed_fs
 
-                allowed_tcp = set()
-                allowed_fs = None
-                if self.policy is not None:
-                    if getattr(self.policy, "tcp", None):
-                        allowed_tcp = set(self.policy.tcp)
-                    if getattr(self.policy, "fs", None):
-                        allowed_fs = [Path(p).resolve() for p in self.policy.fs]
-                _thread_local.tcp = allowed_tcp
-                _thread_local.fs = allowed_fs
+                    if self.allowed_imports is not None:
+                        import builtins as _builtins
 
-                if self.allowed_imports is not None:
-                    import builtins as _builtins
+                        from .imports import CapabilityImporter
 
-                    from .imports import CapabilityImporter
+                        builtins_dict = _builtins.__dict__.copy()
+                        builtins_dict["__import__"] = CapabilityImporter(
+                            self.allowed_imports
+                        )
+                        builtins_dict["open"] = _blocked_open
+                        local_vars["__builtins__"] = builtins_dict
+                    else:
+                        local_vars["__builtins__"] = _SAFE_BUILTINS.copy()
 
-                    builtins_dict = _builtins.__dict__.copy()
-                    builtins_dict["__import__"] = CapabilityImporter(
-                        self.allowed_imports
-                    )
-                    builtins_dict["open"] = _blocked_open
-                    local_vars["__builtins__"] = builtins_dict
-                else:
-                    local_vars["__builtins__"] = _SAFE_BUILTINS.copy()
-
-                self._ops += 1
-                op_start = time.monotonic()
-                with self._tracer.start_span(f"sandbox:{self.name}"):
-                    try:
-                        start_cpu = time.thread_time()
-                        self._start_time = time.monotonic()
-                        exec(src, local_vars, local_vars)
-                        end_cpu = time.thread_time()
-                        self._cpu_time += (end_cpu - start_cpu) * 1000
-                        self._start_time = None
-                        cur, peak = tracemalloc.get_traced_memory()
-                        self._mem_peak = max(self._mem_peak, peak - self._mem_base)
-                        if (
-                            self.cpu_quota_ms is not None
-                            and self._cpu_time > self.cpu_quota_ms
-                        ):
-                            raise errors.CPUExceeded()
-                        if (
-                            self.mem_quota_bytes is not None
-                            and self._mem_peak > self.mem_quota_bytes
-                        ):
-                            raise errors.MemoryExceeded()
-                    except Exception as exc:  # real impl would sanitize
-                        self._errors += 1
-                        self._start_time = None
-                        if self._on_violation and isinstance(exc, errors.PolicyError):
-                            self._on_violation(self.name, exc)
-                        self._outbox.put(exc)
-                    finally:
-                        self._start_time = None
-                        duration = (time.monotonic() - op_start) * 1000
-                        self._latency_sum += duration
-                        if duration <= 0.5:
-                            self._latency["0.5"] += 1
-                        elif duration <= 1:
-                            self._latency["1"] += 1
-                        elif duration <= 5:
-                            self._latency["5"] += 1
-                        elif duration <= 10:
-                            self._latency["10"] += 1
-                        else:
-                            self._latency["inf"] += 1
-            _thread_local.active = False
+                    self._ops += 1
+                    op_start = time.monotonic()
+                    with self._tracer.start_span(f"sandbox:{self.name}"):
+                        try:
+                            start_cpu = time.thread_time()
+                            self._start_time = time.monotonic()
+                            exec(src, local_vars, local_vars)
+                            end_cpu = time.thread_time()
+                            self._cpu_time += (end_cpu - start_cpu) * 1000
+                            self._start_time = None
+                            cur, peak = tracemalloc.get_traced_memory()
+                            self._mem_peak = max(self._mem_peak, peak - self._mem_base)
+                            if (
+                                self.cpu_quota_ms is not None
+                                and self._cpu_time > self.cpu_quota_ms
+                            ):
+                                raise errors.CPUExceeded()
+                            if (
+                                self.mem_quota_bytes is not None
+                                and self._mem_peak > self.mem_quota_bytes
+                            ):
+                                raise errors.MemoryExceeded()
+                        except Exception as exc:  # real impl would sanitize
+                            self._errors += 1
+                            self._start_time = None
+                            if self._on_violation and isinstance(exc, errors.PolicyError):
+                                self._on_violation(self.name, exc)
+                            self._outbox.put(exc)
+                        finally:
+                            self._start_time = None
+                            duration = (time.monotonic() - op_start) * 1000
+                            self._latency_sum += duration
+                            if duration <= 0.5:
+                                self._latency["0.5"] += 1
+                            elif duration <= 1:
+                                self._latency["1"] += 1
+                            elif duration <= 5:
+                                self._latency["5"] += 1
+                            elif duration <= 10:
+                                self._latency["10"] += 1
+                            else:
+                                self._latency["inf"] += 1
+                _thread_local.active = False
         finally:
             if prev_handler is not None:
                 signal.signal(signal.SIGXCPU, prev_handler)
