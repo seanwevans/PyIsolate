@@ -43,7 +43,9 @@ def _blocked_open(file, *args, **kwargs):
         if allowed is not None:
             if not any(path.is_relative_to(a) for a in allowed):
                 raise errors.PolicyError("file access blocked")
-        elif getattr(_thread_local, "active", False) and path.is_relative_to(Path("/etc")):
+        elif getattr(_thread_local, "active", False) and path.is_relative_to(
+            Path("/etc")
+        ):
             raise errors.PolicyError("file access blocked")
 
     return _ORIG_OPEN(file, *args, **kwargs)
@@ -273,7 +275,6 @@ class SandboxThread(threading.Thread):
     def run(self) -> None:
         import socket
 
-
         orig_builtin_open = builtins.open
         orig_io_open = io.open
         orig_connect = socket.socket.connect
@@ -289,7 +290,9 @@ class SandboxThread(threading.Thread):
 
                 orig_connect = socket.socket.connect
 
-                def _guarded_connect(self_socket: socket.socket, address: Iterable[str]) -> Any:
+                def _guarded_connect(
+                    self_socket: socket.socket, address: Iterable[str]
+                ) -> Any:
                     allowed = getattr(_thread_local, "tcp", None)
                     if allowed is not None:
                         host, port = address
@@ -297,9 +300,7 @@ class SandboxThread(threading.Thread):
                             raise errors.PolicyError(f"connect blocked: {host}:{port}")
                     return orig_connect(self_socket, address)
 
-                stack.enter_context(
-                    _patch(socket.socket, "connect", _guarded_connect)
-                )
+                stack.enter_context(_patch(socket.socket, "connect", _guarded_connect))
 
                 _thread_local.active = True
 
@@ -384,7 +385,9 @@ class SandboxThread(threading.Thread):
                         except Exception as exc:  # real impl would sanitize
                             self._errors += 1
                             self._start_time = None
-                            if self._on_violation and isinstance(exc, errors.PolicyError):
+                            if self._on_violation and isinstance(
+                                exc, errors.PolicyError
+                            ):
                                 self._on_violation(self.name, exc)
                             self._outbox.put(exc)
                         finally:
