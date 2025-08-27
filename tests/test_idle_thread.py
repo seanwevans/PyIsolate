@@ -10,9 +10,10 @@ sys.path.insert(0, str(ROOT))
 # Use a writable temporary directory for cgroup operations during tests.
 os.environ["PYISOLATE_CGROUP_ROOT"] = tempfile.mkdtemp()
 
+import pytest
+
 import pyisolate as iso
 from pyisolate import cgroup as _cgroup
-import pytest
 from pyisolate.runtime.thread import SandboxThread
 
 # Ensure the cgroup helper writes to the temporary directory even if already imported.
