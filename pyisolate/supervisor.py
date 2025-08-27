@@ -198,8 +198,11 @@ class Supervisor:
         """Stop watchdog and terminate all running sandboxes.
 
         The ``cap`` argument models a privileged capability required to shut
-        down the supervisor.
+        down the supervisor. Raises ``PolicyAuthError`` if ``cap`` is not
+        ``ROOT``.
         """
+        if cap is not ROOT:
+            raise PolicyAuthError("invalid capability for shutdown")
         self._watchdog.stop()
         with self._lock:
             sandboxes = list(self._sandboxes.values())
