@@ -18,6 +18,7 @@ import socket
 import threading
 import time
 import tracemalloc
+import types
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,8 +65,6 @@ def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
         module.perf_counter = _perf_counter
     return module
 
-
-import types
 
 # Precompute a sanitized builtins dict for sandbox execution.
 _FORBIDDEN = {
