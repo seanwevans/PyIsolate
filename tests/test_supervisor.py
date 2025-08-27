@@ -61,6 +61,16 @@ def test_shutdown_clears_warm_pool():
     assert sup._warm_pool == []
 
 
+def test_shutdown_requires_root():
+    sup = iso.Supervisor()
+    try:
+        with pytest.raises(iso.PolicyAuthError):
+            sup.shutdown(cap=iso.Token(name="user"))
+    finally:
+        # ensure resources cleaned up for subsequent tests
+        sup.shutdown()
+
+
 def test_spawn_invalid_name_empty():
     with pytest.raises(ValueError):
         iso.spawn("")
