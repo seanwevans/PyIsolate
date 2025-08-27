@@ -12,6 +12,8 @@ os.environ["PYISOLATE_CGROUP_ROOT"] = tempfile.mkdtemp()
 
 import pyisolate as iso
 from pyisolate import cgroup as _cgroup
+import pytest
+from pyisolate.runtime.thread import SandboxThread
 
 # Ensure the cgroup helper writes to the temporary directory even if already imported.
 _cgroup._BASE = Path(os.environ["PYISOLATE_CGROUP_ROOT"]) / "pyisolate"
@@ -44,3 +46,38 @@ def test_idle_thread_cpu_and_shutdown():
         sup.shutdown()
     assert cpu_used < 0.05
     assert not thread.is_alive()
+
+
+def test_thread_metrics_reset_on_reuse():
+    t = SandboxThread(name="reset-thread")
+    t.start()
+    try:
+        t.enable_tracing()
+        t.exec("post('a')")
+        assert t.recv(timeout=0.5) == "a"
+        t.exec("raise ValueError('boom')")
+        with pytest.raises(ValueError):
+            t.recv(timeout=0.5)
+
+        # metrics populated
+        s = t.stats
+        assert s.operations == 2
+        assert s.errors == 1
+        assert t.get_syscall_log()
+
+        t.reset("reset-thread-2")
+
+        s = t.stats
+        assert s.operations == 0
+        assert s.errors == 0
+        assert s.latency_sum == 0
+        assert all(v == 0 for v in s.latency.values())
+        assert t.get_syscall_log() == []
+
+        # tracing disabled after reset
+        t.exec("post('b')")
+        assert t.recv(timeout=0.5) == "b"
+        assert t.get_syscall_log() == []
+        assert t.stats.operations == 1
+    finally:
+        t.stop()
