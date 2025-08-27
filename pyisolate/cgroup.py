@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import threading
 from pathlib import Path
@@ -12,12 +13,14 @@ __all__ = ["create", "attach_current", "delete"]
 # Allow tests to override the base cgroup directory
 _BASE = Path(os.environ.get("PYISOLATE_CGROUP_ROOT", "/sys/fs/cgroup")) / "pyisolate"
 
+log = logging.getLogger(__name__)
+
 
 def _write(file: Path, val: str) -> None:
     try:
         file.write_text(val)
-    except (OSError, PermissionError, FileNotFoundError):
-        pass
+    except (OSError, PermissionError, FileNotFoundError) as exc:
+        log.warning("Failed to write %s: %s", file, exc)
 
 
 def create(
@@ -27,7 +30,8 @@ def create(
     path = _BASE / name
     try:
         path.mkdir(parents=True, exist_ok=True)
-    except (OSError, PermissionError):
+    except (OSError, PermissionError) as exc:
+        log.warning("Failed to create cgroup %s: %s", path, exc)
         return None
 
     if cpu_ms is not None:
@@ -57,8 +61,8 @@ def attach_current(path: Path | None) -> None:
             tid = libc.syscall(186)
     try:
         (path / "cgroup.threads").write_text(str(tid))
-    except (OSError, PermissionError, FileNotFoundError):
-        pass
+    except (OSError, PermissionError, FileNotFoundError) as exc:
+        log.warning("Failed to attach thread to %s: %s", path, exc)
 
 
 def delete(path: Path | None) -> None:
@@ -69,5 +73,5 @@ def delete(path: Path | None) -> None:
         for f in path.iterdir():
             f.unlink(missing_ok=True)
         path.rmdir()
-    except (OSError, PermissionError, FileNotFoundError):
-        pass
+    except (OSError, PermissionError, FileNotFoundError) as exc:
+        log.warning("Failed to delete cgroup %s: %s", path, exc)
