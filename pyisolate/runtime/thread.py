@@ -250,6 +250,13 @@ class SandboxThread(threading.Thread):
             self.allowed_imports = None
         self._cpu_time = 0.0
         self._mem_peak = 0
+        self._ops = 0
+        self._errors = 0
+        self._latency = {"0.5": 0, "1": 0, "5": 0, "10": 0, "inf": 0}
+        self._latency_sum = 0.0
+        self._trace_enabled = False
+        self._syscall_log = []
+        self._start_time = None
         self._cgroup_path = cgroup_path
         # Request the sandbox thread to (re)attach itself to the new cgroup.
         # The attachment must happen from the sandbox thread's context.
