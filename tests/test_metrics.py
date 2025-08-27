@@ -20,3 +20,21 @@ def test_export_contains_metrics():
         assert "pyisolate_latency_ms_bucket" in metrics
     finally:
         sb.close()
+
+
+def test_export_sandbox_order_is_stable():
+    sbs = [iso.spawn(name) for name in ["c", "a", "b"]]
+    try:
+        for sb in sbs:
+            sb.exec("post(1)")
+            sb.recv(timeout=0.5)
+        metrics = MetricsExporter().export()
+        order = [
+            line.split('sandbox="')[1].split('"', 1)[0]
+            for line in metrics.splitlines()
+            if line.startswith("pyisolate_cpu_ms{")
+        ]
+        assert order == sorted(order)
+    finally:
+        for sb in sbs:
+            sb.close()

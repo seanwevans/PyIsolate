@@ -15,7 +15,8 @@ class MetricsExporter:
 
         lines: list[str] = []
         active = list_active()
-        for name, sb in active.items():
+        for name in sorted(active):
+            sb = active[name]
             stats = sb.stats
             lines.append(f'pyisolate_cpu_ms{{sandbox="{name}"}} {stats.cpu_ms:.0f}')
             lines.append(f'pyisolate_mem_bytes{{sandbox="{name}"}} {stats.mem_bytes}')
