@@ -35,17 +35,40 @@ class BPFManager:
         self._skel_cache: dict[Path, str] = {}
 
     # internal helper
-    def _run(self, cmd: list[str]) -> bool:
-        """Run a subprocess command and report success."""
-        try:
-            subprocess.run(cmd, check=True, capture_output=True)
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # Missing tools or kernel permissions are ignored in the stub
-            return False
+    def _run(self, cmd: list[str], *, raise_on_error: bool = False) -> bool:
+        """Run a subprocess command and report success.
 
-    def load(self) -> None:
-        """Compile and attempt to attach the eBPF programs."""
+        On failure the stderr of the command is logged.  When ``raise_on_error``
+        is true a :class:`RuntimeError` including the command's stderr is raised
+        so callers can surface a descriptive message to users.
+        """
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return True
+        except FileNotFoundError as exc:
+            # Missing tools are expected in some environments; log and return.
+            logger.error("command not found: %s", cmd[0])
+            if raise_on_error:
+                raise RuntimeError(f"Command not found: {cmd[0]}") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr or ""
+            logger.error("command failed %s: %s", cmd, stderr.strip())
+            if raise_on_error:
+                raise RuntimeError(
+                    f"Command '{cmd[0]}' failed with exit code {exc.returncode}: {stderr.strip()}"
+                ) from exc
+        return False
+
+    def load(self, *, strict: bool = False) -> None:
+        """Compile and attempt to attach the eBPF programs.
+
+        When ``strict`` is ``True`` any failure will raise a ``RuntimeError``
+        with details from the underlying command.  In the default lenient mode
+        missing tooling simply results in ``loaded`` remaining ``False`` while
+        errors are logged.
+        """
+
         dummy_compile = [
             "clang",
             "-target",
@@ -78,14 +101,14 @@ class BPFManager:
         ]
         ok = True
         compile_cmd = dummy_compile
-        if self._src not in self._skel_cache:
-            ok &= self._run(compile_cmd)
+        if self._src not in self._SKEL_CACHE:
+            ok &= self._run(compile_cmd, raise_on_error=strict)
             skel_cmd = [
                 "sh",
                 "-c",
                 f"bpftool gen skeleton {self._obj} > {self._skel}",
             ]
-            ok &= self._run(skel_cmd)
+            ok &= self._run(skel_cmd, raise_on_error=strict)
             if ok and self._skel.exists():
                 try:
                     self._skel_cache[self._src] = self._skel.read_text()
@@ -95,13 +118,14 @@ class BPFManager:
         else:
             self.skeleton = self._skel_cache[self._src]
 
-        ok &= self._run(filter_compile)
-        ok &= self._run(guard_compile)
-        ok &= self._run(["llvm-objdump", "-d", str(self._obj)])
-        ok &= self._run(["llvm-objdump", "-d", str(self._filter_obj)])
-        ok &= self._run(["llvm-objdump", "-d", str(self._guard_obj)])
+        ok &= self._run(filter_compile, raise_on_error=strict)
+        ok &= self._run(guard_compile, raise_on_error=strict)
+        ok &= self._run(["llvm-objdump", "-d", str(self._obj)], raise_on_error=strict)
+        ok &= self._run(["llvm-objdump", "-d", str(self._filter_obj)], raise_on_error=strict)
+        ok &= self._run(["llvm-objdump", "-d", str(self._guard_obj)], raise_on_error=strict)
         ok &= self._run(
-            ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"]
+            ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"],
+            raise_on_error=strict,
         )
         ok &= self._run(
             [
@@ -110,7 +134,8 @@ class BPFManager:
                 "load",
                 str(self._filter_obj),
                 "/sys/fs/bpf/syscall_filter",
-            ]
+            ],
+            raise_on_error=strict,
         )
         ok &= self._run(
             [
@@ -119,9 +144,12 @@ class BPFManager:
                 "load",
                 str(self._guard_obj),
                 "/sys/fs/bpf/resource_guard",
-            ]
+            ],
+            raise_on_error=strict,
         )
         self.loaded = ok
+        if strict and not ok:
+            raise RuntimeError("BPF load failed; see logs for details")
 
     def hot_reload(self, policy_path: str) -> None:
         """Refresh maps based on a policy JSON file."""
@@ -138,22 +166,24 @@ class BPFManager:
         self.policy_maps = data
         for key, val in data.items():
             logger.info("updating map %s -> %s", key, val)
-            ok = self._run(
-                [
-                    "bpftool",
-                    "map",
-                    "update",
-                    "pinned",
-                    f"/sys/fs/bpf/{key}",
-                    "key",
-                    "0",
-                    "value",
-                    str(val),
-                    "any",
-                ]
-            )
-            if not ok:
-                raise RuntimeError(f"BPF map update failed for {key}")
+            try:
+                self._run(
+                    [
+                        "bpftool",
+                        "map",
+                        "update",
+                        "pinned",
+                        f"/sys/fs/bpf/{key}",
+                        "key",
+                        "0",
+                        "value",
+                        str(val),
+                        "any",
+                    ],
+                    raise_on_error=True,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(f"BPF map update failed for {key}: {exc}") from exc
 
     def open_ring_buffer(self):
         """Return an iterator over resource guard events."""
