@@ -38,3 +38,17 @@ def test_export_sandbox_order_is_stable():
     finally:
         for sb in sbs:
             sb.close()
+
+
+def test_export_sanitizes_sandbox_name():
+    name = 'weird "sand\\box\nname'
+    sb = iso.spawn(name)
+    try:
+        sb.exec("post(1)")
+        sb.recv(timeout=0.5)
+        metrics = MetricsExporter().export()
+        escaped = name.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+        assert f'sandbox="{escaped}"' in metrics
+        assert f'sandbox="{name}"' not in metrics
+    finally:
+        sb.close()

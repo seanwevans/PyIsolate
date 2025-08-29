@@ -84,3 +84,18 @@ def test_spawn_invalid_name_long():
 def test_spawn_invalid_name_type():
     with pytest.raises(ValueError):
         iso.spawn(None)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("name", ["valid-123", "under_score", "A-B_C"])
+def test_spawn_valid_name_regex(name):
+    sb = iso.spawn(name)
+    try:
+        assert sb._thread.name == name
+    finally:
+        sb.close()
+
+
+@pytest.mark.parametrize("name", ["bad name", "name!", "foo/bar"])
+def test_spawn_invalid_name_regex(name):
+    with pytest.raises(ValueError):
+        iso.spawn(name)

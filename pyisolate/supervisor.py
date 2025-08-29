@@ -8,6 +8,7 @@ requires eBPF enforcement which is not implemented here.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Dict, Optional
@@ -22,6 +23,9 @@ from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
 
 logger = logging.getLogger(__name__)
+
+# Allowed sandbox name pattern: alphanumerics, hyphen, underscore
+NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class Sandbox:
@@ -118,6 +122,8 @@ class Supervisor:
             raise ValueError("Sandbox name must be non-empty string")
         if len(name) > 64:
             raise ValueError("Sandbox name too long")
+        if not NAME_PATTERN.fullmatch(name):
+            raise ValueError("Sandbox name contains invalid characters")
         self._cleanup()
 
         if policy is not None and getattr(policy, "imports", None):

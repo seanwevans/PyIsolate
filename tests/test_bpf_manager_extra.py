@@ -4,7 +4,6 @@ from pyisolate.bpf.manager import BPFManager
 
 
 def test_hot_reload_requires_load(tmp_path):
-    BPFManager._SKEL_CACHE = {}
     mgr = BPFManager()
     policy = tmp_path / "p.json"
     policy.write_text("{}")
@@ -13,7 +12,6 @@ def test_hot_reload_requires_load(tmp_path):
 
 
 def test_hot_reload_invalid_json(tmp_path, monkeypatch):
-    BPFManager._SKEL_CACHE = {}
     monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
     mgr = BPFManager()
     mgr.load()
@@ -24,7 +22,6 @@ def test_hot_reload_invalid_json(tmp_path, monkeypatch):
 
 
 def test_hot_reload_missing_file(tmp_path, monkeypatch):
-    BPFManager._SKEL_CACHE = {}
     monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
     mgr = BPFManager()
     mgr.load()

@@ -13,7 +13,6 @@ from pyisolate.bpf.manager import BPFManager
 
 
 def test_load_runs_toolchain(monkeypatch):
-    BPFManager._SKEL_CACHE = {}
     calls = []
 
     def fake_run(self, cmd, *, raise_on_error=False):
@@ -105,6 +104,7 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
     assert mgr.policy_maps == {"cpu": "200ms", "mem": "64MiB"}
 
 
+
 def test_load_failure_logs_and_raises(monkeypatch, caplog):
     BPFManager._SKEL_CACHE = {}
 
@@ -112,6 +112,10 @@ def test_load_failure_logs_and_raises(monkeypatch, caplog):
         if "bpftool" in cmd:
             raise subprocess.CalledProcessError(1, cmd, stderr="load boom")
         return subprocess.CompletedProcess(cmd, 0, "", "")
+
+def test_load_failure_keeps_unloaded(monkeypatch):
+    def fake_run(self, cmd):
+        return False if "bpftool" in cmd else True
 
     monkeypatch.setattr("subprocess.run", fake_run)
     mgr = BPFManager()
@@ -128,6 +132,7 @@ def test_load_skips_when_cached(monkeypatch):
     monkeypatch.setattr(
         BPFManager, "_run", lambda self, cmd, *, raise_on_error=False: True
     )
+
     mgr = BPFManager()
     mgr.load()  # first load to populate cache
 
@@ -160,8 +165,13 @@ def test_load_skips_when_cached(monkeypatch):
     assert skel_cmd not in calls
 
 
+
 def test_hot_reload_failure_logs_and_raises(tmp_path, monkeypatch, caplog):
     BPFManager._SKEL_CACHE = {}
+
+def test_hot_reload_failure_raises(monkeypatch, tmp_path):
+    mgr = BPFManager()
+    mgr.loaded = True
     policy = tmp_path / "policy.json"
     policy.write_text(json.dumps({"cpu": "100ms", "mem": "64MiB"}))
 
