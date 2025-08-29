@@ -23,8 +23,9 @@ def test_alert_on_policy_violation():
 
 
 def test_alert_handler_failure_does_not_stop_others():
-    from pyisolate.observability.alerts import AlertManager
     import logging
+
+    from pyisolate.observability.alerts import AlertManager
 
     manager = AlertManager()
     calls: list[str] = []
