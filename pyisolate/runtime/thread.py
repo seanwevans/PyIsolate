@@ -19,7 +19,6 @@ import threading
 import time
 import tracemalloc
 import types
-from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -31,6 +30,7 @@ from ..observability.trace import Tracer
 _thread_local = threading.local()
 
 _ORIG_OPEN = builtins.open
+_ORIG_SOCKET_CONNECT = socket.socket.connect
 
 
 def _blocked_open(file, *args, **kwargs):
@@ -52,18 +52,82 @@ def _blocked_open(file, *args, **kwargs):
     return _ORIG_OPEN(file, *args, **kwargs)
 
 
-def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
-    """Custom importer that provides a coarse timer to guests."""
-    module = builtins.__import__(name, globals, locals, fromlist, level)
-    if name == "time":
+def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
+    allowed = getattr(_thread_local, "tcp", None)
+    if allowed is not None:
+        host, port = address
+        if f"{host}:{port}" not in allowed:
+            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    return _ORIG_SOCKET_CONNECT(self_socket, address)
+
+
+def _wrap_module(name: str, module):
+    base = name.split(".")[0]
+    if base == "time":
 
         def _perf_counter() -> float:
             return 0.0
 
-        module = types.ModuleType("time", module.__doc__)
-        module.__dict__.update({k: getattr(time, k) for k in dir(time)})
-        module.perf_counter = _perf_counter
+        mod = types.ModuleType("time", module.__doc__)
+        mod.__dict__.update({k: getattr(time, k) for k in dir(time)})
+        mod.perf_counter = _perf_counter
+        return mod
+    if base == "io":
+        mod = types.ModuleType("io", module.__doc__)
+        mod.__dict__.update({k: getattr(io, k) for k in dir(io)})
+        mod.open = _blocked_open
+        return mod
+    if base == "socket":
+        mod = types.ModuleType("socket", module.__doc__)
+        mod.__dict__.update({k: getattr(socket, k) for k in dir(socket)})
+
+        class GuardedSocket(socket.socket):
+            connect = _guarded_connect
+
+        mod.socket = GuardedSocket
+        return mod
+    if base == "pathlib":
+        mod = types.ModuleType("pathlib", module.__doc__)
+        mod.__dict__.update({k: getattr(module, k) for k in dir(module)})
+
+        class SandboxedPath(module.Path):
+            def open(
+                self,
+                mode="r",
+                buffering=-1,
+                encoding=None,
+                errors=None,
+                newline=None,
+            ):
+                if "b" not in mode:
+                    encoding = io.text_encoding(encoding)
+                return _blocked_open(
+                    self, mode, buffering, encoding, errors, newline
+                )
+
+        mod.Path = SandboxedPath
+        return mod
     return module
+
+
+def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
+    module = builtins.__import__(name, globals, locals, fromlist, level)
+    return _wrap_module(name, module)
+
+
+def _make_importer(allowed: Optional[Iterable[str]]):
+    if allowed is None:
+        return _sandbox_import
+    allowed_set = {name.split(".")[0] for name in allowed}
+
+    def _import(name, globals=None, locals=None, fromlist=(), level=0):
+        base = name.split(".")[0]
+        if base not in allowed_set:
+            raise errors.PolicyError(f"import of {name!r} is not permitted")
+        module = builtins.__import__(name, globals, locals, fromlist, level)
+        return _wrap_module(name, module)
+
+    return _import
 
 
 # Precompute a sanitized builtins dict for sandbox execution.
@@ -84,16 +148,6 @@ for name in _FORBIDDEN:
     _SAFE_BUILTINS.pop(name, None)
 _SAFE_BUILTINS["open"] = _blocked_open
 _SAFE_BUILTINS["__import__"] = _sandbox_import
-
-
-@contextmanager
-def _patch(obj, attr: str, value):
-    original = getattr(obj, attr)
-    setattr(obj, attr, value)
-    try:
-        yield
-    finally:
-        setattr(obj, attr, original)
 
 
 def _sigxcpu_handler(signum, frame):
@@ -279,141 +333,109 @@ class SandboxThread(threading.Thread):
 
     # internal thread run loop
     def run(self) -> None:
-        import socket
-
-        orig_builtin_open = builtins.open
-        orig_io_open = io.open
-        orig_connect = socket.socket.connect
         try:
             prev_handler = signal.signal(signal.SIGXCPU, _sigxcpu_handler)
         except ValueError:
             prev_handler = None
 
         try:
-            with ExitStack() as stack:
-                stack.enter_context(_patch(builtins, "open", _blocked_open))
-                stack.enter_context(_patch(io, "open", _blocked_open))
+            _thread_local.active = True
 
-                orig_connect = socket.socket.connect
+            if not tracemalloc.is_tracing():
+                tracemalloc.start()
+            try:
+                from .. import cgroup
 
-                def _guarded_connect(
-                    self_socket: socket.socket, address: Iterable[str]
-                ) -> Any:
-                    allowed = getattr(_thread_local, "tcp", None)
-                    if allowed is not None:
-                        host, port = address
-                        if f"{host}:{port}" not in allowed:
-                            raise errors.PolicyError(f"connect blocked: {host}:{port}")
-                    return orig_connect(self_socket, address)
+                cgroup.attach_current(self._cgroup_path)
+            except Exception:
+                pass
+            self._mem_base = tracemalloc.get_traced_memory()[0]
+            self._cpu_time = 0.0
+            self._start_time = None
 
-                stack.enter_context(_patch(socket.socket, "connect", _guarded_connect))
+            local_vars = {"post": self._outbox.put}
 
-                _thread_local.active = True
+            if self.numa_node is not None:
+                bind_current_thread(self.numa_node)
 
-                if not tracemalloc.is_tracing():
-                    tracemalloc.start()
-                try:
-                    from .. import cgroup
+            while True:
+                src = self._inbox.get()
+                if src is _STOP:
+                    break
+                if isinstance(src, _CgroupAttach):
+                    try:
+                        from .. import cgroup
 
-                    cgroup.attach_current(self._cgroup_path)
-                except Exception:
-                    pass
-                self._mem_base = tracemalloc.get_traced_memory()[0]
-                self._cpu_time = 0.0
-                self._start_time = None
+                        cgroup.attach_current(self._cgroup_path)
+                        if src.old_path and src.old_path != self._cgroup_path:
+                            cgroup.delete(src.old_path)
+                    except Exception:
+                        pass
+                    continue
 
-                local_vars = {"post": self._outbox.put}
+                allowed_tcp = set()
+                allowed_fs = None
+                if self.policy is not None:
+                    if getattr(self.policy, "tcp", None):
+                        allowed_tcp = set(self.policy.tcp)
+                    if getattr(self.policy, "fs", None):
+                        allowed_fs = [Path(p).resolve() for p in self.policy.fs]
+                _thread_local.tcp = allowed_tcp
+                _thread_local.fs = allowed_fs
 
-                if self.numa_node is not None:
-                    bind_current_thread(self.numa_node)
+                if self.allowed_imports is not None:
+                    builtins_dict = builtins.__dict__.copy()
+                else:
+                    builtins_dict = _SAFE_BUILTINS.copy()
+                builtins_dict["open"] = _blocked_open
+                builtins_dict["__import__"] = _make_importer(self.allowed_imports)
+                local_vars["__builtins__"] = builtins_dict
 
-                while True:
-                    src = self._inbox.get()
-                    if src is _STOP:
-                        break
-                    if isinstance(src, _CgroupAttach):
-                        try:
-                            from .. import cgroup
-
-                            cgroup.attach_current(self._cgroup_path)
-                            if src.old_path and src.old_path != self._cgroup_path:
-                                cgroup.delete(src.old_path)
-                        except Exception:
-                            pass
-                        continue
-
-                    allowed_tcp = set()
-                    allowed_fs = None
-                    if self.policy is not None:
-                        if getattr(self.policy, "tcp", None):
-                            allowed_tcp = set(self.policy.tcp)
-                        if getattr(self.policy, "fs", None):
-                            allowed_fs = [Path(p).resolve() for p in self.policy.fs]
-                    _thread_local.tcp = allowed_tcp
-                    _thread_local.fs = allowed_fs
-
-                    if self.allowed_imports is not None:
-                        import builtins as _builtins
-
-                        from .imports import CapabilityImporter
-
-                        builtins_dict = _builtins.__dict__.copy()
-                        builtins_dict["__import__"] = CapabilityImporter(
-                            self.allowed_imports
-                        )
-                        builtins_dict["open"] = _blocked_open
-                        local_vars["__builtins__"] = builtins_dict
-                    else:
-                        local_vars["__builtins__"] = _SAFE_BUILTINS.copy()
-
-                    self._ops += 1
-                    op_start = time.monotonic()
-                    with self._tracer.start_span(f"sandbox:{self.name}"):
-                        try:
-                            start_cpu = time.thread_time()
-                            self._start_time = time.monotonic()
-                            exec(src, local_vars, local_vars)
-                            end_cpu = time.thread_time()
-                            self._cpu_time += (end_cpu - start_cpu) * 1000
-                            self._start_time = None
-                            cur, peak = tracemalloc.get_traced_memory()
-                            self._mem_peak = max(self._mem_peak, peak - self._mem_base)
-                            if (
-                                self.cpu_quota_ms is not None
-                                and self._cpu_time > self.cpu_quota_ms
-                            ):
-                                raise errors.CPUExceeded()
-                            if (
-                                self.mem_quota_bytes is not None
-                                and self._mem_peak > self.mem_quota_bytes
-                            ):
-                                raise errors.MemoryExceeded()
-                        except Exception as exc:  # real impl would sanitize
-                            self._errors += 1
-                            self._start_time = None
-                            if self._on_violation and isinstance(
-                                exc, errors.PolicyError
-                            ):
-                                self._on_violation(self.name, exc)
-                            self._outbox.put(exc)
-                        finally:
-                            self._start_time = None
-                            duration = (time.monotonic() - op_start) * 1000
-                            self._latency_sum += duration
-                            if duration <= 0.5:
-                                self._latency["0.5"] += 1
-                            elif duration <= 1:
-                                self._latency["1"] += 1
-                            elif duration <= 5:
-                                self._latency["5"] += 1
-                            elif duration <= 10:
-                                self._latency["10"] += 1
-                            else:
-                                self._latency["inf"] += 1
-                _thread_local.active = False
+                self._ops += 1
+                op_start = time.monotonic()
+                with self._tracer.start_span(f"sandbox:{self.name}"):
+                    try:
+                        start_cpu = time.thread_time()
+                        self._start_time = time.monotonic()
+                        exec(src, local_vars, local_vars)
+                        end_cpu = time.thread_time()
+                        self._cpu_time += (end_cpu - start_cpu) * 1000
+                        self._start_time = None
+                        cur, peak = tracemalloc.get_traced_memory()
+                        self._mem_peak = max(self._mem_peak, peak - self._mem_base)
+                        if (
+                            self.cpu_quota_ms is not None
+                            and self._cpu_time > self.cpu_quota_ms
+                        ):
+                            raise errors.CPUExceeded()
+                        if (
+                            self.mem_quota_bytes is not None
+                            and self._mem_peak > self.mem_quota_bytes
+                        ):
+                            raise errors.MemoryExceeded()
+                    except Exception as exc:  # real impl would sanitize
+                        self._errors += 1
+                        self._start_time = None
+                        if self._on_violation and isinstance(
+                            exc, errors.PolicyError
+                        ):
+                            self._on_violation(self.name, exc)
+                        self._outbox.put(exc)
+                    finally:
+                        self._start_time = None
+                        duration = (time.monotonic() - op_start) * 1000
+                        self._latency_sum += duration
+                        if duration <= 0.5:
+                            self._latency["0.5"] += 1
+                        elif duration <= 1:
+                            self._latency["1"] += 1
+                        elif duration <= 5:
+                            self._latency["5"] += 1
+                        elif duration <= 10:
+                            self._latency["10"] += 1
+                        else:
+                            self._latency["inf"] += 1
+            _thread_local.active = False
         finally:
             if prev_handler is not None:
                 signal.signal(signal.SIGXCPU, prev_handler)
-            socket.socket.connect = orig_connect
-            io.open = orig_io_open
-            builtins.open = orig_builtin_open
