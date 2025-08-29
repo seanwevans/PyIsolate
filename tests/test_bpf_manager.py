@@ -12,7 +12,6 @@ from pyisolate.bpf.manager import BPFManager
 
 
 def test_load_runs_toolchain(monkeypatch):
-    BPFManager._SKEL_CACHE = {}
     calls = []
 
     def fake_run(self, cmd):
@@ -87,7 +86,6 @@ def test_load_runs_toolchain(monkeypatch):
 
 
 def test_hot_reload_updates_maps(tmp_path, monkeypatch):
-    BPFManager._SKEL_CACHE = {}
     monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
     mgr = BPFManager()
     mgr.load()
@@ -103,7 +101,6 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
 
 
 def test_load_failure_keeps_unloaded(monkeypatch):
-    BPFManager._SKEL_CACHE = {}
 
     def fake_run(self, cmd):
         return False if "bpftool" in cmd else True
@@ -115,7 +112,6 @@ def test_load_failure_keeps_unloaded(monkeypatch):
 
 
 def test_load_skips_when_cached(monkeypatch):
-    BPFManager._SKEL_CACHE = {}
     monkeypatch.setattr(BPFManager, "_run", lambda self, cmd: True)
     mgr = BPFManager()
     mgr.load()  # first load to populate cache
@@ -150,7 +146,6 @@ def test_load_skips_when_cached(monkeypatch):
 
 
 def test_hot_reload_failure_raises(monkeypatch, tmp_path):
-    BPFManager._SKEL_CACHE = {}
     mgr = BPFManager()
     mgr.loaded = True
     policy = tmp_path / "policy.json"
@@ -166,7 +161,6 @@ def test_hot_reload_failure_raises(monkeypatch, tmp_path):
 
 
 def test_hot_reload_logs_updates(tmp_path, monkeypatch, caplog):
-    BPFManager._SKEL_CACHE = {}
     monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
     mgr = BPFManager()
     mgr.load()
