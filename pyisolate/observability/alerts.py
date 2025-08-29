@@ -19,7 +19,5 @@ class AlertManager:
                 cb(sandbox, error)
             except Exception as exc:  # pragma: no cover - exercised in tests
                 errors.append(exc)
-                logger.exception(
-                    "alert callback %r failed for sandbox %s", cb, sandbox
-                )
+                logger.exception("alert callback %r failed for sandbox %s", cb, sandbox)
         return errors

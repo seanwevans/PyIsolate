@@ -30,18 +30,10 @@ class MetricsExporter:
             sb = active[name]
             stats = sb.stats
             label = _escape_label(name)
-            lines.append(
-                f'pyisolate_cpu_ms{{sandbox="{label}"}} {stats.cpu_ms:.0f}'
-            )
-            lines.append(
-                f'pyisolate_mem_bytes{{sandbox="{label}"}} {stats.mem_bytes}'
-            )
-            lines.append(
-                f'pyisolate_errors_total{{sandbox="{label}"}} {stats.errors}'
-            )
-            lines.append(
-                f'pyisolate_cost{{sandbox="{label}"}} {stats.cost:.6f}'
-            )
+            lines.append(f'pyisolate_cpu_ms{{sandbox="{label}"}} {stats.cpu_ms:.0f}')
+            lines.append(f'pyisolate_mem_bytes{{sandbox="{label}"}} {stats.mem_bytes}')
+            lines.append(f'pyisolate_errors_total{{sandbox="{label}"}} {stats.errors}')
+            lines.append(f'pyisolate_cost{{sandbox="{label}"}} {stats.cost:.6f}')
             cumul = 0
             for le, count in stats.latency.items():
                 cumul += count
