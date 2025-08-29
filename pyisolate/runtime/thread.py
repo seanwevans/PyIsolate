@@ -101,9 +101,7 @@ def _wrap_module(name: str, module):
             ):
                 if "b" not in mode:
                     encoding = io.text_encoding(encoding)
-                return _blocked_open(
-                    self, mode, buffering, encoding, errors, newline
-                )
+                return _blocked_open(self, mode, buffering, encoding, errors, newline)
 
         mod.Path = SandboxedPath
         return mod
@@ -416,9 +414,7 @@ class SandboxThread(threading.Thread):
                     except Exception as exc:  # real impl would sanitize
                         self._errors += 1
                         self._start_time = None
-                        if self._on_violation and isinstance(
-                            exc, errors.PolicyError
-                        ):
+                        if self._on_violation and isinstance(exc, errors.PolicyError):
                             self._on_violation(self.name, exc)
                         self._outbox.put(exc)
                     finally:
