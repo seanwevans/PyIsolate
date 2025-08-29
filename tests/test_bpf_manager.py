@@ -1,5 +1,6 @@
 import json
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,7 +16,7 @@ def test_load_runs_toolchain(monkeypatch):
     BPFManager._SKEL_CACHE = {}
     calls = []
 
-    def fake_run(self, cmd):
+    def fake_run(self, cmd, *, raise_on_error=False):
         calls.append(cmd)
         return True
 
@@ -88,7 +89,9 @@ def test_load_runs_toolchain(monkeypatch):
 
 def test_hot_reload_updates_maps(tmp_path, monkeypatch):
     BPFManager._SKEL_CACHE = {}
-    monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "subprocess.run", lambda *a, **k: subprocess.CompletedProcess([], 0)
+    )
     mgr = BPFManager()
     mgr.load()
 
@@ -102,27 +105,35 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
     assert mgr.policy_maps == {"cpu": "200ms", "mem": "64MiB"}
 
 
-def test_load_failure_keeps_unloaded(monkeypatch):
+def test_load_failure_logs_and_raises(monkeypatch, caplog):
     BPFManager._SKEL_CACHE = {}
 
-    def fake_run(self, cmd):
-        return False if "bpftool" in cmd else True
+    def fake_run(cmd, check, capture_output, text):
+        if "bpftool" in cmd:
+            raise subprocess.CalledProcessError(1, cmd, stderr="load boom")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(BPFManager, "_run", fake_run)
+    monkeypatch.setattr("subprocess.run", fake_run)
     mgr = BPFManager()
-    mgr.load()
+    caplog.set_level(logging.ERROR)
+    with pytest.raises(RuntimeError) as exc:
+        mgr.load(strict=True)
+    assert "load boom" in str(exc.value)
     assert not mgr.loaded
+    assert any("load boom" in rec.getMessage() for rec in caplog.records)
 
 
 def test_load_skips_when_cached(monkeypatch):
     BPFManager._SKEL_CACHE = {}
-    monkeypatch.setattr(BPFManager, "_run", lambda self, cmd: True)
+    monkeypatch.setattr(
+        BPFManager, "_run", lambda self, cmd, *, raise_on_error=False: True
+    )
     mgr = BPFManager()
     mgr.load()  # first load to populate cache
 
     calls = []
 
-    def record(self, cmd):
+    def record(self, cmd, *, raise_on_error=False):
         calls.append(cmd)
         return True
 
@@ -149,25 +160,31 @@ def test_load_skips_when_cached(monkeypatch):
     assert skel_cmd not in calls
 
 
-def test_hot_reload_failure_raises(monkeypatch, tmp_path):
+def test_hot_reload_failure_logs_and_raises(tmp_path, monkeypatch, caplog):
     BPFManager._SKEL_CACHE = {}
-    mgr = BPFManager()
-    mgr.loaded = True
     policy = tmp_path / "policy.json"
     policy.write_text(json.dumps({"cpu": "100ms", "mem": "64MiB"}))
 
-    def fail_on_cpu(self, cmd):
-        return not any("cpu" in part for part in cmd)
+    def fake_run(cmd, check, capture_output, text):
+        if "update" in cmd and any("cpu" in part for part in cmd):
+            raise subprocess.CalledProcessError(1, cmd, stderr="map boom")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(BPFManager, "_run", fail_on_cpu)
+    monkeypatch.setattr("subprocess.run", fake_run)
+    mgr = BPFManager()
+    mgr.load()
+    caplog.set_level(logging.ERROR)
     with pytest.raises(RuntimeError) as exc:
         mgr.hot_reload(str(policy))
-    assert "cpu" in str(exc.value)
+    assert "map boom" in str(exc.value)
+    assert any("map boom" in rec.getMessage() for rec in caplog.records)
 
 
 def test_hot_reload_logs_updates(tmp_path, monkeypatch, caplog):
     BPFManager._SKEL_CACHE = {}
-    monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "subprocess.run", lambda *a, **k: subprocess.CompletedProcess([], 0)
+    )
     mgr = BPFManager()
     mgr.load()
     policy = tmp_path / "policy.json"
