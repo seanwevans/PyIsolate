@@ -104,7 +104,6 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
     assert mgr.policy_maps == {"cpu": "200ms", "mem": "64MiB"}
 
 
-
 def test_load_failure_logs_and_raises(monkeypatch, caplog):
     BPFManager._SKEL_CACHE = {}
 
@@ -112,6 +111,7 @@ def test_load_failure_logs_and_raises(monkeypatch, caplog):
         if "bpftool" in cmd:
             raise subprocess.CalledProcessError(1, cmd, stderr="load boom")
         return subprocess.CompletedProcess(cmd, 0, "", "")
+
 
 def test_load_failure_keeps_unloaded(monkeypatch):
     def fake_run(self, cmd):
@@ -165,9 +165,9 @@ def test_load_skips_when_cached(monkeypatch):
     assert skel_cmd not in calls
 
 
-
 def test_hot_reload_failure_logs_and_raises(tmp_path, monkeypatch, caplog):
     BPFManager._SKEL_CACHE = {}
+
 
 def test_hot_reload_failure_raises(monkeypatch, tmp_path):
     mgr = BPFManager()

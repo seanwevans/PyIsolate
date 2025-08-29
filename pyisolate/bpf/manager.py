@@ -121,8 +121,12 @@ class BPFManager:
         ok &= self._run(filter_compile, raise_on_error=strict)
         ok &= self._run(guard_compile, raise_on_error=strict)
         ok &= self._run(["llvm-objdump", "-d", str(self._obj)], raise_on_error=strict)
-        ok &= self._run(["llvm-objdump", "-d", str(self._filter_obj)], raise_on_error=strict)
-        ok &= self._run(["llvm-objdump", "-d", str(self._guard_obj)], raise_on_error=strict)
+        ok &= self._run(
+            ["llvm-objdump", "-d", str(self._filter_obj)], raise_on_error=strict
+        )
+        ok &= self._run(
+            ["llvm-objdump", "-d", str(self._guard_obj)], raise_on_error=strict
+        )
         ok &= self._run(
             ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"],
             raise_on_error=strict,
