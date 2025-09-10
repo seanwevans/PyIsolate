@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import builtins
 import io
-import json
 import logging
 import os
 import queue
@@ -198,7 +197,6 @@ class SandboxThread(threading.Thread):
         self.mem_quota_bytes = mem_bytes
         if allowed_imports is not None:
             self.allowed_imports = set(allowed_imports)
-            self.allowed_imports.add("json")
         else:
             self.allowed_imports = None
         self._cpu_time = 0.0
@@ -245,18 +243,10 @@ class SandboxThread(threading.Thread):
         self._inbox.put(src)
 
     def call(self, func: str, *args, timeout: float | None = None, **kwargs) -> Any:
-        payload = json.dumps({"func": func, "args": args, "kwargs": kwargs})
-        code = "\n".join(
-            [
-                "import json",
-                f"payload = json.loads({payload!r})",
-                "module_name, func_name = payload['func'].rsplit('.', 1)",
-                "mod = __import__(module_name, fromlist=['_'])",
-                "res = object.__getattribute__(mod, func_name)(*payload['args'], **payload['kwargs'])",
-                "post(res)",
-            ]
-        )
-        self.exec(code)
+        if self._trace_enabled:
+            self._syscall_log.append(f"call {func}")
+        self._logger.debug("call", extra={"func": func})
+        self._inbox.put(("call", func, args, kwargs))
         try:
             result = self.recv(timeout)
         except Exception as exc:  # sandbox raised
@@ -296,7 +286,6 @@ class SandboxThread(threading.Thread):
         self.mem_quota_bytes = mem_bytes
         if allowed_imports is not None:
             self.allowed_imports = set(allowed_imports)
-            self.allowed_imports.add("json")
         else:
             self.allowed_imports = None
         self._cpu_time = 0.0
@@ -357,16 +346,16 @@ class SandboxThread(threading.Thread):
                 bind_current_thread(self.numa_node)
 
             while True:
-                src = self._inbox.get()
-                if src is _STOP:
+                payload = self._inbox.get()
+                if payload is _STOP:
                     break
-                if isinstance(src, _CgroupAttach):
+                if isinstance(payload, _CgroupAttach):
                     try:
                         from .. import cgroup
 
                         cgroup.attach_current(self._cgroup_path)
-                        if src.old_path and src.old_path != self._cgroup_path:
-                            cgroup.delete(src.old_path)
+                        if payload.old_path and payload.old_path != self._cgroup_path:
+                            cgroup.delete(payload.old_path)
                     except Exception:
                         pass
                     continue
@@ -395,7 +384,18 @@ class SandboxThread(threading.Thread):
                     try:
                         start_cpu = time.thread_time()
                         self._start_time = time.monotonic()
-                        exec(src, local_vars, local_vars)
+                        if isinstance(payload, tuple):
+                            kind, func, args, kwargs = payload
+                            if kind == "call":
+                                importer = builtins_dict["__import__"]
+                                module_name, func_name = func.rsplit(".", 1)
+                                mod = importer(module_name, fromlist=["_"])
+                                res = object.__getattribute__(mod, func_name)(*args, **kwargs)
+                                self._outbox.put(res)
+                            else:
+                                raise errors.SandboxError("unknown operation")
+                        else:
+                            exec(payload, local_vars, local_vars)
                         end_cpu = time.thread_time()
                         self._cpu_time += (end_cpu - start_cpu) * 1000
                         self._start_time = None
