@@ -1,4 +1,10 @@
-"""Authenticated framing helpers for the broker channel."""
+"""Authenticated framing helpers for the broker channel.
+
+``CryptoBroker`` encrypts/decrypts AEAD frames and limits the maximum
+incoming frame size via the ``max_frame_len`` constructor argument.
+Frames exceeding this bound raise :class:`ValueError` during
+``unframe`` to avoid unbounded allocations.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ except Exception:  # pragma: no cover - library optional
     HAVE_KYBER = False
 
 CTR_LIMIT = 0xFFFFFFFFFFFFFFFFFFFF  # 2^96 - 1
+DEFAULT_MAX_FRAME_LEN = 1 << 20  # 1 MiB
 
 
 def kyber_keypair() -> tuple[bytes, bytes]:
@@ -52,9 +59,15 @@ class CryptoBroker:
     """
 
     def __init__(
-        self, private_key: bytes, peer_key: bytes, *, pq_secret: bytes | None = None
+        self,
+        private_key: bytes,
+        peer_key: bytes,
+        *,
+        pq_secret: bytes | None = None,
+        max_frame_len: int = DEFAULT_MAX_FRAME_LEN,
     ):
         self._lock = Lock()
+        self._max_frame_len = max_frame_len
         self.rotate(private_key, peer_key, pq_secret=pq_secret)
 
     @staticmethod
@@ -104,6 +117,13 @@ class CryptoBroker:
         with self._lock:
             if self._rx_ctr > CTR_LIMIT:
                 raise OverflowError("receive counter overflow")
+            if len(data) > self._max_frame_len:
+                nonce = b"\x00" * 12
+                try:
+                    self._aead.decrypt(nonce, b"\x00" * 16, b"")
+                except Exception:
+                    pass
+                raise ValueError("frame too large")
             # Maintain constant-time failure handling by always invoking ``decrypt``
             # even when the frame is malformed or the counter is unexpected.
             if len(data) < 12:

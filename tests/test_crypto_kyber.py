@@ -18,6 +18,7 @@ def make_pair():
     pk_a, sk_a = kyber_keypair()
     ct, ss_b = kyber_encapsulate(pk_a)
     ss_a = kyber_decapsulate(ct, sk_a)
+    max_len = 4096
     a = CryptoBroker(
         priv_a.private_bytes(
             encoding=serialization.Encoding.Raw,
@@ -29,6 +30,7 @@ def make_pair():
             format=serialization.PublicFormat.Raw,
         ),
         pq_secret=ss_a,
+        max_frame_len=max_len,
     )
     b = CryptoBroker(
         priv_b.private_bytes(
@@ -41,6 +43,7 @@ def make_pair():
             format=serialization.PublicFormat.Raw,
         ),
         pq_secret=ss_b,
+        max_frame_len=max_len,
     )
     return a, b
 
