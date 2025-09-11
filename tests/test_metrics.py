@@ -86,6 +86,7 @@ def test_export_sandbox_order_is_stable():
 def test_export_sanitizes_sandbox_name():
     name = 'weird "sand\\box\nname'
     import re
+
     import pyisolate.supervisor as supervisor
 
     supervisor.NAME_PATTERN = re.compile(r".+", re.DOTALL)
