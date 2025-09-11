@@ -390,7 +390,9 @@ class SandboxThread(threading.Thread):
                                 importer = builtins_dict["__import__"]
                                 module_name, func_name = func.rsplit(".", 1)
                                 mod = importer(module_name, fromlist=["_"])
-                                res = object.__getattribute__(mod, func_name)(*args, **kwargs)
+                                res = object.__getattribute__(mod, func_name)(
+                                    *args, **kwargs
+                                )
                                 self._outbox.put(res)
                             else:
                                 raise errors.SandboxError("unknown operation")
