@@ -9,6 +9,47 @@ from pyisolate.libsodium import constant_compare
 def make_pair():
     priv_a = x25519.X25519PrivateKey.generate()
     priv_b = x25519.X25519PrivateKey.generate()
+    max_len = 4096
+    a = CryptoBroker(
+        priv_a.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        priv_b.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        ),
+        max_frame_len=max_len,
+    )
+    b = CryptoBroker(
+        priv_b.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        priv_a.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        ),
+        max_frame_len=max_len,
+    )
+    return a, b
+
+
+def test_constant_compare_length_mismatch():
+    assert not constant_compare(b"a", b"ab")
+
+
+def test_unframe_short_frame():
+    a, b = make_pair()
+    with pytest.raises(ValueError):
+        b.unframe(b"short")
+
+
+def test_unframe_frame_too_long():
+    priv_a = x25519.X25519PrivateKey.generate()
+    priv_b = x25519.X25519PrivateKey.generate()
     a = CryptoBroker(
         priv_a.private_bytes(
             encoding=serialization.Encoding.Raw,
@@ -30,18 +71,11 @@ def make_pair():
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         ),
+        max_frame_len=20,
     )
-    return a, b
-
-
-def test_constant_compare_length_mismatch():
-    assert not constant_compare(b"a", b"ab")
-
-
-def test_unframe_short_frame():
-    a, b = make_pair()
+    frame = a.frame(b"0123456789")
     with pytest.raises(ValueError):
-        b.unframe(b"short")
+        b.unframe(frame)
 
 
 def test_tx_counter_overflow():

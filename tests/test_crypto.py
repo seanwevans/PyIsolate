@@ -10,6 +10,7 @@ from pyisolate.broker.crypto import CryptoBroker, handshake
 def make_pair():
     priv_a = x25519.X25519PrivateKey.generate()
     priv_b = x25519.X25519PrivateKey.generate()
+    max_len = 4096
     a = CryptoBroker(
         priv_a.private_bytes(
             encoding=serialization.Encoding.Raw,
@@ -20,6 +21,7 @@ def make_pair():
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         ),
+        max_frame_len=max_len,
     )
     b = CryptoBroker(
         priv_b.private_bytes(
@@ -31,6 +33,7 @@ def make_pair():
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         ),
+        max_frame_len=max_len,
     )
     return a, b
 
@@ -76,6 +79,7 @@ def test_handshake_helper():
             encryption_algorithm=serialization.NoEncryption(),
         ),
         pub_a,
+        max_frame_len=4096,
     )
 
     msg = b"hi"
