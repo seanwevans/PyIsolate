@@ -86,8 +86,18 @@ def test_load_runs_toolchain(monkeypatch):
     assert mgr.loaded
 
 
+def test_load_lenient_mode_does_not_raise(monkeypatch):
+    monkeypatch.setattr(
+        BPFManager, "_run", lambda self, cmd, *, raise_on_error=False: True
+    )
+    mgr = BPFManager()
+
+    mgr.load(strict=False)
+
+    assert mgr.loaded
+
+
 def test_hot_reload_updates_maps(tmp_path, monkeypatch):
-    BPFManager._SKEL_CACHE = {}
     monkeypatch.setattr(
         "subprocess.run", lambda *a, **k: subprocess.CompletedProcess([], 0)
     )
@@ -105,17 +115,17 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
 
 
 def test_load_failure_logs_and_raises(monkeypatch, caplog):
-    BPFManager._SKEL_CACHE = {}
-
     def fake_run(cmd, check, capture_output, text):
         if "bpftool" in cmd:
             raise subprocess.CalledProcessError(1, cmd, stderr="load boom")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
 
-def test_load_failure_keeps_unloaded(monkeypatch):
-    def fake_run(self, cmd):
-        return False if "bpftool" in cmd else True
+def test_load_failure_keeps_unloaded(monkeypatch, caplog):
+    def fake_run(cmd, *_, **__):
+        if "bpftool" in cmd:
+            raise subprocess.CalledProcessError(1, cmd, stderr="load boom")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr("subprocess.run", fake_run)
     mgr = BPFManager()
@@ -128,7 +138,6 @@ def test_load_failure_keeps_unloaded(monkeypatch):
 
 
 def test_load_skips_when_cached(monkeypatch):
-    BPFManager._SKEL_CACHE = {}
     monkeypatch.setattr(
         BPFManager, "_run", lambda self, cmd, *, raise_on_error=False: True
     )
@@ -165,11 +174,7 @@ def test_load_skips_when_cached(monkeypatch):
     assert skel_cmd not in calls
 
 
-def test_hot_reload_failure_logs_and_raises(tmp_path, monkeypatch, caplog):
-    BPFManager._SKEL_CACHE = {}
-
-
-def test_hot_reload_failure_raises(monkeypatch, tmp_path):
+def test_hot_reload_failure_raises(monkeypatch, tmp_path, caplog):
     mgr = BPFManager()
     mgr.loaded = True
     policy = tmp_path / "policy.json"
@@ -191,7 +196,6 @@ def test_hot_reload_failure_raises(monkeypatch, tmp_path):
 
 
 def test_hot_reload_logs_updates(tmp_path, monkeypatch, caplog):
-    BPFManager._SKEL_CACHE = {}
     monkeypatch.setattr(
         "subprocess.run", lambda *a, **k: subprocess.CompletedProcess([], 0)
     )
