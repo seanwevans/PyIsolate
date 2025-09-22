@@ -35,8 +35,11 @@ _ORIG_SOCKET_CONNECT = socket.socket.connect
 def _blocked_open(file, *args, **kwargs):
     """Restrict file access based on the current thread's policy."""
 
-    if isinstance(file, (str, bytes, os.PathLike)):
-        path = Path(file).resolve()
+    if isinstance(file, os.PathLike):
+        file = os.fspath(file)
+
+    if isinstance(file, (str, bytes)):
+        path = Path(file).resolve(strict=False)
 
         allowed = getattr(_thread_local, "fs", None)
 
@@ -366,7 +369,7 @@ class SandboxThread(threading.Thread):
                     if getattr(self.policy, "tcp", None):
                         allowed_tcp = set(self.policy.tcp)
                     if getattr(self.policy, "fs", None):
-                        allowed_fs = [Path(p).resolve() for p in self.policy.fs]
+                        allowed_fs = [Path(p).resolve(strict=False) for p in self.policy.fs]
                 _thread_local.tcp = allowed_tcp
                 _thread_local.fs = allowed_fs
 

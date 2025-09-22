@@ -60,3 +60,42 @@ def test_fs_sibling_not_allowed(tmp_path):
             sb.recv(timeout=1)
     finally:
         sb.close()
+
+
+def test_fs_allows_creating_new_files(tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    blocked_dir = tmp_path / "blocked"
+    blocked_dir.mkdir()
+
+    allowed_target = allowed_dir / "new.txt"
+    blocked_target = blocked_dir / "blocked.txt"
+
+    p = policy.Policy().allow_fs(str(allowed_dir))
+    sb = iso.spawn("pifs-create", policy=p)
+    try:
+        sb.exec(
+            (
+                f"path = {str(allowed_target)!r}\n"
+                "with open(path, 'w') as fh:\n"
+                "    fh.write('hello world')\n"
+                "with open(path) as fh:\n"
+                "    post(fh.read())\n"
+            )
+        )
+        assert sb.recv(timeout=1) == "hello world"
+
+        sb.exec(
+            (
+                f"path = {str(blocked_target)!r}\n"
+                "with open(path, 'w') as fh:\n"
+                "    fh.write('nope')\n"
+            )
+        )
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+    assert allowed_target.read_text() == "hello world"
+    assert not blocked_target.exists()
