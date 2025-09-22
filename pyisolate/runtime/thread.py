@@ -54,7 +54,10 @@ def _blocked_open(file, *args, **kwargs):
 def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
     allowed = getattr(_thread_local, "tcp", None)
     if allowed is not None:
-        host, port = address
+        if isinstance(address, tuple):
+            host, port, *_ = address
+        else:
+            host, port = address
         if f"{host}:{port}" not in allowed:
             raise errors.PolicyError(f"connect blocked: {host}:{port}")
     return _ORIG_SOCKET_CONNECT(self_socket, address)
