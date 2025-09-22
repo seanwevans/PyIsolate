@@ -5,7 +5,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import os
-
 import types
 
 bpf_manager = types.ModuleType("pyisolate.bpf.manager")
