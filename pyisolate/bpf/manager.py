@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 from pathlib import Path
+from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class BPFManager:
     repeated loads can reuse the pre-built object.
     """
 
-    _SKEL_CACHE: dict[Path, str] = {}
+    _SKEL_CACHE: ClassVar[dict[Path, str]] = {}
 
     def __init__(self):
         self.loaded = False

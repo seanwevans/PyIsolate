@@ -378,10 +378,7 @@ class SandboxThread(threading.Thread):
                 _thread_local.tcp = allowed_tcp
                 _thread_local.fs = allowed_fs
 
-                if self.allowed_imports is not None:
-                    builtins_dict = builtins.__dict__.copy()
-                else:
-                    builtins_dict = _SAFE_BUILTINS.copy()
+                builtins_dict = _SAFE_BUILTINS.copy()
                 builtins_dict["open"] = _blocked_open
                 builtins_dict["__import__"] = _make_importer(self.allowed_imports)
                 local_vars["__builtins__"] = builtins_dict

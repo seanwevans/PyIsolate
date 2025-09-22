@@ -10,8 +10,11 @@ import time
 
 import pytest
 
-import pyisolate as iso
 from pyisolate.bpf.manager import BPFManager
+
+BPFManager._SKEL_CACHE = {}
+
+import pyisolate as iso
 
 
 def test_spawn_returns_sandbox():
@@ -152,12 +155,33 @@ def test_dangerous_builtins_removed():
         assert sb.recv(timeout=0.5) == "missing"
 
         sb.exec(
+            "try:\n    exec('1')\nexcept NameError:\n    post('missing')\nelse:\n    post('present')"
+        )
+        assert sb.recv(timeout=0.5) == "missing"
+
+        sb.exec(
             "try:\n    compile('1', '<s>', 'eval')\nexcept NameError:\n    post('missing')\nelse:\n    post('present')"
         )
         assert sb.recv(timeout=0.5) == "missing"
 
         sb.exec(
             "try:\n    getattr(1, 'bit_length')\nexcept NameError:\n    post('missing')\nelse:\n    post('present')"
+        )
+        assert sb.recv(timeout=0.5) == "missing"
+    finally:
+        sb.close()
+
+
+def test_dangerous_builtins_removed_with_allowed_imports():
+    sb = iso.spawn("builtins_allowed", allowed_imports=["math"])
+    try:
+        sb.exec(
+            "try:\n    eval('1')\nexcept NameError:\n    post('missing')\nelse:\n    post('present')"
+        )
+        assert sb.recv(timeout=0.5) == "missing"
+
+        sb.exec(
+            "try:\n    exec('1')\nexcept NameError:\n    post('missing')\nelse:\n    post('present')"
         )
         assert sb.recv(timeout=0.5) == "missing"
     finally:
