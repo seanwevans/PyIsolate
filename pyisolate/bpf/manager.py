@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 from pathlib import Path
+from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ class BPFManager:
     Compilation and skeleton generation are cached per instance so that
     repeated loads can reuse the pre-built object.
     """
+
+    _SKEL_CACHE: ClassVar[dict[Path, str]] = {}
 
     def __init__(self):
         self.loaded = False
@@ -32,7 +35,7 @@ class BPFManager:
         self._filter_obj = Path(__file__).with_name("syscall_filter.bpf.o")
         self._guard_src = Path(__file__).with_name("resource_guard.bpf.c")
         self._guard_obj = Path(__file__).with_name("resource_guard.bpf.o")
-        self._skel_cache: dict[Path, str] = {}
+        self._skel_cache = self._SKEL_CACHE
 
     # internal helper
     def _run(self, cmd: list[str], *, raise_on_error: bool = False) -> bool:
