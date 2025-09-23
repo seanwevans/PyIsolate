@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 from pathlib import Path
+from typing import ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class BPFManager:
         ]
         ok = True
         compile_cmd = dummy_compile
-        if self._src not in self._SKEL_CACHE:
+        if self._src not in self._skel_cache:
             ok &= self._run(compile_cmd, raise_on_error=strict)
             skel_cmd = [
                 "sh",
