@@ -22,7 +22,7 @@ class BPFManager:
     repeated loads can reuse the pre-built object.
     """
 
-    _SKEL_CACHE: ClassVar[dict[Path, str]] = {}
+    _SKEL_CACHE: dict[Path, str] = {}
 
     def __init__(self):
         self.loaded = False

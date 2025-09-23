@@ -208,6 +208,7 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._mem_peak = 0
         self.numa_node = numa_node
+        self._bound_numa_node: int | None = None
         self._mem_base = 0
         self._start_time: float | None = None
         self._on_violation = on_violation
@@ -282,6 +283,7 @@ class SandboxThread(threading.Thread):
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
         allowed_imports: Optional[list[str]] = None,
+        numa_node: Optional[int] = None,
         cgroup_path=None,
     ) -> None:
         """Reuse this thread for a new sandbox."""
@@ -290,6 +292,8 @@ class SandboxThread(threading.Thread):
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
         self.mem_quota_bytes = mem_bytes
+        self.numa_node = numa_node
+        self._bound_numa_node = None
         if allowed_imports is not None:
             self.allowed_imports = set(allowed_imports)
         else:
@@ -350,6 +354,7 @@ class SandboxThread(threading.Thread):
 
             if self.numa_node is not None:
                 bind_current_thread(self.numa_node)
+            self._bound_numa_node = self.numa_node
 
             while True:
                 payload = self._inbox.get()
@@ -365,6 +370,11 @@ class SandboxThread(threading.Thread):
                     except Exception:
                         pass
                     continue
+
+                if self.numa_node != self._bound_numa_node:
+                    if self.numa_node is not None:
+                        bind_current_thread(self.numa_node)
+                    self._bound_numa_node = self.numa_node
 
                 allowed_tcp = set()
                 allowed_fs = None
