@@ -74,3 +74,22 @@ def test_checkpoint_rejects_unserializable():
             iso.checkpoint(sb, key)
     finally:
         sb.close()
+
+
+def test_checkpoint_closes_on_serialization_failure():
+    key = os.urandom(32)
+
+    class SpySandbox:
+        def __init__(self):
+            self.closed = False
+
+        def snapshot(self):
+            return {"bad": object()}
+
+        def close(self):
+            self.closed = True
+
+    sandbox = SpySandbox()
+    with pytest.raises(ValueError, match="JSON serializable"):
+        iso.checkpoint(sandbox, key)
+    assert sandbox.closed
