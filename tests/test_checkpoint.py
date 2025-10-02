@@ -101,12 +101,16 @@ def test_checkpoint_restores_imports_and_numa():
             restored = sb2.snapshot()
             assert restored["allowed_imports"] == sorted(set(allowed_imports))
             assert restored["numa_node"] == numa_node
-            sb2.exec("import math, statistics\npost(math.sqrt(16) + statistics.mean([0, 2]))")
+            sb2.exec(
+                "import math, statistics\npost(math.sqrt(16) + statistics.mean([0, 2]))"
+            )
             assert pytest.approx(sb2.recv(timeout=0.5)) == 5.0
         finally:
             sb2.close()
     finally:
         pass
+
+
 @pytest.mark.parametrize(
     "payload, message",
     [
@@ -121,7 +125,8 @@ def test_restore_rejects_malformed_payload(payload, message):
     blob = _make_blob(payload, key)
     with pytest.raises(ValueError, match=message):
         iso.restore(blob, key)
-        
+
+
 def test_checkpoint_closes_on_serialization_failure():
     key = os.urandom(32)
 
