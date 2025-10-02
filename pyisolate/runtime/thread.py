@@ -228,6 +228,10 @@ class SandboxThread(threading.Thread):
             "policy": self.policy,
             "cpu_ms": self.cpu_quota_ms,
             "mem_bytes": self.mem_quota_bytes,
+            "allowed_imports": sorted(self.allowed_imports)
+            if self.allowed_imports is not None
+            else None,
+            "numa_node": self.numa_node,
         }
 
     def enable_tracing(self) -> None:

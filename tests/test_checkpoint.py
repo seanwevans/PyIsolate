@@ -86,6 +86,27 @@ def test_checkpoint_rejects_unserializable():
         sb.close()
 
 
+def test_checkpoint_restores_imports_and_numa():
+    key = os.urandom(32)
+    allowed_imports = ["statistics", "math"]
+    numa_node = 0
+    sb = iso.spawn("custom", allowed_imports=allowed_imports, numa_node=numa_node)
+    try:
+        snap = sb.snapshot()
+        assert snap["allowed_imports"] == sorted(set(allowed_imports))
+        assert snap["numa_node"] == numa_node
+        blob = iso.checkpoint(sb, key)
+        sb2 = iso.restore(blob, key)
+        try:
+            restored = sb2.snapshot()
+            assert restored["allowed_imports"] == sorted(set(allowed_imports))
+            assert restored["numa_node"] == numa_node
+            sb2.exec("import math, statistics\npost(math.sqrt(16) + statistics.mean([0, 2]))")
+            assert pytest.approx(sb2.recv(timeout=0.5)) == 5.0
+        finally:
+            sb2.close()
+    finally:
+        pass
 @pytest.mark.parametrize(
     "payload, message",
     [
