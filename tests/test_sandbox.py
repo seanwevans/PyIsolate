@@ -43,6 +43,19 @@ def test_call_returns_result():
         sb.close()
 
 
+def test_call_requires_dotted_path():
+    sb = iso.spawn("nodot")
+    try:
+        with pytest.raises(iso.SandboxError) as excinfo:
+            sb.call("sqrt", 4)
+        assert (
+            str(excinfo.value)
+            == "call target 'sqrt' must include a module path (e.g. 'module.func')"
+        )
+    finally:
+        sb.close()
+
+
 def test_allowed_imports_success():
     sb = iso.spawn("imp_ok", allowed_imports=["math"])
     try:
