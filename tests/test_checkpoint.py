@@ -100,3 +100,21 @@ def test_restore_rejects_malformed_payload(payload, message):
     blob = _make_blob(payload, key)
     with pytest.raises(ValueError, match=message):
         iso.restore(blob, key)
+        
+def test_checkpoint_closes_on_serialization_failure():
+    key = os.urandom(32)
+
+    class SpySandbox:
+        def __init__(self):
+            self.closed = False
+
+        def snapshot(self):
+            return {"bad": object()}
+
+        def close(self):
+            self.closed = True
+
+    sandbox = SpySandbox()
+    with pytest.raises(ValueError, match="JSON serializable"):
+        iso.checkpoint(sandbox, key)
+    assert sandbox.closed

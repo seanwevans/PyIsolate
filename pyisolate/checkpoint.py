@@ -23,14 +23,16 @@ def checkpoint(sandbox: Sandbox, key: bytes) -> bytes:
         raise ValueError("key must be 32 bytes")
     state = sandbox.snapshot()
     try:
-        data = json.dumps(state).encode("utf-8")
-    except (TypeError, ValueError) as exc:  # json raises ValueError on NaN
-        raise ValueError("sandbox state is not JSON serializable") from exc
-    aead = ChaCha20Poly1305(key)
-    nonce = os.urandom(12)
-    blob = nonce + aead.encrypt(nonce, data, b"")
-    sandbox.close()
-    return blob
+        try:
+            data = json.dumps(state).encode("utf-8")
+        except (TypeError, ValueError) as exc:  # json raises ValueError on NaN
+            raise ValueError("sandbox state is not JSON serializable") from exc
+        aead = ChaCha20Poly1305(key)
+        nonce = os.urandom(12)
+        blob = nonce + aead.encrypt(nonce, data, b"")
+        return blob
+    finally:
+        sandbox.close()
 
 
 def restore(blob: bytes, key: bytes) -> Sandbox:
