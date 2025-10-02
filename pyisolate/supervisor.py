@@ -132,8 +132,12 @@ class Supervisor:
                 imports.update(allowed_imports)
             allowed_imports = list(imports)
 
-        cg_path = cgroup.create(name, cpu_ms, mem_bytes)
         with self._lock:
+            existing = self._sandboxes.get(name)
+            if existing is not None and existing.is_alive():
+                raise RuntimeError(f"sandbox '{name}' already exists")
+
+            cg_path = cgroup.create(name, cpu_ms, mem_bytes)
             if self._warm_pool:
                 thread = self._warm_pool.pop()
                 thread.reset(
