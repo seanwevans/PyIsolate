@@ -99,3 +99,17 @@ def test_spawn_valid_name_regex(name):
 def test_spawn_invalid_name_regex(name):
     with pytest.raises(ValueError):
         iso.spawn(name)
+
+
+def test_spawn_duplicate_name_rejected():
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("dup")
+        with pytest.raises(RuntimeError, match="sandbox 'dup' already exists"):
+            sup.spawn("dup")
+        active = sup.list_active()
+        assert "dup" in active
+        assert active["dup"]._thread is sb._thread
+    finally:
+        sb.close()
+        sup.shutdown()
