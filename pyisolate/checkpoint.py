@@ -49,6 +49,8 @@ def restore(blob: bytes, key: bytes) -> Sandbox:
         policy=state.get("policy"),
         cpu_ms=state.get("cpu_ms"),
         mem_bytes=state.get("mem_bytes"),
+        allowed_imports=state.get("allowed_imports"),
+        numa_node=state.get("numa_node"),
     )
 
 
