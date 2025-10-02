@@ -44,8 +44,15 @@ def restore(blob: bytes, key: bytes) -> Sandbox:
         state = json.loads(data.decode("utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError("invalid checkpoint data") from exc
+    if not isinstance(state, dict):
+        raise ValueError("invalid checkpoint payload: expected JSON object")
+    name = state.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError(
+            "invalid checkpoint payload: 'name' must be a non-empty string"
+        )
     return spawn(
-        state["name"],
+        name,
         policy=state.get("policy"),
         cpu_ms=state.get("cpu_ms"),
         mem_bytes=state.get("mem_bytes"),

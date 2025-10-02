@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import os
+import json
 import types
 
 bpf_manager = types.ModuleType("pyisolate.bpf.manager")
@@ -28,6 +29,15 @@ import pytest
 
 import pyisolate as iso
 import pyisolate.policy as policy
+
+
+def _make_blob(payload, key):
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+    nonce = b"\x00" * 12
+    data = json.dumps(payload).encode("utf-8")
+    aead = ChaCha20Poly1305(key)
+    return nonce + aead.encrypt(nonce, data, b"")
 
 
 def test_checkpoint_roundtrip():
@@ -74,3 +84,19 @@ def test_checkpoint_rejects_unserializable():
             iso.checkpoint(sb, key)
     finally:
         sb.close()
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ([], "expected JSON object"),
+        ({}, "non-empty string"),
+        ({"name": ""}, "non-empty string"),
+        ({"name": 123}, "non-empty string"),
+    ],
+)
+def test_restore_rejects_malformed_payload(payload, message):
+    key = os.urandom(32)
+    blob = _make_blob(payload, key)
+    with pytest.raises(ValueError, match=message):
+        iso.restore(blob, key)
