@@ -407,7 +407,14 @@ class SandboxThread(threading.Thread):
                             kind, func, args, kwargs = payload
                             if kind == "call":
                                 importer = builtins_dict["__import__"]
-                                module_name, func_name = func.rsplit(".", 1)
+                                try:
+                                    module_name, func_name = func.rsplit(".", 1)
+                                except ValueError as exc:
+                                    raise errors.SandboxError(
+                                        "call target {!r} must include a module path (e.g. 'module.func')".format(
+                                            func
+                                        )
+                                    ) from exc
                                 mod = importer(module_name, fromlist=["_"])
                                 res = object.__getattribute__(mod, func_name)(
                                     *args, **kwargs
