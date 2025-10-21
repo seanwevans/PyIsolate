@@ -1,4 +1,5 @@
 # PyIsolate
+<img width="256" alt="a sandbox of sandboxes!" src="https://github.com/user-attachments/assets/e5851893-ee13-4466-981e-55d6d08c01db" />
 
 **A Light‑weight, eBPF‑hardened sub‑interpreter sandbox for a no-GIL CPython**
 
