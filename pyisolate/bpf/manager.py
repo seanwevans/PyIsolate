@@ -172,7 +172,12 @@ class BPFManager:
         # Replace the active policy entirely to drop removed entries
         self.policy_maps = data
         for key, val in data.items():
-            logger.info("updating map %s -> %s", key, val)
+            encoded_val = (
+                json.dumps(val, separators=(",", ":"))
+                if isinstance(val, (dict, list))
+                else str(val)
+            )
+            logger.info("updating map %s -> %s", key, encoded_val)
             try:
                 self._run(
                     [
@@ -184,7 +189,7 @@ class BPFManager:
                         "key",
                         "0",
                         "value",
-                        str(val),
+                        encoded_val,
                         "any",
                     ],
                     raise_on_error=True,
