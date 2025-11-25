@@ -115,12 +115,18 @@ def _compile_tcp(rules: List[dict], sb_name: str) -> List[TCPRule]:
         action, addr = next(iter(rule.items()))
         if action not in ("connect", "deny"):
             raise PolicyCompilerError(f"invalid net action '{action}' in '{sb_name}'")
-        if addr in seen and seen[addr] != action:
-            raise PolicyCompilerError(
-                f"conflicting net rules for '{addr}' in '{sb_name}'"
-            )
-        seen[addr] = action
-        compiled.append(TCPRule(action=action, addr=addr))
+        addresses = addr if isinstance(addr, list) else [addr]
+        for address in addresses:
+            if not isinstance(address, str):
+                raise PolicyCompilerError(
+                    f"net addresses in '{sb_name}' must be strings: {address!r}"
+                )
+            if address in seen and seen[address] != action:
+                raise PolicyCompilerError(
+                    f"conflicting net rules for '{address}' in '{sb_name}'"
+                )
+            seen[address] = action
+            compiled.append(TCPRule(action=action, addr=address))
     return compiled
 
 

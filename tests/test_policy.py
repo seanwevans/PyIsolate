@@ -109,6 +109,43 @@ def test_compile_policy_net_and_imports(tmp_path):
     assert sandbox.imports == ["math", "json"]
 
 
+def test_compile_tcp_accepts_address_list(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "version: 0.1\n"
+        "sandboxes:\n"
+        "  sb:\n"
+        "    net:\n"
+        "      - connect: [\"127.0.0.1:6379\", \"10.0.0.1:53\"]\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    sandbox = compiled.sandboxes["sb"]
+
+    assert [r.addr for r in sandbox.tcp] == ["127.0.0.1:6379", "10.0.0.1:53"]
+    assert [r.action for r in sandbox.tcp] == ["connect", "connect"]
+
+
+def test_compile_tcp_rejects_non_string_addresses(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "version: 0.1\n"
+        "sandboxes:\n"
+        "  sb:\n"
+        "    net:\n"
+        "      - connect: [123]\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    with pytest.raises(policy.PolicyCompilerError, match="net addresses in 'sb'"):
+        policy.compile_policy(str(f))
+
+
 def test_validation_missing_version(tmp_path):
     policy = load_policy(no_yaml=True)
     p = tmp_path / "p.yml"
