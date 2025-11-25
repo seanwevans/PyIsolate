@@ -40,16 +40,32 @@ def check_fs(policy: dict, path: str, write: bool = False) -> bool:
 
 
 def check_tcp(policy: dict, addr: str) -> bool:
-    """Return ``True`` if ``addr`` can be connected to under ``policy``."""
-    net = policy.get("net")
-    if net == "none":
+    """
+    Return ``True`` if ``addr`` can be connected to under ``policy``.
+
+    The modern schema uses a top-level ``tcp`` list that matches
+    :class:`pyisolate.policy.Policy`.  For compatibility, we also honor the
+    legacy ``net`` key used by older templates so users can migrate gradually.
+    """
+
+    tcp_rules = policy.get("tcp")
+    if tcp_rules is None:
+        tcp_rules = policy.get("net")
+
+    if tcp_rules == "none":
         return False
-    if isinstance(net, list):
-        for rule in net:
-            if "connect" in rule and fnmatch.fnmatch(addr, rule["connect"]):
+
+    if isinstance(tcp_rules, list):
+        for rule in tcp_rules:
+            # Legacy templates used ``connect`` / ``deny`` mappings; newer ones
+            # may just list allowed destinations directly.
+            if isinstance(rule, dict):
+                if "connect" in rule and fnmatch.fnmatch(addr, rule["connect"]):
+                    return True
+                if "deny" in rule and fnmatch.fnmatch(addr, rule["deny"]):
+                    return False
+            elif fnmatch.fnmatch(addr, str(rule)):
                 return True
-            if "deny" in rule and fnmatch.fnmatch(addr, rule["deny"]):
-                return False
     return False
 
 
@@ -78,7 +94,7 @@ class PolicyEditor(tk.Tk):
 
         dbg = tk.Frame(self)
         dbg.pack(fill=tk.X)
-        tk.Label(dbg, text="Test path/addr:").pack(side=tk.LEFT)
+        tk.Label(dbg, text="Test path/host:port:").pack(side=tk.LEFT)
         self.test_entry = tk.Entry(dbg)
         self.test_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Button(dbg, text="Check", command=self.check).pack(side=tk.LEFT)
@@ -152,7 +168,7 @@ class PolicyEditor(tk.Tk):
             return
         if ":" in query:
             allowed = check_tcp(policy, query)
-            msg = f"net {query}: {'allowed' if allowed else 'denied'}"
+            msg = f"tcp {query}: {'allowed' if allowed else 'denied'}"
         else:
             allowed = check_fs(policy, query)
             msg = f"fs {query}: {'allowed' if allowed else 'denied'}"
