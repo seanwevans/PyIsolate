@@ -19,6 +19,9 @@ class _StubBPFManager:
     def hot_reload(self, policy_path: str) -> None:  # pragma: no cover - stub
         raise RuntimeError("BPF disabled")
 
+    def _run(self, *_, **__):  # pragma: no cover - stub
+        return True
+
     def open_ring_buffer(self):  # pragma: no cover - stub
         return iter(())
 

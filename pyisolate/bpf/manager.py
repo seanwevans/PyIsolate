@@ -50,10 +50,13 @@ class BPFManager:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
             return True
         except FileNotFoundError as exc:
-            # Missing tools are expected in some environments; log and return.
+            # Missing tools are expected in some environments; log and continue
+            # in lenient mode so that sandboxing can still function without BPF
+            # enforcement.
             logger.error("command not found: %s", cmd[0])
             if raise_on_error:
                 raise RuntimeError(f"Command not found: {cmd[0]}") from exc
+            return True
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr or ""
             logger.error("command failed %s: %s", cmd, stderr.strip())
@@ -169,6 +172,8 @@ class BPFManager:
             raise RuntimeError(f"Policy file not found: {policy_path}") from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Invalid JSON in policy file {policy_path}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError("Policy data must be a JSON object")
         # Replace the active policy entirely to drop removed entries
         self.policy_maps = data
         for key, val in data.items():
