@@ -380,7 +380,7 @@ class SandboxThread(threading.Thread):
                         bind_current_thread(self.numa_node)
                     self._bound_numa_node = self.numa_node
 
-                allowed_tcp = set()
+                allowed_tcp = None
                 allowed_fs = None
                 if self.policy is not None:
                     if getattr(self.policy, "tcp", None):
@@ -389,7 +389,11 @@ class SandboxThread(threading.Thread):
                         allowed_fs = [
                             Path(p).resolve(strict=False) for p in self.policy.fs
                         ]
-                _thread_local.tcp = allowed_tcp
+                if allowed_tcp is None:
+                    if hasattr(_thread_local, "tcp"):
+                        delattr(_thread_local, "tcp")
+                else:
+                    _thread_local.tcp = allowed_tcp
                 _thread_local.fs = allowed_fs
 
                 builtins_dict = _SAFE_BUILTINS.copy()
