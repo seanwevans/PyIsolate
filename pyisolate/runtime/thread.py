@@ -383,8 +383,9 @@ class SandboxThread(threading.Thread):
                 allowed_tcp = None
                 allowed_fs = None
                 if self.policy is not None:
-                    if getattr(self.policy, "tcp", None):
-                        allowed_tcp = set(self.policy.tcp)
+                    tcp_policy = getattr(self.policy, "tcp", None)
+                    if tcp_policy is not None:
+                        allowed_tcp = set(tcp_policy)
                     if getattr(self.policy, "fs", None):
                         allowed_fs = [
                             Path(p).resolve(strict=False) for p in self.policy.fs
