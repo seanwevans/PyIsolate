@@ -149,7 +149,9 @@ def _is_timeout_error(exc: Exception) -> bool:
     return False
 
 
-def refresh_remote(url: str, token: str, timeout: float | None = None, max_retries: int = 0) -> None:
+def refresh_remote(
+    url: str, token: str, timeout: float | None = None, max_retries: int = 0
+) -> None:
     """Fetch policy YAML from *url* and apply it."""
     attempts = max(1, max_retries + 1)
 
