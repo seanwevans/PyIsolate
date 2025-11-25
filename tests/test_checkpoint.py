@@ -12,11 +12,32 @@ bpf_manager = types.ModuleType("pyisolate.bpf.manager")
 
 
 class DummyBPFManager:
+    def __init__(self):
+        self.loaded = False
+        self.policy_maps = {}
+
     def load(self, *a, **k):
-        pass
+        self.loaded = True
 
     def hot_reload(self, *a, **k):
-        pass
+        import json
+
+        path = k.get("policy_path") or (a[0] if a else None)
+        if path is None:
+            raise RuntimeError("Policy file not found: <unknown>")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Policy file not found: {path}") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid JSON in policy file {path}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError("Policy data must be a JSON object")
+        self.policy_maps = data
+
+    def _run(self, *a, **k):
+        return True
 
     def open_ring_buffer(self):
         return iter(())

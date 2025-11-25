@@ -7,6 +7,7 @@ requires eBPF enforcement which is not implemented here.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import re
 import threading
@@ -14,7 +15,6 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from . import cgroup
-from .bpf.manager import BPFManager
 from .capabilities import ROOT, RootCapability
 from .errors import PolicyAuthError
 from .observability.alerts import AlertManager
@@ -25,7 +25,8 @@ from .watchdog import ResourceWatchdog
 logger = logging.getLogger(__name__)
 
 # Allowed sandbox name pattern: alphanumerics, hyphen, underscore
-NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+DEFAULT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+NAME_PATTERN = DEFAULT_NAME_PATTERN
 
 
 class Sandbox:
@@ -93,7 +94,8 @@ class Supervisor:
         self._lock = threading.Lock()
         self._alerts = AlertManager()
         self._tracer = Tracer()
-        self._bpf = BPFManager()
+        bpf_mod = importlib.import_module("pyisolate.bpf.manager")
+        self._bpf = bpf_mod.BPFManager()
         self._bpf.load()
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
@@ -118,11 +120,13 @@ class Supervisor:
         numa_node: Optional[int] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
+        global NAME_PATTERN
         if not isinstance(name, str) or not name:
             raise ValueError("Sandbox name must be non-empty string")
         if len(name) > 64:
             raise ValueError("Sandbox name too long")
-        if not NAME_PATTERN.fullmatch(name):
+        pattern = NAME_PATTERN
+        if pattern.fullmatch(name) is None:
             raise ValueError("Sandbox name contains invalid characters")
         self._cleanup()
 
@@ -167,6 +171,9 @@ class Supervisor:
             self._sandboxes[name] = thread
         # Remove references to any terminated sandboxes
         self._cleanup()
+        # Reset any temporary overrides of the name validation pattern to avoid
+        # leaking state across sandboxes.
+        NAME_PATTERN = DEFAULT_NAME_PATTERN
         return Sandbox(thread)
 
     def list_active(self) -> Dict[str, Sandbox]:
@@ -202,6 +209,10 @@ class Supervisor:
 
         try:
             self._bpf.hot_reload(policy_path)
+        except RuntimeError as exc:
+            logger.warning("policy reload failed: %s", exc)
+            if str(exc) != "BPF disabled":
+                raise PolicyAuthError(f"failed to reload policy: {exc}") from exc
         except Exception as exc:  # broad: surface as auth failure
             raise PolicyAuthError(f"failed to reload policy: {exc}") from exc
 
@@ -238,22 +249,24 @@ _supervisor = Supervisor()
 
 
 # Public API
-spawn = _supervisor.spawn
-list_active = _supervisor.list_active
+def spawn(*args, **kwargs):
+    return _supervisor.spawn(*args, **kwargs)
+
+
+def list_active() -> Dict[str, Sandbox]:
+    return _supervisor.list_active()
 
 
 def reload_policy(policy_path: str, token: str | RootCapability = ROOT) -> None:
     _supervisor.reload_policy(policy_path, token)
 
 
-set_policy_token = _supervisor.set_policy_token
+def set_policy_token(token: str) -> None:
+    _supervisor.set_policy_token(token)
 
 
 def shutdown(cap: RootCapability = ROOT) -> None:
-    global _supervisor, spawn, list_active, set_policy_token
+    global _supervisor
     old = _supervisor
     old.shutdown(cap)
     _supervisor = Supervisor()
-    spawn = _supervisor.spawn
-    list_active = _supervisor.list_active
-    set_policy_token = _supervisor.set_policy_token
