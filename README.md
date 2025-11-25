@@ -174,7 +174,7 @@ A `Dockerfile` and experimental operator are included. See [docs/kubernetes.md](
 ## Contributing
 
 1. Fork & create a feature branch.
-2. Enable `pre‑commit` hooks (`pre‑commit install`).
+2. Enable `pre‑commit` hooks (`pre‑commit install`). Black handles formatting and import ordering, alongside Flake8, Pylint, and Mypy for linting.
 3. Run `pre-commit run --all-files` and ensure CI passes.
 4. Submit a PR with docs & tests.
 
