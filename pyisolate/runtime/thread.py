@@ -181,6 +181,15 @@ class _CgroupAttach:
 class SandboxThread(threading.Thread):
     """Thread that runs guest code and communicates via a queue."""
 
+    @staticmethod
+    def _merge_allowed_imports(policy, allowed_imports: Optional[Iterable[str]]):
+        imports: set[str] = set()
+        if policy is not None and getattr(policy, "imports", None):
+            imports.update(policy.imports)
+        if allowed_imports is not None:
+            imports.update(allowed_imports)
+        return imports if imports else None
+
     def __init__(
         self,
         name: str,
@@ -201,10 +210,7 @@ class SandboxThread(threading.Thread):
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
         self.mem_quota_bytes = mem_bytes
-        if allowed_imports is not None:
-            self.allowed_imports = set(allowed_imports)
-        else:
-            self.allowed_imports = None
+        self.allowed_imports = self._merge_allowed_imports(policy, allowed_imports)
         self._cpu_time = 0.0
         self._mem_peak = 0
         self.numa_node = numa_node
@@ -298,10 +304,7 @@ class SandboxThread(threading.Thread):
         self.mem_quota_bytes = mem_bytes
         self.numa_node = numa_node
         self._bound_numa_node = None
-        if allowed_imports is not None:
-            self.allowed_imports = set(allowed_imports)
-        else:
-            self.allowed_imports = None
+        self.allowed_imports = self._merge_allowed_imports(policy, allowed_imports)
         self._cpu_time = 0.0
         self._mem_peak = 0
         self._ops = 0
