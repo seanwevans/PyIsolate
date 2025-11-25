@@ -27,14 +27,19 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
                 if current is None or not isinstance(result.get(current), list):
                     raise ValueError("invalid YAML line")
                 item = line[1:].strip()
-                if ":" not in item:
-                    raise ValueError("invalid YAML line")
-                k, v = item.split(":", 1)
-                from typing import cast
+                if ":" in item:
+                    k, v = item.split(":", 1)
+                    from typing import cast
 
-                assert isinstance(result[current], list)
-                lst = cast(list[dict[str, str]], result[current])
-                lst.append({k.strip(): _unquote(v.strip())})
+                    assert isinstance(result[current], list)
+                    lst = cast(list[dict[str, str]], result[current])
+                    lst.append({k.strip(): _unquote(v.strip())})
+                else:
+                    from typing import cast
+
+                    assert isinstance(result[current], list)
+                    lst = cast(list[str], result[current])
+                    lst.append(_unquote(item))
                 continue
 
             if ":" not in line:

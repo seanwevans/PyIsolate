@@ -114,6 +114,35 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
     assert mgr.policy_maps == {"cpu": "200ms", "mem": "64MiB"}
 
 
+def test_hot_reload_handles_nested_policy(tmp_path, monkeypatch):
+    calls = []
+
+    def recorder(self, cmd, *, raise_on_error=False):
+        calls.append(cmd)
+        return True
+
+    monkeypatch.setattr(BPFManager, "_run", recorder)
+    mgr = BPFManager()
+    mgr.loaded = True
+
+    policy = tmp_path / "policy.json"
+    nested = {
+        "sandboxes": {
+            "default": {
+                "fs": [{"action": "allow", "path": "/tmp/**"}],
+                "tcp": [{"action": "connect", "addr": "1.1.1.1:80"}],
+                "imports": ["math"],
+            }
+        }
+    }
+    policy.write_text(json.dumps(nested))
+
+    mgr.hot_reload(str(policy))
+
+    assert mgr.policy_maps == nested
+    assert any("\"tcp\"" in cmd[-2] for cmd in calls)
+
+
 def test_load_failure_logs_and_raises(monkeypatch, caplog):
     def fake_run(cmd, check, capture_output, text):
         if "bpftool" in cmd:

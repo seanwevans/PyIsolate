@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -82,6 +83,69 @@ def test_compile_policy_ok(tmp_path):
     assert compiled.sandboxes["sb"].fs[0].path == "/tmp/data"
 
 
+def test_compile_policy_net_and_imports(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "sandboxes:\n"
+        "  sb:\n"
+        "    net:\n"
+        '      - connect: "127.0.0.1:6379"\n'
+        '      - deny: "10.0.0.0/8"\n'
+        "    imports:\n"
+        "      - math\n"
+        "      - json\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    sandbox = compiled.sandboxes["sb"]
+    assert [r.addr for r in sandbox.tcp] == [
+        "127.0.0.1:6379",
+        "10.0.0.0/8",
+    ]
+    assert [r.action for r in sandbox.tcp] == ["connect", "deny"]
+    assert sandbox.imports == ["math", "json"]
+
+
+def test_compile_tcp_accepts_address_list(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "version: 0.1\n"
+        "sandboxes:\n"
+        "  sb:\n"
+        "    net:\n"
+        "      - connect: [\"127.0.0.1:6379\", \"10.0.0.1:53\"]\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    sandbox = compiled.sandboxes["sb"]
+
+    assert [r.addr for r in sandbox.tcp] == ["127.0.0.1:6379", "10.0.0.1:53"]
+    assert [r.action for r in sandbox.tcp] == ["connect", "connect"]
+
+
+def test_compile_tcp_rejects_non_string_addresses(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "version: 0.1\n"
+        "sandboxes:\n"
+        "  sb:\n"
+        "    net:\n"
+        "      - connect: [123]\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    with pytest.raises(policy.PolicyCompilerError, match="net addresses in 'sb'"):
+        policy.compile_policy(str(f))
+
+
 def test_validation_missing_version(tmp_path):
     policy = load_policy(no_yaml=True)
     p = tmp_path / "p.yml"
@@ -111,6 +175,38 @@ def test_templates_parse(monkeypatch, name):
 
     iso.set_policy_token("tok")
     policy.refresh(str(path), token="tok")
+
+
+def test_refresh_passes_compiled_policy(monkeypatch, tmp_path):
+    policy = load_policy()
+    import pyisolate as iso
+
+    captured: dict[str, dict] = {}
+
+    def fake_hot_reload(self, policy_path):
+        with open(policy_path, "r", encoding="utf-8") as fh:
+            captured["data"] = json.load(fh)
+
+    monkeypatch.setattr("pyisolate.bpf.manager.BPFManager.hot_reload", fake_hot_reload)
+    iso.set_policy_token("tok")
+
+    path = tmp_path / "p.yml"
+    path.write_text(
+        "version: 0.1\n"
+        "net:\n"
+        '  - connect: "1.1.1.1:443"\n'
+        "imports:\n"
+        "  - math\n"
+        "fs:\n"
+        '  - allow: "/tmp/**"\n'
+    )
+
+    policy.refresh(str(path), token="tok")
+
+    sb = captured["data"]["sandboxes"]["default"]
+    assert sb["tcp"][0]["addr"] == "1.1.1.1:443"
+    assert sb["imports"] == ["math"]
+    assert sb["fs"][0]["path"] == "/tmp/**"
 
 
 def test_reload_policy_missing_path(tmp_path):

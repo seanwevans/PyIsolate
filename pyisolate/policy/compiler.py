@@ -30,8 +30,16 @@ class FSRule:
 
 
 @dataclass
+class TCPRule:
+    action: str
+    addr: str
+
+
+@dataclass
 class SandboxPolicy:
     fs: List[FSRule]
+    tcp: List[TCPRule]
+    imports: List[str]
 
 
 @dataclass
@@ -65,11 +73,15 @@ def _simple_parse(text: str) -> Dict[str, Any]:
             current_section = token[:-1]
             data["sandboxes"][current_sb][current_section] = []
         elif indent == 6 and token.startswith("- ") and current_sb and current_section:
-            if ":" not in token[2:]:
-                raise PolicyCompilerError("invalid rule line")
-            k, v = token[2:].split(":", 1)
-            v = v.strip().strip('"').strip("'")
-            data["sandboxes"][current_sb][current_section].append({k.strip(): v})
+            item = token[2:]
+            if ":" in item:
+                k, v = item.split(":", 1)
+                v = v.strip().strip('"').strip("'")
+                data["sandboxes"][current_sb][current_section].append({k.strip(): v})
+            else:
+                data["sandboxes"][current_sb][current_section].append(
+                    item.strip().strip('"').strip("'")
+                )
         else:
             # Ignore unrecognized lines for minimal templates
             continue
@@ -91,6 +103,30 @@ def _compile_fs(rules: List[dict], sb_name: str) -> List[FSRule]:
             )
         seen[path] = action
         compiled.append(FSRule(action=action, path=path))
+    return compiled
+
+
+def _compile_tcp(rules: List[dict], sb_name: str) -> List[TCPRule]:
+    compiled: List[TCPRule] = []
+    seen: Dict[str, str] = {}
+    for rule in rules:
+        if not isinstance(rule, dict) or len(rule) != 1:
+            raise PolicyCompilerError(f"invalid net rule in '{sb_name}': {rule}")
+        action, addr = next(iter(rule.items()))
+        if action not in ("connect", "deny"):
+            raise PolicyCompilerError(f"invalid net action '{action}' in '{sb_name}'")
+        addresses = addr if isinstance(addr, list) else [addr]
+        for address in addresses:
+            if not isinstance(address, str):
+                raise PolicyCompilerError(
+                    f"net addresses in '{sb_name}' must be strings: {address!r}"
+                )
+            if address in seen and seen[address] != action:
+                raise PolicyCompilerError(
+                    f"conflicting net rules for '{address}' in '{sb_name}'"
+                )
+            seen[address] = action
+            compiled.append(TCPRule(action=action, addr=address))
     return compiled
 
 
@@ -126,7 +162,25 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
         if not isinstance(fs_raw, list):
             raise PolicyCompilerError(f"'fs' in '{name}' must be a list")
         fs_compiled = _compile_fs(fs_raw, name)
-        compiled_boxes[name] = SandboxPolicy(fs=fs_compiled)
+        tcp_raw = cfg.get("net", cfg.get("tcp", []))
+        if not isinstance(tcp_raw, list):
+            raise PolicyCompilerError(f"'net' in '{name}' must be a list")
+        tcp_compiled = _compile_tcp(tcp_raw, name)
+
+        imports_raw = cfg.get("imports", [])
+        if not isinstance(imports_raw, list):
+            raise PolicyCompilerError(f"'imports' in '{name}' must be a list")
+        imports: list[str] = []
+        for module in imports_raw:
+            if not isinstance(module, str):
+                raise PolicyCompilerError(
+                    f"import rules in '{name}' must be strings: {module!r}"
+                )
+            imports.append(module)
+
+        compiled_boxes[name] = SandboxPolicy(
+            fs=fs_compiled, tcp=tcp_compiled, imports=imports
+        )
 
     return CompiledPolicy(sandboxes=compiled_boxes)
 
