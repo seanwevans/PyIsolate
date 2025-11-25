@@ -1,10 +1,12 @@
 """Policy helpers stub."""
 
 import os
+import socket
 import tempfile
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.error import URLError
 
 try:
     import yaml  # type: ignore
@@ -134,10 +136,32 @@ def refresh(path: str, token: str) -> None:
             pass
 
 
-def refresh_remote(url: str, token: str) -> None:
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, socket.timeout):
+        return True
+    if isinstance(exc, URLError) and isinstance(exc.reason, socket.timeout):
+        return True
+    return False
+
+
+def refresh_remote(url: str, token: str, timeout: float | None = None, max_retries: int = 0) -> None:
     """Fetch policy YAML from *url* and apply it."""
-    with urllib.request.urlopen(url) as fh:
-        text = fh.read().decode("utf-8")
+    attempts = max(1, max_retries + 1)
+
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as fh:
+                text = fh.read().decode("utf-8")
+            break
+        except Exception as exc:  # narrow to timeout conditions only
+            if _is_timeout_error(exc):
+                if attempt < attempts - 1:
+                    continue
+                raise TimeoutError(
+                    f"policy download from {url} timed out after {attempts} "
+                    f"attempt(s); timeout={timeout}s"
+                ) from exc
+            raise
 
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
         tmp.write(text)
