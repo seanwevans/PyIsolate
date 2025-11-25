@@ -140,7 +140,7 @@ def test_hot_reload_handles_nested_policy(tmp_path, monkeypatch):
     mgr.hot_reload(str(policy))
 
     assert mgr.policy_maps == nested
-    assert any("\"tcp\"" in cmd[-2] for cmd in calls)
+    assert any('"tcp"' in cmd[-2] for cmd in calls)
 
 
 def test_load_failure_logs_and_raises(monkeypatch, caplog):

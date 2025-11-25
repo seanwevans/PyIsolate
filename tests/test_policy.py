@@ -117,7 +117,7 @@ def test_compile_tcp_accepts_address_list(tmp_path):
         "sandboxes:\n"
         "  sb:\n"
         "    net:\n"
-        "      - connect: [\"127.0.0.1:6379\", \"10.0.0.1:53\"]\n"
+        '      - connect: ["127.0.0.1:6379", "10.0.0.1:53"]\n'
     )
     f = tmp_path / "p.yml"
     f.write_text(doc)
