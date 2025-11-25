@@ -26,6 +26,17 @@ def test_policy_imports_applied_without_explicit_allowed_imports():
         sb.stop()
 
 
+def test_empty_allowed_imports_blocks_all_imports():
+    sb = thread.SandboxThread("empty-imports", allowed_imports=[])
+    sb.start()
+    try:
+        sb.exec("import math")
+        with pytest.raises(errors.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.stop()
+
+
 def test_reset_merges_policy_and_allowed_imports():
     sb = thread.SandboxThread("reset-imports", policy=Policy(imports=["math"]))
     sb.start()

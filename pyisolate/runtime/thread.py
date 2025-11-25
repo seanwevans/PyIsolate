@@ -186,9 +186,14 @@ class SandboxThread(threading.Thread):
         imports: set[str] = set()
         if policy is not None and getattr(policy, "imports", None):
             imports.update(policy.imports)
-        if allowed_imports is not None:
+
+        allowed_imports_provided = allowed_imports is not None
+        if allowed_imports_provided:
             imports.update(allowed_imports)
-        return imports if imports else None
+
+        if imports or allowed_imports_provided:
+            return imports
+        return None
 
     def __init__(
         self,
