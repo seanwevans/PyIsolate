@@ -31,6 +31,8 @@
 git clone https://github.com/seanwevans/pyisolate.git
 cd pyisolate
 python -m pip install -e .[dev]  # install package for development and tooling
+# Optional: enable Kyber-768 hybrid handshakes with the pqcrypto extra
+# python -m pip install -e .[dev,pqcrypto]
 pytest -q          # run the test‑suite
 python examples/echo.py
 ```
