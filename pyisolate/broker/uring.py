@@ -40,8 +40,7 @@ class IOUring:
         uring.io_uring_prep_read(sqe, fd, buf, nbytes, 0)
         self._ring.submit_and_wait(1)
         cqe = self._ring.wait_cqe()
-        res = cqe.res
-        self._ring.cqe_seen(cqe)
+        res = self._complete(cqe)
         return bytes(buf[:res])
 
     async def write(self, fd: int, data: bytes) -> int:
@@ -54,6 +53,16 @@ class IOUring:
         uring.io_uring_prep_write(sqe, fd, data, len(data), 0)
         self._ring.submit_and_wait(1)
         cqe = self._ring.wait_cqe()
+        return self._complete(cqe)
+
+    def _complete(self, cqe) -> int:
+        """Mark *cqe* as seen and raise :class:`OSError` on failures."""
+
         res = cqe.res
+        # Always acknowledge the completion entry before surfacing any errors so
+        # the ring can continue to process subsequent I/O.
         self._ring.cqe_seen(cqe)
+        if res < 0:
+            err = -res
+            raise OSError(err, os.strerror(err))
         return res
