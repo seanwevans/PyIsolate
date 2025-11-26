@@ -3,8 +3,8 @@
 This module exposes the high-level API described in API.md.
 """
 
-from . import bpf
-from .capabilities import ROOT, Capability, RootCapability, Token
+from . import bpf  # noqa: F401
+from .capabilities import ROOT, Capability, RootCapability, Token  # noqa: F401
 
 try:
     from .checkpoint import checkpoint, restore
@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover - optional dependency
         raise ModuleNotFoundError("cryptography is required for checkpoint support")
 
 
-from .editor import PolicyEditor, check_fs, check_tcp, parse_policy
+from .editor import PolicyEditor, check_fs, check_tcp, parse_policy  # noqa: F401
 from .errors import (
     CPUExceeded,
     MemoryExceeded,
@@ -26,7 +26,7 @@ from .errors import (
     SandboxError,
     TimeoutError,
 )
-from .logging import setup_structured_logging
+from .logging import setup_structured_logging  # noqa: F401
 
 try:
     from .migration import migrate
@@ -36,9 +36,9 @@ except Exception:  # pragma: no cover - optional dependency
         raise ModuleNotFoundError("cryptography is required for migration support")
 
 
-from .policy import refresh_remote
-from .sdk import Pipeline, sandbox
-from .subset import OwnershipError, RestrictedExec
+from .policy import refresh_remote  # noqa: F401
+from .sdk import Pipeline, sandbox  # noqa: F401
+from .subset import OwnershipError, RestrictedExec  # noqa: F401
 from .supervisor import (
     Sandbox,
     Supervisor,
@@ -47,7 +47,7 @@ from .supervisor import (
     set_policy_token,
     shutdown,
     spawn,
-)
+)  # noqa: F401
 
 __all__ = [
     "spawn",

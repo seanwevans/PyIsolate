@@ -67,7 +67,7 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
     yaml = _MiniYaml()
 
 
-from .compiler import PolicyCompilerError, compile_policy
+from .compiler import PolicyCompilerError, compile_policy  # noqa: F401
 
 
 @dataclass
