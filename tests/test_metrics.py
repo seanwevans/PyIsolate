@@ -103,3 +103,69 @@ def test_export_sanitizes_sandbox_name():
         assert f'sandbox="{name}"' not in metrics
     finally:
         sb.close()
+
+
+def test_export_latency_bucket_order_and_cumulative_values(monkeypatch):
+    import pyisolate.supervisor as supervisor
+
+    class _FakeSandbox:
+        def __init__(self):
+            # Intentionally shuffled input ordering to ensure exporter order is
+            # dictated by canonical bucket sequence.
+            self.stats = types.SimpleNamespace(
+                cpu_ms=1.0,
+                mem_bytes=64,
+                errors=0,
+                operations=9,
+                cost=0.1,
+                latency={"10": 4, "0.5": 1, "inf": 5, "1": 2, "5": 3},
+                latency_sum=17.5,
+            )
+
+    monkeypatch.setattr(supervisor, "list_active", lambda: {"sandbox-z": _FakeSandbox()})
+    metrics = MetricsExporter().export()
+    bucket_lines = [
+        line
+        for line in metrics.splitlines()
+        if line.startswith('pyisolate_latency_ms_bucket{sandbox="sandbox-z"')
+    ]
+    assert bucket_lines == [
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="0.5"} 1',
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="1"} 3',
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="5"} 6',
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="10"} 10',
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="+Inf"} 15',
+    ]
+
+
+def test_export_latency_missing_buckets_default_to_zero(monkeypatch):
+    import pyisolate.supervisor as supervisor
+
+    class _FakeSandbox:
+        def __init__(self):
+            self.stats = types.SimpleNamespace(
+                cpu_ms=1.0,
+                mem_bytes=64,
+                errors=0,
+                operations=1,
+                cost=0.1,
+                latency={"5": 1},
+                latency_sum=5.0,
+            )
+
+    monkeypatch.setattr(
+        supervisor, "list_active", lambda: {"sandbox-missing": _FakeSandbox()}
+    )
+    metrics = MetricsExporter().export()
+    bucket_lines = [
+        line
+        for line in metrics.splitlines()
+        if line.startswith('pyisolate_latency_ms_bucket{sandbox="sandbox-missing"')
+    ]
+    assert bucket_lines == [
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="0.5"} 0',
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="1"} 0',
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="5"} 1',
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="10"} 1',
+        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="+Inf"} 1',
+    ]

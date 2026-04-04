@@ -6,6 +6,8 @@ them as standard Prometheus ``Gauge`` metrics.  It is intentionally minimal but
 useful for tests and examples.
 """
 
+LATENCY_BUCKET_ORDER = ["0.5", "1", "5", "10", "inf"]
+
 
 def _escape_label(value: str) -> str:
     """Escape a label value according to the Prometheus text exposition format.
@@ -64,8 +66,15 @@ class MetricsExporter:
                 f'pyisolate_cost{{sandbox="{label}"}} {stats.cost:.6f}',
             )
             cumul = 0
-            for le, count in stats.latency.items():
+            for bucket in LATENCY_BUCKET_ORDER:
+                if bucket == "inf":
+                    count = stats.latency.get("inf", stats.latency.get("+Inf", 0))
+                else:
+                    count = stats.latency.get(bucket, 0)
                 cumul += count
+                # Emit Prometheus canonical +Inf label while still accepting
+                # either "inf" (legacy/internal) or "+Inf" in source stats.
+                le = "+Inf" if bucket == "inf" else bucket
                 emit(
                     "pyisolate_latency_ms",
                     "Sandbox operation latency in milliseconds",
