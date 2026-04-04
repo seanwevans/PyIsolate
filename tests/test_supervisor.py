@@ -10,6 +10,30 @@ import pyisolate as iso
 from pyisolate.bpf.manager import BPFManager
 
 
+def test_module_import_is_lazy(monkeypatch):
+    calls: list[str] = []
+
+    def fake_load(self):
+        calls.append("load")
+
+    def fake_watchdog_start(self):
+        calls.append("watchdog")
+
+    monkeypatch.setattr(BPFManager, "load", fake_load)
+    monkeypatch.setattr("pyisolate.watchdog.ResourceWatchdog.start", fake_watchdog_start)
+
+    sup_mod = iso.supervisor
+    sup_mod._supervisor = None
+
+    assert sup_mod._supervisor is None
+    assert calls == []
+
+    sup_mod.list_active()
+
+    assert calls == ["load", "watchdog"]
+    sup_mod._supervisor = None
+
+
 def test_list_active_contains_spawned():
     sb = iso.spawn("active")
     try:
