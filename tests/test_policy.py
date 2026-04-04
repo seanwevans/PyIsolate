@@ -162,6 +162,45 @@ def test_validation_bad_section_type(tmp_path):
         policy.refresh(str(p), token="tok")
 
 
+@pytest.mark.parametrize(
+    ("doc", "msg"),
+    [
+        ("defaults: {}\n", "version"),
+        ("version: 9\n", "unsupported policy version"),
+        ("version: 0.1\nsandboxes: []\n", "sandboxes"),
+    ],
+)
+def test_refresh_validation_fails_before_compile_or_reload(monkeypatch, tmp_path, doc, msg):
+    policy = load_policy(no_yaml=True)
+    import pyisolate as iso
+
+    iso.set_policy_token("tok")
+    path = tmp_path / "bad.yml"
+    path.write_text(doc)
+
+    compile_calls = 0
+    reload_calls = 0
+
+    def fake_compile(_path):
+        nonlocal compile_calls
+        compile_calls += 1
+        raise AssertionError("compile_policy must not run for invalid schema/version")
+
+    def fake_reload(*_args, **_kwargs):
+        nonlocal reload_calls
+        reload_calls += 1
+        raise AssertionError("reload_policy must not run for invalid schema/version")
+
+    monkeypatch.setattr(policy, "compile_policy", fake_compile)
+    monkeypatch.setattr("pyisolate.supervisor.reload_policy", fake_reload)
+
+    with pytest.raises(ValueError, match=msg):
+        policy.refresh(str(path), token="tok")
+
+    assert compile_calls == 0
+    assert reload_calls == 0
+
+
 @pytest.mark.parametrize("name", ["ml.yml", "web_scraper.yml"])
 def test_templates_parse(monkeypatch, name):
     policy = load_policy()

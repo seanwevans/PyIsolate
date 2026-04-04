@@ -110,7 +110,16 @@ def _validate(data: object) -> None:
 def refresh(path: str, token: str) -> None:
     """Parse *path* and atomically update eBPF policy maps."""
 
-    # Compile and validate the YAML policy first
+    # Fail fast if the YAML is malformed/schema-invalid before compiling/reloading.
+    with open(path, "r", encoding="utf-8") as fh:
+        try:
+            data = yaml.safe_load(fh)
+        except Exception as exc:  # broad due to optional parser
+            raise ValueError(f"invalid YAML: {exc}") from None
+
+    _validate(data)
+
+    # Compile only after schema/version validation passes.
     compiled = compile_policy(path)
 
     import json
@@ -119,15 +128,6 @@ def refresh(path: str, token: str) -> None:
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp:
         json.dump(asdict(compiled), tmp)
         json_path = Path(tmp.name)
-
-    # Fail fast if the YAML is malformed before touching BPF maps
-    with open(path, "r", encoding="utf-8") as fh:
-        try:
-            data = yaml.safe_load(fh)
-        except Exception as exc:  # broad due to optional parser
-            raise ValueError(f"invalid YAML: {exc}") from None
-
-    _validate(data)
 
     # Upon successful parse, swap the live maps via the supervisor
     try:
