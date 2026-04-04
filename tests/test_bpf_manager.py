@@ -235,3 +235,45 @@ def test_hot_reload_logs_updates(tmp_path, monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     mgr.hot_reload(str(policy))
     assert any("cpu" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.parametrize("missing_tool", ["clang", "bpftool"])
+def test_load_lenient_missing_executable_keeps_unloaded(
+    monkeypatch, caplog, missing_tool
+):
+    def fake_run(cmd, check, capture_output, text):
+        if cmd[0] == missing_tool or (
+            missing_tool == "bpftool" and cmd[0] == "sh" and "bpftool" in cmd[2]
+        ):
+            raise FileNotFoundError(missing_tool)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    mgr = BPFManager()
+    caplog.set_level(logging.ERROR)
+
+    mgr.load(strict=False)
+
+    assert mgr.loaded is False
+    assert any("command not found while running" in rec.getMessage() for rec in caplog.records)
+    assert any(missing_tool in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.parametrize("missing_tool", ["clang", "bpftool"])
+def test_load_strict_missing_executable_raises_runtime_error(monkeypatch, missing_tool):
+    def fake_run(cmd, check, capture_output, text):
+        if cmd[0] == missing_tool or (
+            missing_tool == "bpftool" and cmd[0] == "sh" and "bpftool" in cmd[2]
+        ):
+            raise FileNotFoundError(missing_tool)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    mgr = BPFManager()
+
+    with pytest.raises(RuntimeError) as exc:
+        mgr.load(strict=True)
+
+    assert "Command not found" in str(exc.value)
+    assert missing_tool in str(exc.value)
+    assert mgr.loaded is False

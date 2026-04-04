@@ -52,10 +52,12 @@ class BPFManager:
             # Missing tools are expected in some environments; log and continue
             # in lenient mode so that sandboxing can still function without BPF
             # enforcement.
-            logger.error("command not found: %s", cmd[0])
+            logger.error("command not found while running %s: %s", cmd, cmd[0])
             if raise_on_error:
-                raise RuntimeError(f"Command not found: {cmd[0]}") from exc
-            return True
+                raise RuntimeError(
+                    f"Command not found: {cmd[0]} (full command: {' '.join(cmd)})"
+                ) from exc
+            return False
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr or ""
             logger.error("command failed %s: %s", cmd, stderr.strip())
