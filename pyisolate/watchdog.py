@@ -7,14 +7,18 @@ breached. Events are dictionaries with the sandbox ``name`` and current
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from . import errors
 
 if TYPE_CHECKING:
     from .supervisor import Supervisor
+
+logger = logging.getLogger(__name__)
 
 
 class ResourceWatchdog(threading.Thread):
@@ -41,6 +45,15 @@ class ResourceWatchdog(threading.Thread):
                 self._rb_iter = None
                 time.sleep(self._interval)
                 continue
+            except Exception:
+                logger.exception("watchdog ring-buffer iterator failed; resetting")
+                self._rb_iter = None
+                time.sleep(self._interval)
+                continue
+
+            if not isinstance(event, Mapping):
+                logger.warning("watchdog ignored non-mapping event payload: %r", event)
+                continue
 
             name = event.get("name")
             cpu_ms = event.get("cpu_ms", 0)
@@ -50,9 +63,19 @@ class ResourceWatchdog(threading.Thread):
             if not sb:
                 continue
             if sb.cpu_quota_ms is not None and cpu_ms >= sb.cpu_quota_ms:
-                sb._outbox.put(errors.CPUExceeded())
-                sb.stop()
+                try:
+                    sb._outbox.put(errors.CPUExceeded())
+                    sb.stop()
+                except Exception:
+                    logger.exception(
+                        "watchdog failed to stop sandbox %r after CPU quota breach", name
+                    )
                 continue
             if sb.mem_quota_bytes is not None and rss >= sb.mem_quota_bytes:
-                sb._outbox.put(errors.MemoryExceeded())
-                sb.stop()
+                try:
+                    sb._outbox.put(errors.MemoryExceeded())
+                    sb.stop()
+                except Exception:
+                    logger.exception(
+                        "watchdog failed to stop sandbox %r after memory quota breach", name
+                    )
