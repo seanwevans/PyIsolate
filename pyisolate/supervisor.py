@@ -245,28 +245,35 @@ class Supervisor:
             self._warm_pool = [t for t in self._warm_pool if t.is_alive()]
 
 
-_supervisor = Supervisor()
+_supervisor: Supervisor | None = None
+
+
+def _get_supervisor() -> Supervisor:
+    global _supervisor
+    if _supervisor is None:
+        _supervisor = Supervisor()
+    return _supervisor
 
 
 # Public API
 def spawn(*args, **kwargs):
-    return _supervisor.spawn(*args, **kwargs)
+    return _get_supervisor().spawn(*args, **kwargs)
 
 
 def list_active() -> Dict[str, Sandbox]:
-    return _supervisor.list_active()
+    return _get_supervisor().list_active()
 
 
 def reload_policy(policy_path: str, token: str | RootCapability = ROOT) -> None:
-    _supervisor.reload_policy(policy_path, token)
+    _get_supervisor().reload_policy(policy_path, token)
 
 
 def set_policy_token(token: str) -> None:
-    _supervisor.set_policy_token(token)
+    _get_supervisor().set_policy_token(token)
 
 
 def shutdown(cap: RootCapability = ROOT) -> None:
     global _supervisor
-    old = _supervisor
-    old.shutdown(cap)
-    _supervisor = Supervisor()
+    supervisor = _get_supervisor()
+    supervisor.shutdown(cap)
+    _supervisor = None

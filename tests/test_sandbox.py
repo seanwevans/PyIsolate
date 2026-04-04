@@ -105,7 +105,7 @@ def test_cpu_quota_exceeded(monkeypatch):
     monkeypatch.setattr(BPFManager, "_run", lambda *a, **k: True)
     iso.shutdown()
 
-    sb = iso.supervisor._supervisor.spawn("tcpu", cpu_ms=10)
+    sb = iso.supervisor._get_supervisor().spawn("tcpu", cpu_ms=10)
     try:
         sb.exec("while True: pass")
         with pytest.raises(iso.CPUExceeded):
@@ -128,7 +128,7 @@ def test_memory_quota_exceeded(monkeypatch):
     monkeypatch.setattr(BPFManager, "_run", lambda *a, **k: True)
     iso.shutdown()
 
-    sb = iso.supervisor._supervisor.spawn("tmem", mem_bytes=1024 * 1024)
+    sb = iso.supervisor._get_supervisor().spawn("tmem", mem_bytes=1024 * 1024)
     try:
         sb.exec("x = ' ' * (2 * 1024 * 1024)")
         with pytest.raises(iso.MemoryExceeded):

@@ -30,7 +30,7 @@ def test_cpu_quota_exceeded_via_watchdog(monkeypatch):
     monkeypatch.setattr(BPFManager, "_run", lambda *a, **k: True)
     iso.shutdown()
 
-    sb = iso.supervisor._supervisor.spawn("wdcpu", cpu_ms=10)
+    sb = iso.supervisor._get_supervisor().spawn("wdcpu", cpu_ms=10)
     try:
         with pytest.raises(iso.CPUExceeded):
             sb.recv(timeout=1)
@@ -52,7 +52,7 @@ def test_memory_quota_exceeded_via_watchdog(monkeypatch):
     monkeypatch.setattr(BPFManager, "_run", lambda *a, **k: True)
     iso.shutdown()
 
-    sb = iso.supervisor._supervisor.spawn("wdmem", mem_bytes=1024 * 1024)
+    sb = iso.supervisor._get_supervisor().spawn("wdmem", mem_bytes=1024 * 1024)
     try:
         sb.exec("x = ' ' * (2 * 1024 * 1024)")
         with pytest.raises(iso.MemoryExceeded):
@@ -62,7 +62,7 @@ def test_memory_quota_exceeded_via_watchdog(monkeypatch):
 
 
 def test_watchdog_thread_stops():
-    sup = iso.supervisor._supervisor
+    sup = iso.supervisor._get_supervisor()
     iso.shutdown()
     assert not sup._watchdog.is_alive()
 
