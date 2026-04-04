@@ -65,3 +65,60 @@ def test_watchdog_thread_stops():
     sup = iso.supervisor._supervisor
     iso.shutdown()
     assert not sup._watchdog.is_alive()
+
+
+class _FakeBPF:
+    def __init__(self, iterator_factory):
+        self._iterator_factory = iterator_factory
+
+    def open_ring_buffer(self):
+        return self._iterator_factory()
+
+
+class _FakeSupervisor:
+    def __init__(self, iterator_factory):
+        self._bpf = _FakeBPF(iterator_factory)
+
+    def get_active_threads(self):
+        return []
+
+
+def test_watchdog_ignores_malformed_event_payloads(caplog):
+    from pyisolate.watchdog import ResourceWatchdog
+
+    def fake_iter():
+        for event in ["bad-event", 123, None]:
+            yield event
+        while True:
+            time.sleep(0.01)
+            yield {"name": "noop", "cpu_ms": 0, "rss_bytes": 0}
+
+    caplog.set_level("WARNING")
+    wd = ResourceWatchdog(_FakeSupervisor(fake_iter), interval=0.01)
+    wd.start()
+    try:
+        time.sleep(0.08)
+        assert wd.is_alive()
+    finally:
+        wd.stop()
+
+    assert "watchdog ignored non-mapping event payload" in caplog.text
+
+
+def test_watchdog_survives_ring_buffer_iterator_exceptions(caplog):
+    from pyisolate.watchdog import ResourceWatchdog
+
+    class BoomIter:
+        def __next__(self):
+            raise RuntimeError("boom")
+
+    caplog.set_level("ERROR")
+    wd = ResourceWatchdog(_FakeSupervisor(BoomIter), interval=0.01)
+    wd.start()
+    try:
+        time.sleep(0.08)
+        assert wd.is_alive()
+    finally:
+        wd.stop()
+
+    assert "watchdog ring-buffer iterator failed; resetting" in caplog.text
