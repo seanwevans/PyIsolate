@@ -11,6 +11,7 @@ import importlib
 import logging
 import re
 import threading
+import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -90,6 +91,7 @@ class Supervisor:
     """Main supervisor owning all sandboxes."""
 
     def __init__(self, warm_pool: int = 0):
+        self.supervisor_id = uuid.uuid4().hex
         self._sandboxes: Dict[str, SandboxThread] = {}
         self._lock = threading.Lock()
         self._alerts = AlertManager()
@@ -105,6 +107,15 @@ class Supervisor:
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
         self._policy_token: str | None = None
+
+    def health_snapshot(self) -> dict[str, int | str]:
+        active = self.get_active_threads()
+        return {
+            "supervisor_id": self.supervisor_id,
+            "healthy": int(self._watchdog.is_alive()),
+            "active_cells": len(active),
+            "warm_pool": len([t for t in self._warm_pool if t.is_alive()]),
+        }
 
     def register_alert_handler(self, callback) -> None:
         """Subscribe to policy violation alerts."""
@@ -169,6 +180,15 @@ class Supervisor:
                 )
                 thread.start()
             self._sandboxes[name] = thread
+        logger.info(
+            "sandbox spawned",
+            extra={
+                "event": "sandbox.spawned",
+                "supervisor_id": self.supervisor_id,
+                "cell_id": thread.cell_id,
+                "reason": "spawn_request",
+            },
+        )
         # Remove references to any terminated sandboxes
         self._cleanup()
         # Reset any temporary overrides of the name validation pattern to avoid
@@ -225,6 +245,14 @@ class Supervisor:
         """
         if cap is not ROOT:
             raise PolicyAuthError("invalid capability for shutdown")
+        logger.info(
+            "supervisor shutdown requested",
+            extra={
+                "event": "supervisor.shutdown",
+                "supervisor_id": self.supervisor_id,
+                "reason": "requested",
+            },
+        )
         self._watchdog.stop()
         with self._lock:
             sandboxes = list(self._sandboxes.values())

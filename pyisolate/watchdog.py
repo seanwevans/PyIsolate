@@ -64,6 +64,12 @@ class ResourceWatchdog(threading.Thread):
                 continue
             if sb.cpu_quota_ms is not None and cpu_ms >= sb.cpu_quota_ms:
                 try:
+                    sb.record_quota_breach(
+                        "cpu",
+                        observed=cpu_ms,
+                        quota=sb.cpu_quota_ms,
+                        source="watchdog",
+                    )
                     sb._outbox.put(errors.CPUExceeded())
                     sb.stop()
                 except Exception:
@@ -73,6 +79,12 @@ class ResourceWatchdog(threading.Thread):
                 continue
             if sb.mem_quota_bytes is not None and rss >= sb.mem_quota_bytes:
                 try:
+                    sb.record_quota_breach(
+                        "memory",
+                        observed=rss,
+                        quota=sb.mem_quota_bytes,
+                        source="watchdog",
+                    )
                     sb._outbox.put(errors.MemoryExceeded())
                     sb.stop()
                 except Exception:

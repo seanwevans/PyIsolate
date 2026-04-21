@@ -18,6 +18,7 @@ import threading
 import time
 import tracemalloc
 import types
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -162,11 +163,21 @@ _STOP = object()
 
 @dataclass
 class Stats:
+    cell_id: str
+    state: str
+    start_reason: str
+    stop_reason: str | None
     cpu_ms: float
     mem_bytes: int
+    mem_hwm_bytes: int
     latency: dict[str, int]
     latency_sum: float
+    scheduler_latency_ms_sum: float
+    scheduler_latency_samples: int
     errors: int
+    policy_denials: int
+    quota_breaches: dict[str, int]
+    kill_latency_ms: float
     operations: int
     cost: float
 
@@ -176,6 +187,12 @@ class _CgroupAttach:
     """Control message to (re)attach the sandbox thread to a cgroup."""
 
     old_path: Path | None
+
+
+@dataclass
+class _Envelope:
+    payload: Any
+    enqueued_at: float
 
 
 class SandboxThread(threading.Thread):
@@ -209,6 +226,7 @@ class SandboxThread(threading.Thread):
     ):
         super().__init__(name=name, daemon=True)
         self._logger = logging.getLogger(f"pyisolate.{name}")
+        self.cell_id = uuid.uuid4().hex
         self._inbox: "queue.Queue[Any]" = queue.Queue()
         self._outbox: "queue.Queue[Any]" = queue.Queue()
         self._stop_event = threading.Event()
@@ -218,6 +236,14 @@ class SandboxThread(threading.Thread):
         self.allowed_imports = self._merge_allowed_imports(policy, allowed_imports)
         self._cpu_time = 0.0
         self._mem_peak = 0
+        self._policy_denials = 0
+        self._quota_breaches = {"cpu": 0, "memory": 0}
+        self._scheduler_latency_sum = 0.0
+        self._scheduler_latency_samples = 0
+        self._kill_latency_ms = 0.0
+        self._state = "bootstrapped"
+        self._start_reason = "spawn"
+        self._stop_reason: str | None = None
         self.numa_node = numa_node
         self._bound_numa_node: int | None = None
         self._mem_base = 0
@@ -258,17 +284,36 @@ class SandboxThread(threading.Thread):
         """Return current CPU and memory usage."""
         return self.stats
 
+    def mark_stop_reason(self, reason: str) -> None:
+        if self._stop_reason is None:
+            self._stop_reason = reason
+
+    def record_quota_breach(
+        self, kind: str, *, observed: float | int, quota: float | int | None, source: str
+    ) -> None:
+        key = "memory" if kind.startswith("mem") else "cpu"
+        self._quota_breaches[key] = self._quota_breaches.get(key, 0) + 1
+        self.mark_stop_reason(f"quota_{key}_{source}")
+        self._logger.warning(
+            "quota breach kind=%s observed=%s quota=%s source=%s cell_id=%s",
+            key,
+            observed,
+            quota,
+            source,
+            self.cell_id,
+        )
+
     def exec(self, src: str) -> None:
         if self._trace_enabled:
             self._syscall_log.append(src)
         self._logger.debug("exec", extra={"code": src})
-        self._inbox.put(src)
+        self._inbox.put(_Envelope(src, time.monotonic()))
 
     def call(self, func: str, *args, timeout: float | None = None, **kwargs) -> Any:
         if self._trace_enabled:
             self._syscall_log.append(f"call {func}")
         self._logger.debug("call", extra={"func": func})
-        self._inbox.put(("call", func, args, kwargs))
+        self._inbox.put(_Envelope(("call", func, args, kwargs), time.monotonic()))
         try:
             result = self.recv(timeout)
         except Exception as exc:  # sandbox raised
@@ -287,9 +332,13 @@ class SandboxThread(threading.Thread):
             raise errors.TimeoutError("no message received")
 
     def stop(self, timeout: float = 0.2) -> None:
+        if self._stop_reason is None:
+            self._stop_reason = "supervisor_stop"
         self._stop_event.set()
         self._inbox.put(_STOP)
+        start = time.monotonic()
         self.join(timeout)
+        self._kill_latency_ms = (time.monotonic() - start) * 1000
 
     def reset(
         self,
@@ -303,6 +352,7 @@ class SandboxThread(threading.Thread):
     ) -> None:
         """Reuse this thread for a new sandbox."""
         old_path = getattr(self, "_cgroup_path", None)
+        self.cell_id = uuid.uuid4().hex
         self.name = name
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
@@ -312,6 +362,14 @@ class SandboxThread(threading.Thread):
         self.allowed_imports = self._merge_allowed_imports(policy, allowed_imports)
         self._cpu_time = 0.0
         self._mem_peak = 0
+        self._policy_denials = 0
+        self._quota_breaches = {"cpu": 0, "memory": 0}
+        self._scheduler_latency_sum = 0.0
+        self._scheduler_latency_samples = 0
+        self._kill_latency_ms = 0.0
+        self._state = "bootstrapped"
+        self._start_reason = "warm_reuse"
+        self._stop_reason = None
         self._ops = 0
         self._errors = 0
         self._latency = {"0.5": 0, "1": 0, "5": 0, "10": 0, "inf": 0}
@@ -331,11 +389,21 @@ class SandboxThread(threading.Thread):
             cpu_ms += (time.monotonic() - self._start_time) * 1000
         cost = cpu_ms * 0.0001 + self._mem_peak * 1e-9
         return Stats(
+            cell_id=self.cell_id,
+            state=self._state,
+            start_reason=self._start_reason,
+            stop_reason=self._stop_reason,
             cpu_ms=cpu_ms,
             mem_bytes=self._mem_peak,
+            mem_hwm_bytes=self._mem_peak,
             latency=dict(self._latency),
             latency_sum=self._latency_sum,
+            scheduler_latency_ms_sum=self._scheduler_latency_sum,
+            scheduler_latency_samples=self._scheduler_latency_samples,
             errors=self._errors,
+            policy_denials=self._policy_denials,
+            quota_breaches=dict(self._quota_breaches),
+            kill_latency_ms=self._kill_latency_ms,
             operations=self._ops,
             cost=cost,
         )
@@ -349,6 +417,7 @@ class SandboxThread(threading.Thread):
 
         try:
             _thread_local.active = True
+            self._state = "running"
 
             if not tracemalloc.is_tracing():
                 tracemalloc.start()
@@ -369,8 +438,14 @@ class SandboxThread(threading.Thread):
             self._bound_numa_node = self.numa_node
 
             while True:
-                payload = self._inbox.get()
+                message = self._inbox.get()
+                payload = message.payload if isinstance(message, _Envelope) else message
+                if isinstance(message, _Envelope):
+                    queue_ms = (time.monotonic() - message.enqueued_at) * 1000
+                    self._scheduler_latency_sum += queue_ms
+                    self._scheduler_latency_samples += 1
                 if payload is _STOP:
+                    self._state = "stopped"
                     break
                 if isinstance(payload, _CgroupAttach):
                     try:
@@ -446,16 +521,38 @@ class SandboxThread(threading.Thread):
                             self.cpu_quota_ms is not None
                             and self._cpu_time > self.cpu_quota_ms
                         ):
+                            self.record_quota_breach(
+                                "cpu",
+                                observed=self._cpu_time,
+                                quota=self.cpu_quota_ms,
+                                source="thread",
+                            )
                             raise errors.CPUExceeded()
                         if (
                             self.mem_quota_bytes is not None
                             and self._mem_peak > self.mem_quota_bytes
                         ):
+                            self.record_quota_breach(
+                                "memory",
+                                observed=self._mem_peak,
+                                quota=self.mem_quota_bytes,
+                                source="thread",
+                            )
                             raise errors.MemoryExceeded()
                     except Exception as exc:  # real impl would sanitize
                         self._errors += 1
                         self._start_time = None
                         if self._on_violation and isinstance(exc, errors.PolicyError):
+                            self._policy_denials += 1
+                            self.mark_stop_reason("policy_denied")
+                            self._logger.warning(
+                                "policy denied",
+                                extra={
+                                    "event": "policy.denied",
+                                    "cell_id": self.cell_id,
+                                    "reason": str(exc),
+                                },
+                            )
                             self._on_violation(self.name, exc)
                         self._outbox.put(exc)
                     finally:

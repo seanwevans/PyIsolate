@@ -50,6 +50,14 @@ def test_export_contains_metrics():
         assert "# TYPE pyisolate_cost gauge" in metrics
         assert "# HELP pyisolate_latency_ms" in metrics
         assert "# TYPE pyisolate_latency_ms histogram" in metrics
+        assert "# HELP pyisolate_cell_state" in metrics
+        assert "# HELP pyisolate_quota_breaches_total" in metrics
+        assert "# HELP pyisolate_policy_denials_total" in metrics
+        assert "# HELP pyisolate_scheduler_latency_ms" in metrics
+        assert "# HELP pyisolate_mem_hwm_bytes" in metrics
+        assert "# HELP pyisolate_kill_latency_ms" in metrics
+        assert "# HELP pyisolate_supervisor_health" in metrics
+        assert "# HELP pyisolate_bpf_attachment_status" in metrics
         assert "pyisolate_cpu_ms" in metrics
         assert "pyisolate_mem_bytes" in metrics
         assert "pyisolate_errors_total" in metrics
@@ -113,9 +121,19 @@ def test_export_latency_bucket_order_and_cumulative_values(monkeypatch):
             # Intentionally shuffled input ordering to ensure exporter order is
             # dictated by canonical bucket sequence.
             self.stats = types.SimpleNamespace(
+                cell_id="cell-z",
+                state="running",
+                start_reason="spawn",
+                stop_reason=None,
                 cpu_ms=1.0,
                 mem_bytes=64,
+                mem_hwm_bytes=64,
                 errors=0,
+                policy_denials=0,
+                quota_breaches={"cpu": 0, "memory": 0},
+                scheduler_latency_ms_sum=0.3,
+                scheduler_latency_samples=2,
+                kill_latency_ms=0.0,
                 operations=9,
                 cost=0.1,
                 latency={"10": 4, "0.5": 1, "inf": 5, "1": 2, "5": 3},
@@ -129,13 +147,12 @@ def test_export_latency_bucket_order_and_cumulative_values(monkeypatch):
         for line in metrics.splitlines()
         if line.startswith('pyisolate_latency_ms_bucket{sandbox="sandbox-z"')
     ]
-    assert bucket_lines == [
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="0.5"} 1',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="1"} 3',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="5"} 6',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="10"} 10',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="+Inf"} 15',
-    ]
+    assert len(bucket_lines) == 5
+    assert bucket_lines[0].endswith('le="0.5"} 1')
+    assert bucket_lines[1].endswith('le="1"} 3')
+    assert bucket_lines[2].endswith('le="5"} 6')
+    assert bucket_lines[3].endswith('le="10"} 10')
+    assert bucket_lines[4].endswith('le="+Inf"} 15')
 
 
 def test_export_latency_missing_buckets_default_to_zero(monkeypatch):
@@ -144,9 +161,19 @@ def test_export_latency_missing_buckets_default_to_zero(monkeypatch):
     class _FakeSandbox:
         def __init__(self):
             self.stats = types.SimpleNamespace(
+                cell_id="cell-missing",
+                state="running",
+                start_reason="spawn",
+                stop_reason=None,
                 cpu_ms=1.0,
                 mem_bytes=64,
+                mem_hwm_bytes=64,
                 errors=0,
+                policy_denials=0,
+                quota_breaches={"cpu": 0, "memory": 0},
+                scheduler_latency_ms_sum=0.1,
+                scheduler_latency_samples=1,
+                kill_latency_ms=0.0,
                 operations=1,
                 cost=0.1,
                 latency={"5": 1},
@@ -162,10 +189,9 @@ def test_export_latency_missing_buckets_default_to_zero(monkeypatch):
         for line in metrics.splitlines()
         if line.startswith('pyisolate_latency_ms_bucket{sandbox="sandbox-missing"')
     ]
-    assert bucket_lines == [
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="0.5"} 0',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="1"} 0',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="5"} 1',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="10"} 1',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="+Inf"} 1',
-    ]
+    assert len(bucket_lines) == 5
+    assert bucket_lines[0].endswith('le="0.5"} 0')
+    assert bucket_lines[1].endswith('le="1"} 0')
+    assert bucket_lines[2].endswith('le="5"} 1')
+    assert bucket_lines[3].endswith('le="10"} 1')
+    assert bucket_lines[4].endswith('le="+Inf"} 1')

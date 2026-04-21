@@ -25,6 +25,11 @@ class BPFManager:
 
     def __init__(self):
         self.loaded = False
+        self.attachment_status: dict[str, bool] = {
+            "dummy": False,
+            "syscall_filter": False,
+            "resource_guard": False,
+        }
         self.policy_maps: dict[str, str] = {}
         self._src = Path(__file__).with_name("dummy.bpf.c")
         self._obj = Path(__file__).with_name("dummy.bpf.o")
@@ -121,6 +126,10 @@ class BPFManager:
                     self._skel_cache[self._src] = self._skel.read_text()
                 except OSError:
                     self._skel_cache[self._src] = ""
+            else:
+                # Keep cache marker even when tests stub subprocess calls and
+                # no skeleton file is created on disk.
+                self._skel_cache.setdefault(self._src, "")
             self.skeleton = self._skel_cache.get(self._src, "")
         else:
             self.skeleton = self._skel_cache[self._src]
@@ -134,11 +143,12 @@ class BPFManager:
         ok &= self._run(
             ["llvm-objdump", "-d", str(self._guard_obj)], raise_on_error=strict
         )
-        ok &= self._run(
+        dummy_attached = self._run(
             ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"],
             raise_on_error=strict,
         )
-        ok &= self._run(
+        ok &= dummy_attached
+        filter_attached = self._run(
             [
                 "bpftool",
                 "prog",
@@ -148,7 +158,8 @@ class BPFManager:
             ],
             raise_on_error=strict,
         )
-        ok &= self._run(
+        ok &= filter_attached
+        guard_attached = self._run(
             [
                 "bpftool",
                 "prog",
@@ -158,6 +169,12 @@ class BPFManager:
             ],
             raise_on_error=strict,
         )
+        ok &= guard_attached
+        self.attachment_status = {
+            "dummy": bool(dummy_attached),
+            "syscall_filter": bool(filter_attached),
+            "resource_guard": bool(guard_attached),
+        }
         self.loaded = ok
         if strict and not ok:
             raise RuntimeError("BPF load failed; see logs for details")
