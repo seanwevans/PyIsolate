@@ -1,4 +1,5 @@
 import logging
+import errno
 import sys
 from pathlib import Path
 
@@ -39,17 +40,43 @@ def test_attach_logs_warning_on_error(tmp_path, monkeypatch, caplog):
     assert "Failed to attach thread" in caplog.text
 
 
-def test_delete_logs_warning_on_error(tmp_path, monkeypatch, caplog):
+def test_delete_does_not_unlink_files(tmp_path, monkeypatch):
+    path = tmp_path / "cg"
+    path.mkdir()
+    (path / "some.file").write_text("x")
+
+    def unlink_should_not_be_called(self, *args, **kwargs):  # pragma: no cover
+        raise AssertionError("unlink() should not be used by delete()")
+
+    monkeypatch.setattr(Path, "unlink", unlink_should_not_be_called)
+    cgroup.delete(path)
+    assert path.exists()
+
+
+def test_delete_logs_busy_warning(tmp_path, monkeypatch, caplog):
     path = tmp_path / "cg"
     path.mkdir()
 
     def failing_rmdir(self):
-        raise OSError("boom")
+        raise OSError(errno.ENOTEMPTY, "Directory not empty")
 
     monkeypatch.setattr(Path, "rmdir", failing_rmdir)
     with caplog.at_level(logging.WARNING, logger=cgroup.__name__):
         cgroup.delete(path)
-    assert "Failed to delete cgroup" in caplog.text
+    assert "busy/non-empty" in caplog.text
+
+
+def test_delete_logs_permission_error(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "cg"
+    path.mkdir()
+
+    def failing_rmdir(self):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "rmdir", failing_rmdir)
+    with caplog.at_level(logging.WARNING, logger=cgroup.__name__):
+        cgroup.delete(path)
+    assert "Permission denied deleting cgroup" in caplog.text
 
 
 
