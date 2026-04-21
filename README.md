@@ -86,6 +86,8 @@ sb.exec("from math import sqrt; post(sqrt(9))")
 print(sb.recv())  # 3.0
 ```
 
+For CPython 3.13 `--disable-gil` deployments, review the extension and package compatibility guidance in [docs/compatibility-matrix.md](docs/compatibility-matrix.md) before expanding `allowed_imports`.
+
 
 ### Policy editor
 
