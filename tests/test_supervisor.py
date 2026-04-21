@@ -207,3 +207,56 @@ def test_tenant_quota_is_durable(tmp_path, monkeypatch):
             sup2.spawn("t2", tenant="acme", tenant_quota=1)
     finally:
         sup2.shutdown()
+
+
+def test_spawn_start_failure_rolls_back_tenant_usage_and_ledger(tmp_path, monkeypatch):
+    ledger = tmp_path / "quota.log"
+    monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
+
+    def fail_start(self):
+        raise RuntimeError("start failed")
+
+    monkeypatch.setattr("pyisolate.runtime.thread.SandboxThread.start", fail_start)
+
+    sup = iso.Supervisor()
+    try:
+        with pytest.raises(RuntimeError, match="start failed"):
+            sup.spawn("tenant-start-fail", tenant="acme", tenant_quota=1)
+        assert sup._tenant_usage.get("acme", 0) == 0
+    finally:
+        sup.shutdown()
+
+    assert ledger.read_text(encoding="utf-8").splitlines() == ["acme,1", "acme,-1"]
+
+    sup_replay = iso.Supervisor()
+    try:
+        assert sup_replay._tenant_usage.get("acme", 0) == 0
+    finally:
+        sup_replay.shutdown()
+
+
+def test_spawn_registry_failure_rolls_back_tenant_usage_and_ledger(tmp_path, monkeypatch):
+    ledger = tmp_path / "quota.log"
+    monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
+
+    def fail_update(*_args, **_kwargs):
+        raise RuntimeError("registry update failed")
+
+    monkeypatch.setattr("pyisolate.recovery.update_sandbox", fail_update)
+
+    sup = iso.Supervisor()
+    try:
+        with pytest.raises(RuntimeError, match="registry update failed"):
+            sup.spawn("tenant-registry-fail", tenant="acme", tenant_quota=1)
+        assert sup._tenant_usage.get("acme", 0) == 0
+        assert "tenant-registry-fail" not in sup._sandboxes
+    finally:
+        sup.shutdown()
+
+    assert ledger.read_text(encoding="utf-8").splitlines() == ["acme,1", "acme,-1"]
+
+    sup_replay = iso.Supervisor()
+    try:
+        assert sup_replay._tenant_usage.get("acme", 0) == 0
+    finally:
+        sup_replay.shutdown()
