@@ -48,6 +48,14 @@ class StopRequest:
 
 
 @dataclass(frozen=True)
+class Envelope:
+    """Queue wrapper carrying scheduling metadata for a request."""
+
+    payload: Any
+    enqueued_at: float
+
+
+@dataclass(frozen=True)
 class ControlRequest:
     """Authenticated control operation crossing plane boundaries."""
 

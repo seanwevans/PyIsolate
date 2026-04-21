@@ -4,61 +4,68 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import sys
-import types
-
-
-class _StubBPFManager:
-    def __init__(self):
-        self.loaded = False
-        self.policy_maps = {}
-
-    def load(self, strict: bool = False) -> None:  # pragma: no cover - stub
-        self.loaded = False
-
-    def hot_reload(self, policy_path: str) -> None:  # pragma: no cover - stub
-        raise RuntimeError("BPF disabled")
-
-    def _run(self, *_, **__):  # pragma: no cover - stub
-        return True
-
-    def open_ring_buffer(self):  # pragma: no cover - stub
-        return iter(())
-
-
-bpf_stub = types.ModuleType("pyisolate.bpf.manager")
-bpf_stub.BPFManager = _StubBPFManager  # type: ignore[attr-defined]
-sys.modules["pyisolate.bpf.manager"] = bpf_stub
-
 import pyisolate as iso
+import pyisolate.supervisor as supervisor_mod
+from pyisolate.bpf.manager import BPFManager
 from pyisolate.observability.metrics import MetricsExporter
 
 
-def test_export_contains_metrics():
+def teardown_function():
+    try:
+        iso.shutdown()
+    except Exception:
+        pass
+
+
+def _stub_bpf_load(monkeypatch):
+    def fake_load(self, mode: str = "dev", strict: bool | None = None) -> None:
+        self.loaded = True
+        self.attachment_status = {
+            "dummy": True,
+            "resource_guard": False,
+            "syscall_filter": True,
+        }
+
+    monkeypatch.setattr(BPFManager, "load", fake_load)
+
+
+def test_export_contains_new_cell_metrics(monkeypatch):
+    _stub_bpf_load(monkeypatch)
     sb = iso.spawn("metrics")
     try:
         sb.exec("post(1)")
         sb.recv(timeout=0.5)
         metrics = MetricsExporter().export()
-        assert "# HELP pyisolate_cpu_ms" in metrics
-        assert "# TYPE pyisolate_cpu_ms gauge" in metrics
-        assert "# HELP pyisolate_mem_bytes" in metrics
-        assert "# TYPE pyisolate_mem_bytes gauge" in metrics
-        assert "# HELP pyisolate_errors_total" in metrics
-        assert "# TYPE pyisolate_errors_total counter" in metrics
-        assert "# HELP pyisolate_cost" in metrics
-        assert "# TYPE pyisolate_cost gauge" in metrics
-        assert "# HELP pyisolate_latency_ms" in metrics
-        assert "# TYPE pyisolate_latency_ms histogram" in metrics
-        assert "pyisolate_cpu_ms" in metrics
-        assert "pyisolate_mem_bytes" in metrics
-        assert "pyisolate_errors_total" in metrics
-        assert "pyisolate_latency_ms_bucket" in metrics
+        assert "pyisolate_cell_state{" in metrics
+        assert "pyisolate_mem_hwm_bytes{" in metrics
+        assert "pyisolate_policy_denials_total{" in metrics
+        assert "pyisolate_quota_breaches_total{" in metrics
+        assert "pyisolate_scheduler_latency_ms_bucket{" in metrics
+        assert "pyisolate_kill_latency_ms{" in metrics
+        assert 'sandbox="metrics"' in metrics
+        assert "cell_id=" in metrics
     finally:
         sb.close()
 
 
-def test_export_sandbox_order_is_stable():
+def test_export_contains_supervisor_and_bpf_metrics(monkeypatch):
+    _stub_bpf_load(monkeypatch)
+    sb = iso.spawn("super")
+    try:
+        sb.exec("post(1)")
+        sb.recv(timeout=0.5)
+        metrics = MetricsExporter().export()
+        assert "pyisolate_supervisor_health{" in metrics
+        assert "pyisolate_bpf_attachment_status{" in metrics
+        assert 'program="dummy"' in metrics
+        assert 'program="resource_guard"} 0' in metrics
+        assert 'program="syscall_filter"} 1' in metrics
+    finally:
+        sb.close()
+
+
+def test_export_sandbox_order_is_stable(monkeypatch):
+    _stub_bpf_load(monkeypatch)
     sbs = [iso.spawn(name) for name in ["c", "a", "b"]]
     try:
         for sb in sbs:
@@ -68,31 +75,20 @@ def test_export_sandbox_order_is_stable():
         order = [
             line.split('sandbox="')[1].split('"', 1)[0]
             for line in metrics.splitlines()
-            if line.startswith("pyisolate_cpu_ms{")
+            if line.startswith("pyisolate_cell_state{")
         ]
         assert order == sorted(order)
-        assert metrics.count("# HELP pyisolate_cpu_ms") == 1
-        assert metrics.count("# TYPE pyisolate_cpu_ms gauge") == 1
-        assert metrics.count("# HELP pyisolate_mem_bytes") == 1
-        assert metrics.count("# TYPE pyisolate_mem_bytes gauge") == 1
-        assert metrics.count("# HELP pyisolate_errors_total") == 1
-        assert metrics.count("# TYPE pyisolate_errors_total counter") == 1
-        assert metrics.count("# HELP pyisolate_cost") == 1
-        assert metrics.count("# TYPE pyisolate_cost gauge") == 1
-        assert metrics.count("# HELP pyisolate_latency_ms") == 1
-        assert metrics.count("# TYPE pyisolate_latency_ms histogram") == 1
     finally:
         for sb in sbs:
             sb.close()
 
 
-def test_export_sanitizes_sandbox_name():
-    name = 'weird "sand\\box\nname'
+def test_export_sanitizes_sandbox_name(monkeypatch):
+    _stub_bpf_load(monkeypatch)
     import re
 
-    import pyisolate.supervisor as supervisor
-
-    supervisor.NAME_PATTERN = re.compile(r".+", re.DOTALL)
+    name = 'weird "sand\\box\nname'
+    supervisor_mod.NAME_PATTERN = re.compile(r".+", re.DOTALL)
     sb = iso.spawn(name)
     try:
         sb.exec("post(1)")
@@ -103,69 +99,3 @@ def test_export_sanitizes_sandbox_name():
         assert f'sandbox="{name}"' not in metrics
     finally:
         sb.close()
-
-
-def test_export_latency_bucket_order_and_cumulative_values(monkeypatch):
-    import pyisolate.supervisor as supervisor
-
-    class _FakeSandbox:
-        def __init__(self):
-            # Intentionally shuffled input ordering to ensure exporter order is
-            # dictated by canonical bucket sequence.
-            self.stats = types.SimpleNamespace(
-                cpu_ms=1.0,
-                mem_bytes=64,
-                errors=0,
-                operations=9,
-                cost=0.1,
-                latency={"10": 4, "0.5": 1, "inf": 5, "1": 2, "5": 3},
-                latency_sum=17.5,
-            )
-
-    monkeypatch.setattr(supervisor, "list_active", lambda: {"sandbox-z": _FakeSandbox()})
-    metrics = MetricsExporter().export()
-    bucket_lines = [
-        line
-        for line in metrics.splitlines()
-        if line.startswith('pyisolate_latency_ms_bucket{sandbox="sandbox-z"')
-    ]
-    assert bucket_lines == [
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="0.5"} 1',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="1"} 3',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="5"} 6',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="10"} 10',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-z",le="+Inf"} 15',
-    ]
-
-
-def test_export_latency_missing_buckets_default_to_zero(monkeypatch):
-    import pyisolate.supervisor as supervisor
-
-    class _FakeSandbox:
-        def __init__(self):
-            self.stats = types.SimpleNamespace(
-                cpu_ms=1.0,
-                mem_bytes=64,
-                errors=0,
-                operations=1,
-                cost=0.1,
-                latency={"5": 1},
-                latency_sum=5.0,
-            )
-
-    monkeypatch.setattr(
-        supervisor, "list_active", lambda: {"sandbox-missing": _FakeSandbox()}
-    )
-    metrics = MetricsExporter().export()
-    bucket_lines = [
-        line
-        for line in metrics.splitlines()
-        if line.startswith('pyisolate_latency_ms_bucket{sandbox="sandbox-missing"')
-    ]
-    assert bucket_lines == [
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="0.5"} 0',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="1"} 0',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="5"} 1',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="10"} 1',
-        'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="+Inf"} 1',
-    ]

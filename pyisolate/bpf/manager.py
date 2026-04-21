@@ -27,6 +27,11 @@ class BPFManager:
     def __init__(self):
         self.loaded = False
         self.policy_maps: dict[str, str] = {}
+        self.attachment_status: dict[str, bool] = {
+            "dummy": False,
+            "syscall_filter": False,
+            "resource_guard": False,
+        }
         self._src = Path(__file__).with_name("dummy.bpf.c")
         self._obj = Path(__file__).with_name("dummy.bpf.o")
         self._skel = Path(__file__).with_name("dummy.skel.h")
@@ -125,6 +130,11 @@ class BPFManager:
         ]
         ok = True
         compile_cmd = dummy_compile
+        self.attachment_status = {
+            "dummy": False,
+            "syscall_filter": False,
+            "resource_guard": False,
+        }
         if self._src not in self._skel_cache:
             ok &= self._run(compile_cmd, raise_on_error=strict_mode)
             skel_cmd = [
@@ -133,11 +143,11 @@ class BPFManager:
                 f"bpftool gen skeleton {self._obj} > {self._skel}",
             ]
             ok &= self._run(skel_cmd, raise_on_error=strict_mode)
-            if ok and self._skel.exists():
+            if ok:
                 try:
                     self._skel_cache[self._src] = self._skel.read_text()
                 except OSError:
-                    self._skel_cache[self._src] = ""
+                    self._skel_cache[self._src] = self.skeleton or ""
             else:
                 # Cache a placeholder so repeated loads in tool-less test
                 # environments do not repeat compile/skeleton steps.
@@ -153,6 +163,7 @@ class BPFManager:
             ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"],
             raise_on_error=strict_mode,
         )
+        self.attachment_status["dummy"] = ok
         if mode != "compatibility":
             ok &= self._run(filter_compile, raise_on_error=strict_mode)
             ok &= self._run(guard_compile, raise_on_error=strict_mode)
@@ -164,7 +175,7 @@ class BPFManager:
                 ["llvm-objdump", "-d", str(self._guard_obj)],
                 raise_on_error=strict_mode,
             )
-            ok &= self._run(
+            filter_loaded = self._run(
                 [
                     "bpftool",
                     "prog",
@@ -174,7 +185,7 @@ class BPFManager:
                 ],
                 raise_on_error=strict_mode,
             )
-            ok &= self._run(
+            guard_loaded = self._run(
                 [
                     "bpftool",
                     "prog",
@@ -184,6 +195,10 @@ class BPFManager:
                 ],
                 raise_on_error=strict_mode,
             )
+            ok &= filter_loaded
+            ok &= guard_loaded
+            self.attachment_status["syscall_filter"] = filter_loaded
+            self.attachment_status["resource_guard"] = guard_loaded
         self.loaded = ok
         if strict_mode and not ok:
             raise RuntimeError("BPF load failed; see logs for details")

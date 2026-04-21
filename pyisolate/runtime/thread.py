@@ -22,6 +22,7 @@ import threading
 import time
 import tracemalloc
 import types
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -238,10 +239,20 @@ class _KillRequest(Exception):
 
 @dataclass
 class Stats:
+    cell_id: str
+    state: str
+    start_reason: str | None
+    stop_reason: str | None
     cpu_ms: float
     mem_bytes: int
+    mem_hwm_bytes: int
     latency: dict[str, int]
     latency_sum: float
+    scheduler_latency_ms: dict[str, int]
+    scheduler_latency_ms_sum: float
+    kill_latency_ms: float
+    policy_denials: int
+    quota_breaches: int
     errors: int
     operations: int
     cost: float
@@ -279,6 +290,7 @@ class SandboxThread(threading.Thread):
     ):
         super().__init__(name=name, daemon=True)
         self._logger = logging.getLogger(f"pyisolate.{name}")
+        self.cell_id = uuid.uuid4().hex
         self._inbox: "queue.Queue[Any]" = queue.Queue()
         self._outbox: "queue.Queue[Any]" = queue.Queue()
         self._stop_event = threading.Event()
@@ -303,6 +315,19 @@ class SandboxThread(threading.Thread):
         self._syscall_log: list[str] = []
         self._capabilities = dict(capabilities or {})
         self._quarantine_reason: str | None = None
+        self._state = "init"
+        self._start_reason: str | None = "spawn"
+        self._stop_reason: str | None = None
+        self._policy_denials = 0
+        self._quota_breaches = 0
+        self._scheduler_latency = {"0.5": 0, "1": 0, "5": 0, "10": 0, "inf": 0}
+        self._scheduler_latency_sum = 0.0
+        self._kill_latency_ms = 0.0
+        self._enqueued_at: dict[int, float] = {}
+
+    def _enqueue(self, payload: Any) -> None:
+        self._enqueued_at[id(payload)] = time.monotonic()
+        self._inbox.put(payload)
 
     def snapshot(self) -> dict:
         """Return serializable configuration state."""
@@ -335,13 +360,13 @@ class SandboxThread(threading.Thread):
         if self._trace_enabled:
             self._syscall_log.append(src)
         self._logger.debug("exec", extra={"code": src})
-        self._inbox.put(ExecRequest(source=src))
+        self._enqueue(ExecRequest(source=src))
 
     def call(self, func: str, *args, timeout: float | None = None, **kwargs) -> Any:
         if self._trace_enabled:
             self._syscall_log.append(f"call {func}")
         self._logger.debug("call", extra={"func": func})
-        self._inbox.put(CallRequest(target=func, args=args, kwargs=kwargs))
+        self._enqueue(CallRequest(target=func, args=args, kwargs=kwargs))
         try:
             result = self.recv(timeout)
         except Exception as exc:  # sandbox raised
@@ -361,14 +386,17 @@ class SandboxThread(threading.Thread):
 
     def cancel(self, timeout: float = 0.2) -> bool:
         """Request cooperative shutdown and wait up to *timeout* seconds."""
+        self.mark_stop_reason("cancel_requested")
         self._stop_event.set()
-        self._inbox.put(StopRequest())
+        self._enqueue(StopRequest())
         self.join(timeout)
         return not self.is_alive()
 
     def kill(self, timeout: float = 0.2) -> bool:
         """Attempt non-cooperative termination for wedged guest code."""
+        started = time.monotonic()
         if self.cancel(timeout=timeout):
+            self._kill_latency_ms = (time.monotonic() - started) * 1000
             return True
         if self.ident is None:
             return not self.is_alive()
@@ -382,7 +410,9 @@ class SandboxThread(threading.Thread):
                 )
             self.join(timeout / 3 if timeout > 0 else 0)
             if not self.is_alive():
+                self._kill_latency_ms = (time.monotonic() - started) * 1000
                 return True
+        self._kill_latency_ms = (time.monotonic() - started) * 1000
         return False
 
     def stop(self, timeout: float = 0.2) -> None:
@@ -407,6 +437,7 @@ class SandboxThread(threading.Thread):
 
     def quarantine(self, reason: str) -> None:
         self._quarantine_reason = reason
+        self.mark_stop_reason(reason)
 
     def reset(
         self,
@@ -439,9 +470,35 @@ class SandboxThread(threading.Thread):
         self._start_time = None
         self._cgroup_path = cgroup_path
         self._capabilities = dict(capabilities or {})
+        self._state = "bootstrapped"
+        self._start_reason = "recycled"
+        self._stop_reason = None
+        self._policy_denials = 0
+        self._quota_breaches = 0
+        self._scheduler_latency = {"0.5": 0, "1": 0, "5": 0, "10": 0, "inf": 0}
+        self._scheduler_latency_sum = 0.0
+        self._kill_latency_ms = 0.0
         # Request the sandbox thread to (re)attach itself to the new cgroup.
         # The attachment must happen from the sandbox thread's context.
-        self._inbox.put(AttachCgroupRequest(old_path=old_path))
+        self._enqueue(AttachCgroupRequest(old_path=old_path))
+
+    def mark_stop_reason(self, reason: str) -> None:
+        if self._stop_reason is None:
+            self._stop_reason = reason
+
+    def record_quota_breach(self, reason: str) -> None:
+        self._quota_breaches += 1
+        self.mark_stop_reason(reason)
+        self._logger.warning(
+            "quota breach recorded",
+            extra={
+                "event": "sandbox.quota_breach",
+                "cell_id": self.cell_id,
+                "sandbox": self.name,
+                "reason": reason,
+                "quota_breaches": self._quota_breaches,
+            },
+        )
 
     @property
     def stats(self):
@@ -450,10 +507,20 @@ class SandboxThread(threading.Thread):
             cpu_ms += (time.monotonic() - self._start_time) * 1000
         cost = cpu_ms * 0.0001 + self._mem_peak * 1e-9
         return Stats(
+            cell_id=self.cell_id,
+            state=self._state,
+            start_reason=self._start_reason,
+            stop_reason=self._stop_reason,
             cpu_ms=cpu_ms,
             mem_bytes=self._mem_peak,
+            mem_hwm_bytes=self._mem_peak,
             latency=dict(self._latency),
             latency_sum=self._latency_sum,
+            scheduler_latency_ms=dict(self._scheduler_latency),
+            scheduler_latency_ms_sum=self._scheduler_latency_sum,
+            kill_latency_ms=self._kill_latency_ms,
+            policy_denials=self._policy_denials,
+            quota_breaches=self._quota_breaches,
             errors=self._errors,
             operations=self._ops,
             cost=cost,
@@ -480,6 +547,7 @@ class SandboxThread(threading.Thread):
             self._mem_base = tracemalloc.get_traced_memory()[0]
             self._cpu_time = 0.0
             self._start_time = None
+            self._state = "running"
 
             local_vars = {"post": self._outbox.put, "caps": self._capabilities}
 
@@ -489,8 +557,33 @@ class SandboxThread(threading.Thread):
 
             while True:
                 payload = self._inbox.get()
+                enqueued_at = self._enqueued_at.pop(id(payload), None)
+                queued_for_ms = (
+                    (time.monotonic() - enqueued_at) * 1000
+                    if enqueued_at is not None
+                    else 0.0
+                )
+                self._scheduler_latency_sum += queued_for_ms
+                if queued_for_ms <= 0.5:
+                    self._scheduler_latency["0.5"] += 1
+                elif queued_for_ms <= 1:
+                    self._scheduler_latency["1"] += 1
+                elif queued_for_ms <= 5:
+                    self._scheduler_latency["5"] += 1
+                elif queued_for_ms <= 10:
+                    self._scheduler_latency["10"] += 1
+                else:
+                    self._scheduler_latency["inf"] += 1
                 if isinstance(payload, StopRequest):
+                    self._state = "completed"
+                    self.mark_stop_reason("stop_requested")
                     break
+                if payload is _STOP:
+                    self._state = "completed"
+                    self.mark_stop_reason("stop_requested")
+                    break
+                if isinstance(payload, str):
+                    payload = ExecRequest(source=payload)
                 if isinstance(payload, AttachCgroupRequest):
                     try:
                         from .. import cgroup
@@ -578,11 +671,32 @@ class SandboxThread(threading.Thread):
                             raise errors.MemoryExceeded()
                     except Exception as exc:  # real impl would sanitize
                         if isinstance(exc, _KillRequest):
+                            self._state = "cancelled"
+                            self.mark_stop_reason("killed")
                             break
                         self._errors += 1
                         self._start_time = None
                         if self._on_violation and isinstance(exc, errors.PolicyError):
+                            self._policy_denials += 1
+                            self.mark_stop_reason("policy_denied")
                             self._on_violation(self.name, exc)
+                            self._logger.warning(
+                                "policy denied",
+                                extra={
+                                    "event": "sandbox.policy_denied",
+                                    "cell_id": self.cell_id,
+                                    "sandbox": self.name,
+                                    "reason": str(exc),
+                                    "policy_denials": self._policy_denials,
+                                },
+                            )
+                        if isinstance(exc, (errors.CPUExceeded, errors.MemoryExceeded)):
+                            reason = (
+                                "cpu_quota_exceeded"
+                                if isinstance(exc, errors.CPUExceeded)
+                                else "memory_quota_exceeded"
+                            )
+                            self.record_quota_breach(reason)
                         self._outbox.put(exc)
                     finally:
                         self._start_time = None
@@ -600,5 +714,7 @@ class SandboxThread(threading.Thread):
                             self._latency["inf"] += 1
             _thread_local.active = False
         finally:
+            if self._state == "running":
+                self._state = "completed"
             if prev_handler is not None:
                 signal.signal(signal.SIGXCPU, prev_handler)

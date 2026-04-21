@@ -11,6 +11,8 @@ import importlib
 import logging
 import re
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -126,6 +128,8 @@ class Supervisor:
         rollout_mode: str = "dev",
     ):
         self._sandboxes: Dict[str, SandboxThread] = {}
+        self.supervisor_id = uuid.uuid4().hex
+        self._started_at = time.monotonic()
         self._lock = threading.Lock()
         self._alerts = AlertManager()
         self._tracer = Tracer()
@@ -145,6 +149,16 @@ class Supervisor:
     def register_alert_handler(self, callback) -> None:
         """Subscribe to policy violation alerts."""
         self._alerts.register(callback)
+
+    def health_snapshot(self) -> dict[str, object]:
+        active = self.get_active_threads()
+        return {
+            "supervisor_id": self.supervisor_id,
+            "uptime_s": max(0.0, time.monotonic() - self._started_at),
+            "active_cells": len(active),
+            "watchdog_alive": self._watchdog.is_alive(),
+            "bpf_loaded": self._bpf.loaded,
+        }
 
     def spawn(
         self,
@@ -208,6 +222,16 @@ class Supervisor:
                 )
                 thread.start()
             self._sandboxes[name] = thread
+        logger.info(
+            "sandbox spawned",
+            extra={
+                "event": "sandbox.spawned",
+                "supervisor_id": self.supervisor_id,
+                "cell_id": thread.cell_id,
+                "sandbox": name,
+                "reason": "spawn",
+            },
+        )
         # Remove references to any terminated sandboxes
         self._cleanup()
         # Reset any temporary overrides of the name validation pattern to avoid
@@ -238,7 +262,7 @@ class Supervisor:
             handle = CapabilityHandle(kind="root", subject=op)
         else:
             if self._policy_token is None or token != self._policy_token:
-                logger.warning("control operation rejected: %s", op)
+                logger.warning("invalid token for control operation: %s", op)
                 raise PolicyAuthError("invalid policy token")
             handle = CapabilityHandle(kind="policy-token", subject=op)
 
@@ -250,7 +274,6 @@ class Supervisor:
 
     def reload_policy(self, policy_path: str, token: str | RootCapability) -> None:
         """Hot-reload policy via an authenticated control-plane request."""
-
         request = self._authorize_control(token, op="policy.reload")
 
         if not Path(policy_path).is_file():
@@ -281,7 +304,17 @@ class Supervisor:
             warm = list(self._warm_pool)
             self._warm_pool.clear()
         for sb in sandboxes + warm:
+            sb.mark_stop_reason("supervisor_shutdown")
             sb.stop()
+        logger.info(
+            "supervisor shutdown",
+            extra={
+                "event": "supervisor.shutdown",
+                "supervisor_id": self.supervisor_id,
+                "cell_id": "",
+                "reason": "shutdown",
+            },
+        )
         self._cleanup()
 
     def quarantine(self, name: str, reason: str) -> None:

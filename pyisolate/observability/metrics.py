@@ -1,30 +1,30 @@
-"""Simple Prometheus text exporter for sandbox metrics.
+"""Prometheus text exporter for supervisor and per-cell metrics."""
 
-The real project would export statistics gathered from eBPF maps.  This
-implementation gathers ``SandboxThread.stats`` from the supervisor and formats
-them as standard Prometheus ``Gauge`` metrics.  It is intentionally minimal but
-useful for tests and examples.
-"""
+from __future__ import annotations
 
 LATENCY_BUCKET_ORDER = ["0.5", "1", "5", "10", "inf"]
+_STATE_TO_NUMERIC = {
+    "init": 0,
+    "bootstrapped": 1,
+    "running": 2,
+    "hot_reload": 3,
+    "quota_exceeded": 4,
+    "cancelled": 5,
+    "completed": 6,
+}
 
 
 def _escape_label(value: str) -> str:
-    """Escape a label value according to the Prometheus text exposition format.
-
-    Prometheus expects backslashes, double quotes and newlines within label
-    values to be escaped.  This helper normalizes sandbox names so that they
-    remain valid even if they contain such characters.
-    """
-
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
 
 class MetricsExporter:
     def export(self) -> str:
-        """Return metrics for all active sandboxes in Prometheus text format."""
+        from ..supervisor import _get_supervisor
 
-        from ..supervisor import list_active
+        supervisor = _get_supervisor()
+        active = supervisor.list_active()
+        health = supervisor.health_snapshot()
 
         lines: list[str] = []
         described: set[str] = set()
@@ -36,62 +36,88 @@ class MetricsExporter:
                 described.add(name)
             lines.append(sample)
 
-        active = list_active()
+        supervisor_label = _escape_label(str(health["supervisor_id"]))
+        emit(
+            "pyisolate_supervisor_health",
+            "Supervisor health status (1=healthy, 0=unhealthy)",
+            "gauge",
+            f'pyisolate_supervisor_health{{supervisor_id="{supervisor_label}"}} '
+            f'{1 if health["watchdog_alive"] else 0}',
+        )
+
+        attachment_status = getattr(supervisor._bpf, "attachment_status", {})
+        for program, status in sorted(attachment_status.items()):
+            emit(
+                "pyisolate_bpf_attachment_status",
+                "BPF attachment status by program (1=attached, 0=not attached)",
+                "gauge",
+                "pyisolate_bpf_attachment_status"
+                f'{{supervisor_id="{supervisor_label}",program="{_escape_label(program)}"}} '
+                f"{1 if status else 0}",
+            )
+
         for name in sorted(active):
             sb = active[name]
             stats = sb.stats
-            label = _escape_label(name)
+            sandbox = _escape_label(name)
+            cell_id = _escape_label(stats.cell_id)
+            labels = f'sandbox="{sandbox}",cell_id="{cell_id}"'
             emit(
-                "pyisolate_cpu_ms",
-                "CPU time consumed by sandbox in milliseconds",
+                "pyisolate_cell_state",
+                "Current cell lifecycle state encoded as numeric value",
                 "gauge",
-                f'pyisolate_cpu_ms{{sandbox="{label}"}} {stats.cpu_ms:.0f}',
+                f"pyisolate_cell_state{{{labels}}} {_STATE_TO_NUMERIC.get(stats.state, -1)}",
             )
             emit(
-                "pyisolate_mem_bytes",
-                "Resident memory used by sandbox in bytes",
+                "pyisolate_mem_hwm_bytes",
+                "Per-cell memory high-water mark in bytes",
                 "gauge",
-                f'pyisolate_mem_bytes{{sandbox="{label}"}} {stats.mem_bytes}',
+                f"pyisolate_mem_hwm_bytes{{{labels}}} {stats.mem_hwm_bytes}",
             )
             emit(
-                "pyisolate_errors_total",
-                "Total errors encountered by sandbox",
+                "pyisolate_policy_denials_total",
+                "Policy denials observed for the cell",
                 "counter",
-                f'pyisolate_errors_total{{sandbox="{label}"}} {stats.errors}',
+                f"pyisolate_policy_denials_total{{{labels}}} {stats.policy_denials}",
             )
             emit(
-                "pyisolate_cost",
-                "Internal cost score for sandbox",
-                "gauge",
-                f'pyisolate_cost{{sandbox="{label}"}} {stats.cost:.6f}',
+                "pyisolate_quota_breaches_total",
+                "Quota breach events observed for the cell",
+                "counter",
+                f"pyisolate_quota_breaches_total{{{labels}}} {stats.quota_breaches}",
             )
             cumul = 0
+            sched = stats.scheduler_latency_ms
             for bucket in LATENCY_BUCKET_ORDER:
                 if bucket == "inf":
-                    count = stats.latency.get("inf", stats.latency.get("+Inf", 0))
+                    count = sched.get("inf", sched.get("+Inf", 0))
                 else:
-                    count = stats.latency.get(bucket, 0)
+                    count = sched.get(bucket, 0)
                 cumul += count
-                # Emit Prometheus canonical +Inf label while still accepting
-                # either "inf" (legacy/internal) or "+Inf" in source stats.
                 le = "+Inf" if bucket == "inf" else bucket
                 emit(
-                    "pyisolate_latency_ms",
-                    "Sandbox operation latency in milliseconds",
+                    "pyisolate_scheduler_latency_ms",
+                    "Scheduler queue latency in milliseconds",
                     "histogram",
-                    f'pyisolate_latency_ms_bucket{{sandbox="{label}",le="{le}"}} {cumul}',
+                    f'pyisolate_scheduler_latency_ms_bucket{{{labels},le="{le}"}} {cumul}',
                 )
             emit(
-                "pyisolate_latency_ms",
-                "Sandbox operation latency in milliseconds",
+                "pyisolate_scheduler_latency_ms",
+                "Scheduler queue latency in milliseconds",
                 "histogram",
-                f'pyisolate_latency_ms_count{{sandbox="{label}"}} {stats.operations}',
+                f"pyisolate_scheduler_latency_ms_count{{{labels}}} {stats.operations}",
             )
             emit(
-                "pyisolate_latency_ms",
-                "Sandbox operation latency in milliseconds",
+                "pyisolate_scheduler_latency_ms",
+                "Scheduler queue latency in milliseconds",
                 "histogram",
-                f'pyisolate_latency_ms_sum{{sandbox="{label}"}} {stats.latency_sum:.3f}',
+                f"pyisolate_scheduler_latency_ms_sum{{{labels}}} {stats.scheduler_latency_ms_sum:.3f}",
+            )
+            emit(
+                "pyisolate_kill_latency_ms",
+                "Latency to terminate an unresponsive cell in milliseconds",
+                "gauge",
+                f"pyisolate_kill_latency_ms{{{labels}}} {stats.kill_latency_ms:.3f}",
             )
 
         return "\n".join(lines) + ("\n" if lines else "")
