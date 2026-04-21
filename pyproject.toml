@@ -29,3 +29,18 @@ dev = [
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true
+
+
+[tool.pytest.ini_options]
+markers = [
+    "adversarial: adversarial input and exploit-style behavior",
+    "runaway_cpu: CPU quota and runaway loop enforcement",
+    "memory_exhaustion: memory pressure and exhaustion scenarios",
+    "import_escape: module import escape attempts",
+    "policy_bypass: file/network policy bypass attempts",
+    "race: high-concurrency race scenarios",
+    "no_gil: free-threaded/no-GIL focused scenarios",
+    "soak: long-running spawn/kill stability coverage",
+    "crash_injection: injected crash/fault-recovery scenarios",
+    "cross_kernel: kernel-version compatibility scenarios",
+]
