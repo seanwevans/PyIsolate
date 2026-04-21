@@ -13,8 +13,11 @@ import io
 import logging
 import os
 import queue
+import random
+import secrets as pysecrets
 import signal
 import socket
+import subprocess
 import threading
 import time
 import tracemalloc
@@ -24,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from .. import errors
+from ..capabilities import ClockCapability
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
 
@@ -42,40 +46,81 @@ def _blocked_open(file, *args, **kwargs):
     if isinstance(file, (str, bytes)):
         path = Path(file).resolve(strict=False)
 
+        fs_cap = getattr(_thread_local, "fs_capability", None)
         allowed = getattr(_thread_local, "fs", None)
-
-        if allowed is not None:
+        if fs_cap is not None:
+            if not fs_cap.allows(path):
+                raise errors.PolicyError("file access blocked")
+        elif allowed is not None:
             if not any(path.is_relative_to(a) for a in allowed):
                 raise errors.PolicyError("file access blocked")
-        elif getattr(_thread_local, "active", False) and path.is_relative_to(
-            Path("/etc")
-        ):
+        elif getattr(_thread_local, "active", False):
             raise errors.PolicyError("file access blocked")
 
     return _ORIG_OPEN(file, *args, **kwargs)
 
 
 def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
+    net_cap = getattr(_thread_local, "net_capability", None)
     allowed = getattr(_thread_local, "tcp", None)
-    if allowed is not None:
-        if isinstance(address, tuple):
-            host, port, *_ = address
-        else:
-            host, port = address
+    if isinstance(address, tuple):
+        host, port, *_ = address
+    else:
+        host, port = address
+    if net_cap is not None:
+        if not net_cap.allows(str(host), int(port)):
+            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    elif allowed is not None:
         if f"{host}:{port}" not in allowed:
             raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    else:
+        raise errors.PolicyError(f"connect blocked: {host}:{port}")
     return _ORIG_SOCKET_CONNECT(self_socket, address)
+
+
+def _blocked_subprocess_run(*args, **kwargs):
+    cap = getattr(_thread_local, "subprocess_capability", None)
+    if cap is None:
+        raise errors.PolicyError("subprocess access blocked")
+    return cap.run(*args, **kwargs)
+
+
+def _guarded_urandom(n: int) -> bytes:
+    cap = getattr(_thread_local, "random_capability", None)
+    if cap is None:
+        raise errors.PolicyError("randomness access blocked")
+    return cap.bytes(n)
 
 
 def _wrap_module(name: str, module):
     base = name.split(".")[0]
     if base == "time":
+        def _require_clock() -> ClockCapability:
+            cap = getattr(_thread_local, "clock_capability", None)
+            return cap
+
+        def _time() -> float:
+            cap = _require_clock()
+            if cap is None:
+                return 0.0
+            return cap.time()
+
+        def _monotonic() -> float:
+            cap = _require_clock()
+            if cap is None:
+                return 0.0
+            return cap.monotonic()
 
         def _perf_counter() -> float:
-            return 0.0
+            cap = _require_clock()
+            if cap is None:
+                return 0.0
+            return cap.monotonic()
 
         mod = types.ModuleType("time", module.__doc__)
         mod.__dict__.update({k: getattr(time, k) for k in dir(time)})
+        mod.time = _time
+        mod.monotonic = _monotonic
         mod.perf_counter = _perf_counter
         return mod
     if base == "io":
@@ -91,6 +136,26 @@ def _wrap_module(name: str, module):
             connect = _guarded_connect
 
         mod.socket = GuardedSocket
+        return mod
+    if base == "subprocess":
+        mod = types.ModuleType("subprocess", module.__doc__)
+        mod.__dict__.update({k: getattr(subprocess, k) for k in dir(subprocess)})
+        mod.run = _blocked_subprocess_run
+        return mod
+    if base == "os":
+        mod = types.ModuleType("os", module.__doc__)
+        mod.__dict__.update({k: getattr(os, k) for k in dir(os)})
+        mod.urandom = _guarded_urandom
+        return mod
+    if base == "secrets":
+        mod = types.ModuleType("secrets", module.__doc__)
+        mod.__dict__.update({k: getattr(pysecrets, k) for k in dir(pysecrets)})
+        mod.token_bytes = _guarded_urandom
+        return mod
+    if base == "random":
+        mod = types.ModuleType("random", module.__doc__)
+        mod.__dict__.update({k: getattr(random, k) for k in dir(random)})
+        mod.randbytes = _guarded_urandom
         return mod
     if base == "pathlib":
         mod = types.ModuleType("pathlib", module.__doc__)
@@ -211,6 +276,7 @@ class SandboxThread(threading.Thread):
         tracer: Optional["Tracer"] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,
+        capabilities: Optional[dict[str, Any]] = None,
     ):
         super().__init__(name=name, daemon=True)
         self._logger = logging.getLogger(f"pyisolate.{name}")
@@ -236,6 +302,7 @@ class SandboxThread(threading.Thread):
         self._cgroup_path = cgroup_path
         self._trace_enabled = False
         self._syscall_log: list[str] = []
+        self._capabilities = dict(capabilities or {})
         self._quarantine_reason: str | None = None
 
     def snapshot(self) -> dict:
@@ -249,6 +316,7 @@ class SandboxThread(threading.Thread):
             if self.allowed_imports is not None
             else None,
             "numa_node": self.numa_node,
+            "capabilities": sorted(self._capabilities),
         }
 
     def enable_tracing(self) -> None:
@@ -350,6 +418,7 @@ class SandboxThread(threading.Thread):
         allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,
+        capabilities: Optional[dict[str, Any]] = None,
     ) -> None:
         """Reuse this thread for a new sandbox."""
         old_path = getattr(self, "_cgroup_path", None)
@@ -370,6 +439,7 @@ class SandboxThread(threading.Thread):
         self._syscall_log = []
         self._start_time = None
         self._cgroup_path = cgroup_path
+        self._capabilities = dict(capabilities or {})
         # Request the sandbox thread to (re)attach itself to the new cgroup.
         # The attachment must happen from the sandbox thread's context.
         self._inbox.put(_CgroupAttach(old_path))
@@ -412,7 +482,7 @@ class SandboxThread(threading.Thread):
             self._cpu_time = 0.0
             self._start_time = None
 
-            local_vars = {"post": self._outbox.put}
+            local_vars = {"post": self._outbox.put, "caps": self._capabilities}
 
             if self.numa_node is not None:
                 bind_current_thread(self.numa_node)
@@ -454,6 +524,13 @@ class SandboxThread(threading.Thread):
                 else:
                     _thread_local.tcp = allowed_tcp
                 _thread_local.fs = allowed_fs
+                _thread_local.fs_capability = self._capabilities.get("filesystem")
+                _thread_local.net_capability = self._capabilities.get("network")
+                _thread_local.subprocess_capability = self._capabilities.get(
+                    "subprocess"
+                )
+                _thread_local.clock_capability = self._capabilities.get("clock")
+                _thread_local.random_capability = self._capabilities.get("random")
 
                 builtins_dict = _SAFE_BUILTINS.copy()
                 builtins_dict["open"] = _blocked_open

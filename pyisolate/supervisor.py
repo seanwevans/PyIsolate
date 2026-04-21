@@ -148,6 +148,7 @@ class Supervisor:
         mem_bytes: Optional[int] = None,
         allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
+        capabilities: Optional[dict[str, object]] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         global NAME_PATTERN
@@ -182,6 +183,7 @@ class Supervisor:
                     allowed_imports=allowed_imports,
                     numa_node=numa_node,
                     cgroup_path=cg_path,
+                    capabilities=capabilities,
                 )
                 thread._on_violation = self._alerts.notify
                 thread._tracer = self._tracer
@@ -196,6 +198,7 @@ class Supervisor:
                     tracer=self._tracer,
                     numa_node=numa_node,
                     cgroup_path=cg_path,
+                    capabilities=capabilities,
                 )
                 thread.start()
             self._sandboxes[name] = thread
