@@ -176,3 +176,34 @@ def test_quarantine_and_recycle():
         assert revived.recv(timeout=0.2) == "ok"
     finally:
         sup.shutdown()
+
+
+def test_sandbox_termination_reason_passthrough():
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("term", output_bytes_max=1)
+        sb.exec("post('xx')")
+        with pytest.raises(iso.OutputExceeded):
+            sb.recv(timeout=0.5)
+        assert sb.termination_reason == "output_exceeded"
+    finally:
+        sup.shutdown()
+
+
+def test_tenant_quota_is_durable(tmp_path, monkeypatch):
+    ledger = tmp_path / "quota.log"
+    monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
+
+    sup1 = iso.Supervisor()
+    try:
+        sb = sup1.spawn("t1", tenant="acme", tenant_quota=1)
+        sb.close()
+    finally:
+        sup1.shutdown()
+
+    sup2 = iso.Supervisor()
+    try:
+        with pytest.raises(iso.TenantQuotaExceeded):
+            sup2.spawn("t2", tenant="acme", tenant_quota=1)
+    finally:
+        sup2.shutdown()
