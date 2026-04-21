@@ -121,26 +121,27 @@ def _guarded_urandom(n: int) -> bytes:
     return cap.bytes(n)
 
 
-def _guarded_thread_start(self_thread: threading.Thread, *args, **kwargs):
-    sandbox = getattr(_thread_local, "sandbox", None)
-    if sandbox is None:
-        return _ORIG_THREAD_START(self_thread, *args, **kwargs)
-    sandbox._check_child_work_quota()
-    original_run = self_thread.run
+def _make_sandbox_thread_class(sandbox: "SandboxThread"):
+    class SandboxedThread(threading.Thread):
+        def start(self, *args, **kwargs):
+            sandbox._check_child_work_quota()
+            original_run = self.run
 
-    def _run_with_accounting(*r_args, **r_kwargs):
-        try:
-            return original_run(*r_args, **r_kwargs)
-        finally:
-            sandbox._child_work = max(0, sandbox._child_work - 1)
+            def _run_with_accounting(*r_args, **r_kwargs):
+                try:
+                    return original_run(*r_args, **r_kwargs)
+                finally:
+                    sandbox._child_work = max(0, sandbox._child_work - 1)
 
-    self_thread.run = _run_with_accounting  # type: ignore[assignment]
-    sandbox._child_work += 1
-    try:
-        return _ORIG_THREAD_START(self_thread, *args, **kwargs)
-    except Exception:
-        sandbox._child_work = max(0, sandbox._child_work - 1)
-        raise
+            self.run = _run_with_accounting  # type: ignore[assignment]
+            sandbox._child_work += 1
+            try:
+                return _ORIG_THREAD_START(self, *args, **kwargs)
+            except Exception:
+                sandbox._child_work = max(0, sandbox._child_work - 1)
+                raise
+
+    return SandboxedThread
 
 
 def _wrap_module(name: str, module):
@@ -207,6 +208,14 @@ def _wrap_module(name: str, module):
         mod = types.ModuleType("random", module.__doc__)
         mod.__dict__.update({k: getattr(random, k) for k in dir(random)})
         mod.randbytes = _guarded_urandom
+        return mod
+    if base == "threading":
+        sandbox = getattr(_thread_local, "sandbox", None)
+        if sandbox is None:
+            return module
+        mod = types.ModuleType("threading", module.__doc__)
+        mod.__dict__.update({k: getattr(threading, k) for k in dir(threading)})
+        mod.Thread = _make_sandbox_thread_class(sandbox)
         return mod
     if base == "pathlib":
         mod = types.ModuleType("pathlib", module.__doc__)
@@ -654,7 +663,6 @@ class SandboxThread(threading.Thread):
                 _thread_local.clock_capability = self._capabilities.get("clock")
                 _thread_local.random_capability = self._capabilities.get("random")
                 _thread_local.sandbox = self
-                threading.Thread.start = _guarded_thread_start
 
                 builtins_dict = _SAFE_BUILTINS.copy()
                 builtins_dict["open"] = _blocked_open
@@ -742,6 +750,5 @@ class SandboxThread(threading.Thread):
                             self._latency["inf"] += 1
             _thread_local.active = False
         finally:
-            threading.Thread.start = _ORIG_THREAD_START
             if prev_handler is not None:
                 signal.signal(signal.SIGXCPU, prev_handler)

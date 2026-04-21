@@ -97,3 +97,69 @@ def test_attach_cgroup_control_message_is_idempotent(monkeypatch):
     # One call comes from thread startup attach, one from unique control message.
     assert calls["attach"] == 2
     assert calls["delete"] == 0
+
+
+def test_sandbox_threading_patch_is_local_and_does_not_touch_global_start():
+    iso.shutdown()
+
+    original_start = threading.Thread.start
+    started_outside = {"count": 0}
+    failures = []
+
+    def outside_worker() -> None:
+        started_outside["count"] += 1
+
+    sb = SandboxThread(name="local-threading", child_work_max=1)
+    sb.start()
+    try:
+        sb.exec(
+            """
+import threading
+
+def worker():
+    pass
+
+t = threading.Thread(target=worker)
+t.start()
+t.join()
+post('sandbox-ok')
+"""
+        )
+        assert sb.recv(timeout=1) == "sandbox-ok"
+
+        # A host thread should still use the original global start implementation.
+        host_thread = threading.Thread(target=outside_worker)
+        host_thread.start()
+        host_thread.join(timeout=1)
+        assert started_outside["count"] == 1
+        assert threading.Thread.start is original_start
+
+        # While sandbox work is running, repeatedly start host threads and
+        # ensure no global behavior bleed happens.
+        sb.exec(
+            """
+import threading
+import time
+
+def worker():
+    time.sleep(0.03)
+
+t = threading.Thread(target=worker)
+t.start()
+t.join()
+post('sandbox-loop')
+"""
+        )
+
+        for _ in range(10):
+            t = threading.Thread(target=outside_worker)
+            t.start()
+            t.join(timeout=1)
+            if threading.Thread.start is not original_start:
+                failures.append("threading.Thread.start changed globally")
+
+        assert sb.recv(timeout=1) == "sandbox-loop"
+        assert not failures
+        assert threading.Thread.start is original_start
+    finally:
+        sb.stop()
