@@ -27,5 +27,29 @@ class CPUExceeded(SandboxError):
     """Raised when a sandbox exceeds its CPU quota."""
 
 
+class WallTimeExceeded(SandboxError):
+    """Raised when a sandbox exceeds its wall-clock quota."""
+
+
+class OpenFilesExceeded(SandboxError):
+    """Raised when a sandbox exceeds the open-files quota."""
+
+
+class NetworkExceeded(SandboxError):
+    """Raised when a sandbox exceeds the network quota."""
+
+
+class OutputExceeded(SandboxError):
+    """Raised when a sandbox exceeds the output-size quota."""
+
+
+class ChildWorkExceeded(SandboxError):
+    """Raised when a sandbox exceeds the concurrent child-work quota."""
+
+
+class TenantQuotaExceeded(SandboxError):
+    """Raised when tenant-level quotas are exceeded."""
+
+
 class OwnershipError(SandboxError):
     """Raised when a moved value is accessed."""

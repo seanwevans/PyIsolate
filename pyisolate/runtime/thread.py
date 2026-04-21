@@ -14,6 +14,7 @@ import os
 import queue
 import signal
 import socket
+import sys
 import threading
 import time
 import tracemalloc
@@ -51,7 +52,29 @@ def _blocked_open(file, *args, **kwargs):
         ):
             raise errors.PolicyError("file access blocked")
 
-    return _ORIG_OPEN(file, *args, **kwargs)
+    quota = getattr(_thread_local, "quota", None)
+    if quota is not None:
+        open_now = quota.get("open_now", 0) + 1
+        max_open = quota.get("max_open")
+        if max_open is not None and open_now > max_open:
+            raise errors.OpenFilesExceeded()
+        quota["open_now"] = open_now
+        quota["open_peak"] = max(open_now, quota.get("open_peak", 0))
+
+    fh = _ORIG_OPEN(file, *args, **kwargs)
+    if quota is None:
+        return fh
+
+    original_close = fh.close
+
+    def _close():
+        try:
+            return original_close()
+        finally:
+            quota["open_now"] = max(0, quota.get("open_now", 1) - 1)
+
+    fh.close = _close
+    return fh
 
 
 def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
@@ -63,6 +86,13 @@ def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
             host, port = address
         if f"{host}:{port}" not in allowed:
             raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    quota = getattr(_thread_local, "quota", None)
+    if quota is not None:
+        network_ops = quota.get("network_ops", 0) + 1
+        max_network_ops = quota.get("max_network_ops")
+        if max_network_ops is not None and network_ops > max_network_ops:
+            raise errors.NetworkExceeded()
+        quota["network_ops"] = network_ops
     return _ORIG_SOCKET_CONNECT(self_socket, address)
 
 
@@ -109,6 +139,23 @@ def _wrap_module(name: str, module):
                 return _blocked_open(self, mode, buffering, encoding, errors, newline)
 
         mod.Path = SandboxedPath
+        return mod
+    if base == "threading":
+        mod = types.ModuleType("threading", module.__doc__)
+        mod.__dict__.update({k: getattr(module, k) for k in dir(module)})
+
+        class GuardedThread(module.Thread):
+            def start(self):
+                quota = getattr(_thread_local, "quota", None)
+                if quota is not None:
+                    children = quota.get("child_work", 0) + 1
+                    max_children = quota.get("max_child_work")
+                    if max_children is not None and children > max_children:
+                        raise errors.ChildWorkExceeded()
+                    quota["child_work"] = children
+                return super().start()
+
+        mod.Thread = GuardedThread
         return mod
     return module
 
@@ -201,6 +248,11 @@ class SandboxThread(threading.Thread):
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        wall_ms: Optional[int] = None,
+        max_open_files: Optional[int] = None,
+        max_network_ops: Optional[int] = None,
+        max_output_bytes: Optional[int] = None,
+        max_child_work: Optional[int] = None,
         allowed_imports: Optional[list[str]] = None,
         on_violation: Optional[Callable[[str, Exception], None]] = None,
         tracer: Optional["Tracer"] = None,
@@ -215,6 +267,11 @@ class SandboxThread(threading.Thread):
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
         self.mem_quota_bytes = mem_bytes
+        self.wall_quota_ms = wall_ms
+        self.max_open_files = max_open_files
+        self.max_network_ops = max_network_ops
+        self.max_output_bytes = max_output_bytes
+        self.max_child_work = max_child_work
         self.allowed_imports = self._merge_allowed_imports(policy, allowed_imports)
         self._cpu_time = 0.0
         self._mem_peak = 0
@@ -231,6 +288,7 @@ class SandboxThread(threading.Thread):
         self._cgroup_path = cgroup_path
         self._trace_enabled = False
         self._syscall_log: list[str] = []
+        self._termination_reason: str | None = None
 
     def snapshot(self) -> dict:
         """Return serializable configuration state."""
@@ -239,6 +297,11 @@ class SandboxThread(threading.Thread):
             "policy": self.policy,
             "cpu_ms": self.cpu_quota_ms,
             "mem_bytes": self.mem_quota_bytes,
+            "wall_ms": self.wall_quota_ms,
+            "max_open_files": self.max_open_files,
+            "max_network_ops": self.max_network_ops,
+            "max_output_bytes": self.max_output_bytes,
+            "max_child_work": self.max_child_work,
             "allowed_imports": sorted(self.allowed_imports)
             if self.allowed_imports is not None
             else None,
@@ -297,6 +360,11 @@ class SandboxThread(threading.Thread):
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        wall_ms: Optional[int] = None,
+        max_open_files: Optional[int] = None,
+        max_network_ops: Optional[int] = None,
+        max_output_bytes: Optional[int] = None,
+        max_child_work: Optional[int] = None,
         allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,
@@ -307,6 +375,11 @@ class SandboxThread(threading.Thread):
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
         self.mem_quota_bytes = mem_bytes
+        self.wall_quota_ms = wall_ms
+        self.max_open_files = max_open_files
+        self.max_network_ops = max_network_ops
+        self.max_output_bytes = max_output_bytes
+        self.max_child_work = max_child_work
         self.numa_node = numa_node
         self._bound_numa_node = None
         self.allowed_imports = self._merge_allowed_imports(policy, allowed_imports)
@@ -319,6 +392,7 @@ class SandboxThread(threading.Thread):
         self._trace_enabled = False
         self._syscall_log = []
         self._start_time = None
+        self._termination_reason = None
         self._cgroup_path = cgroup_path
         # Request the sandbox thread to (re)attach itself to the new cgroup.
         # The attachment must happen from the sandbox thread's context.
@@ -339,6 +413,10 @@ class SandboxThread(threading.Thread):
             operations=self._ops,
             cost=cost,
         )
+
+    @property
+    def termination_reason(self) -> str | None:
+        return self._termination_reason
 
     # internal thread run loop
     def run(self) -> None:
@@ -362,7 +440,17 @@ class SandboxThread(threading.Thread):
             self._cpu_time = 0.0
             self._start_time = None
 
-            local_vars = {"post": self._outbox.put}
+            def _post(obj):
+                quota = getattr(_thread_local, "quota", None)
+                if quota is not None:
+                    output = quota.get("output_bytes", 0) + len(repr(obj).encode())
+                    max_output = quota.get("max_output_bytes")
+                    if max_output is not None and output > max_output:
+                        raise errors.OutputExceeded()
+                    quota["output_bytes"] = output
+                self._outbox.put(obj)
+
+            local_vars = {"post": _post}
 
             if self.numa_node is not None:
                 bind_current_thread(self.numa_node)
@@ -404,6 +492,17 @@ class SandboxThread(threading.Thread):
                 else:
                     _thread_local.tcp = allowed_tcp
                 _thread_local.fs = allowed_fs
+                _thread_local.quota = {
+                    "open_now": 0,
+                    "open_peak": 0,
+                    "network_ops": 0,
+                    "output_bytes": 0,
+                    "child_work": 0,
+                    "max_open": self.max_open_files,
+                    "max_network_ops": self.max_network_ops,
+                    "max_output_bytes": self.max_output_bytes,
+                    "max_child_work": self.max_child_work,
+                }
 
                 builtins_dict = _SAFE_BUILTINS.copy()
                 builtins_dict["open"] = _blocked_open
@@ -416,6 +515,19 @@ class SandboxThread(threading.Thread):
                     try:
                         start_cpu = time.thread_time()
                         self._start_time = time.monotonic()
+                        start_wall = self._start_time
+                        wall_limit = self.wall_quota_ms
+
+                        def _trace(_frame, _event, _arg):
+                            if (
+                                wall_limit is not None
+                                and (time.monotonic() - start_wall) * 1000 > wall_limit
+                            ):
+                                raise errors.WallTimeExceeded()
+                            return _trace
+
+                        if wall_limit is not None:
+                            sys.settrace(_trace)
                         if isinstance(payload, tuple):
                             kind, func, args, kwargs = payload
                             if kind == "call":
@@ -437,6 +549,7 @@ class SandboxThread(threading.Thread):
                                 raise errors.SandboxError("unknown operation")
                         else:
                             exec(payload, local_vars, local_vars)
+                        sys.settrace(None)
                         end_cpu = time.thread_time()
                         self._cpu_time += (end_cpu - start_cpu) * 1000
                         self._start_time = None
@@ -453,10 +566,27 @@ class SandboxThread(threading.Thread):
                         ):
                             raise errors.MemoryExceeded()
                     except Exception as exc:  # real impl would sanitize
+                        sys.settrace(None)
                         self._errors += 1
                         self._start_time = None
                         if self._on_violation and isinstance(exc, errors.PolicyError):
                             self._on_violation(self.name, exc)
+                        if isinstance(
+                            exc,
+                            (
+                                errors.CPUExceeded,
+                                errors.MemoryExceeded,
+                                errors.WallTimeExceeded,
+                                errors.OpenFilesExceeded,
+                                errors.NetworkExceeded,
+                                errors.OutputExceeded,
+                                errors.ChildWorkExceeded,
+                                errors.TenantQuotaExceeded,
+                            ),
+                        ):
+                            self._termination_reason = exc.__class__.__name__
+                            self._outbox.put(exc)
+                            break
                         self._outbox.put(exc)
                     finally:
                         self._start_time = None

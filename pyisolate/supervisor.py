@@ -8,15 +8,18 @@ requires eBPF enforcement which is not implemented here.
 from __future__ import annotations
 
 import importlib
+import json
 import logging
+import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
 from . import cgroup
 from .capabilities import ROOT, RootCapability
-from .errors import PolicyAuthError
+from .errors import PolicyAuthError, TenantQuotaExceeded
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .runtime.thread import SandboxThread
@@ -63,6 +66,10 @@ class Sandbox:
         """Return serializable state for checkpointing."""
         return self._thread.snapshot()
 
+    @property
+    def termination_reason(self) -> str | None:
+        return self._thread.termination_reason
+
     # allow ``with spawn(...) as sb:`` usage
     def __enter__(self) -> "Sandbox":
         return self
@@ -105,6 +112,47 @@ class Supervisor:
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
         self._policy_token: str | None = None
+        self._quota_file = Path(
+            os.environ.get("PYISOLATE_QUOTA_LEDGER", "/tmp/pyisolate-quota-ledger.jsonl")
+        )
+        self._tenant_usage: dict[str, dict[str, int]] = {}
+        self._load_quota_ledger()
+
+    def _load_quota_ledger(self) -> None:
+        if not self._quota_file.exists():
+            return
+        try:
+            with self._quota_file.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    row = json.loads(line)
+                    tenant = row.get("tenant")
+                    if not tenant:
+                        continue
+                    usage = self._tenant_usage.setdefault(tenant, {})
+                    for key, value in row.get("delta", {}).items():
+                        usage[key] = usage.get(key, 0) + int(value)
+        except Exception:
+            logger.exception("failed to replay tenant quota ledger")
+
+    def _record_tenant_usage(self, tenant: str, delta: dict[str, int]) -> None:
+        usage = self._tenant_usage.setdefault(tenant, {})
+        for key, value in delta.items():
+            usage[key] = usage.get(key, 0) + value
+        try:
+            self._quota_file.parent.mkdir(parents=True, exist_ok=True)
+            with self._quota_file.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(
+                        {
+                            "ts": time.time(),
+                            "tenant": tenant,
+                            "delta": delta,
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            logger.exception("failed to persist tenant quota update")
 
     def register_alert_handler(self, callback) -> None:
         """Subscribe to policy violation alerts."""
@@ -116,6 +164,13 @@ class Supervisor:
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        wall_ms: Optional[int] = None,
+        max_open_files: Optional[int] = None,
+        max_network_ops: Optional[int] = None,
+        max_output_bytes: Optional[int] = None,
+        max_child_work: Optional[int] = None,
+        tenant: str | None = None,
+        tenant_quotas: dict[str, int] | None = None,
         allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
     ) -> Sandbox:
@@ -137,6 +192,14 @@ class Supervisor:
             allowed_imports = list(imports)
 
         with self._lock:
+            if tenant and tenant_quotas:
+                current = self._tenant_usage.get(tenant, {})
+                for metric, limit in tenant_quotas.items():
+                    if current.get(metric, 0) >= limit:
+                        raise TenantQuotaExceeded(
+                            f"tenant '{tenant}' exceeded sustained {metric} quota"
+                        )
+
             existing = self._sandboxes.get(name)
             if existing is not None and existing.is_alive():
                 raise RuntimeError(f"sandbox '{name}' already exists")
@@ -149,6 +212,11 @@ class Supervisor:
                     policy=policy,
                     cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
+                    wall_ms=wall_ms,
+                    max_open_files=max_open_files,
+                    max_network_ops=max_network_ops,
+                    max_output_bytes=max_output_bytes,
+                    max_child_work=max_child_work,
                     allowed_imports=allowed_imports,
                     numa_node=numa_node,
                     cgroup_path=cg_path,
@@ -161,6 +229,11 @@ class Supervisor:
                     policy=policy,
                     cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
+                    wall_ms=wall_ms,
+                    max_open_files=max_open_files,
+                    max_network_ops=max_network_ops,
+                    max_output_bytes=max_output_bytes,
+                    max_child_work=max_child_work,
                     allowed_imports=allowed_imports,
                     on_violation=self._alerts.notify,
                     tracer=self._tracer,
@@ -168,6 +241,8 @@ class Supervisor:
                     cgroup_path=cg_path,
                 )
                 thread.start()
+            thread._tenant = tenant
+            thread._tenant_quotas = tenant_quotas
             self._sandboxes[name] = thread
         # Remove references to any terminated sandboxes
         self._cleanup()
@@ -240,6 +315,18 @@ class Supervisor:
             dead = [n for n, t in self._sandboxes.items() if not t.is_alive()]
             for n in dead:
                 thread = self._sandboxes[n]
+                tenant = getattr(thread, "_tenant", None)
+                if tenant:
+                    st = thread.stats
+                    self._record_tenant_usage(
+                        tenant,
+                        {
+                            "cpu_ms": int(st.cpu_ms),
+                            "mem_bytes": int(st.mem_bytes),
+                            "errors": int(st.errors),
+                            "operations": int(st.operations),
+                        },
+                    )
                 cgroup.delete(getattr(thread, "_cgroup_path", None))
                 del self._sandboxes[n]
             self._warm_pool = [t for t in self._warm_pool if t.is_alive()]

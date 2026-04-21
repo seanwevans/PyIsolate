@@ -8,6 +8,7 @@ import pytest
 
 import pyisolate as iso
 from pyisolate.bpf.manager import BPFManager
+from pyisolate.errors import TenantQuotaExceeded
 
 
 def test_module_import_is_lazy(monkeypatch):
@@ -136,4 +137,19 @@ def test_spawn_duplicate_name_rejected():
         assert active["dup"]._thread is sb._thread
     finally:
         sb.close()
+        sup.shutdown()
+
+
+def test_tenant_sustained_quota_blocks_new_spawn(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("tenant-one", tenant="acme", tenant_quotas={"operations": 1})
+        sb.exec("pass")
+        sb.close()
+        sup._cleanup()
+        with pytest.raises(TenantQuotaExceeded):
+            sup.spawn("tenant-two", tenant="acme", tenant_quotas={"operations": 1})
+    finally:
         sup.shutdown()

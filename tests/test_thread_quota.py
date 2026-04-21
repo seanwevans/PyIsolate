@@ -45,3 +45,43 @@ def test_sigxcpu_handler_scoped_to_sandbox_thread():
     sb.run()
     assert sb.recv(timeout=1) is thread._sigxcpu_handler
     assert signal.getsignal(signal.SIGXCPU) is orig
+
+
+def test_output_quota_is_hard_ceiling():
+    sb = thread.SandboxThread("output", max_output_bytes=8)
+    sb.start()
+    try:
+        sb.exec("post('this is bigger than 8')")
+        with pytest.raises(errors.OutputExceeded):
+            sb.recv(timeout=1)
+        assert sb.termination_reason == "OutputExceeded"
+    finally:
+        sb.stop()
+
+
+def test_wall_time_quota_is_hard_ceiling():
+    sb = thread.SandboxThread("wall", wall_ms=5)
+    sb.start()
+    try:
+        sb.exec("while True:\n    pass")
+        with pytest.raises(errors.WallTimeExceeded):
+            sb.recv(timeout=1)
+        assert sb.termination_reason == "WallTimeExceeded"
+    finally:
+        sb.stop()
+
+
+def test_open_files_quota_is_hard_ceiling(tmp_path):
+    path = tmp_path / "data.txt"
+    path.write_text("x")
+    sb = thread.SandboxThread("fds", max_open_files=1)
+    sb.start()
+    try:
+        sb.exec(
+            f"f1 = open({str(path)!r}); f2 = open({str(path)!r}); post('never reached')"
+        )
+        with pytest.raises(errors.OpenFilesExceeded):
+            sb.recv(timeout=1)
+        assert sb.termination_reason == "OpenFilesExceeded"
+    finally:
+        sb.stop()
