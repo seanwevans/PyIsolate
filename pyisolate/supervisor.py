@@ -67,21 +67,12 @@ class Sandbox:
         self._supervisor.quarantine(self._thread.name, reason)
 
     def reset(self) -> None:
+        reset_config = self._thread.reset_config()
+        # Keep this reset path aligned with Supervisor.spawn warm-pool reuse.
         self._thread.reset(
             self._thread.name,
-            policy=self._thread.policy,
-            cpu_ms=self._thread.cpu_quota_ms,
-            mem_bytes=self._thread.mem_quota_bytes,
-            wall_time_ms=self._thread.wall_time_ms,
-            open_files_max=self._thread.open_files_max,
-            network_ops_max=self._thread.network_ops_max,
-            output_bytes_max=self._thread.output_bytes_max,
-            child_work_max=self._thread.child_work_max,
-            allowed_imports=sorted(self._thread.allowed_imports)
-            if self._thread.allowed_imports is not None
-            else None,
-            numa_node=self._thread.numa_node,
             cgroup_path=self._thread._cgroup_path,
+            **reset_config,
         )
 
     def recycle(self) -> "Sandbox":
@@ -254,42 +245,36 @@ class Supervisor:
             try:
                 cg_path = cgroup.create(name, cpu_ms, mem_bytes)
                 temp_dir = recovery.allocate_temp_dir(name)
+                reset_config = {
+                    "policy": policy,
+                    "cpu_ms": cpu_ms,
+                    "mem_bytes": mem_bytes,
+                    "wall_time_ms": wall_time_ms,
+                    "open_files_max": open_files_max,
+                    "network_ops_max": network_ops_max,
+                    "output_bytes_max": output_bytes_max,
+                    "child_work_max": child_work_max,
+                    "allowed_imports": allowed_imports,
+                    "numa_node": numa_node,
+                    "capabilities": capabilities,
+                }
                 if self._warm_pool:
                     thread = self._warm_pool.pop()
+                    # Intentionally mirrors Sandbox.reset by sharing reset_config.
                     thread.reset(
                         name,
-                        policy=policy,
-                        cpu_ms=cpu_ms,
-                        mem_bytes=mem_bytes,
-                        wall_time_ms=wall_time_ms,
-                        open_files_max=open_files_max,
-                        network_ops_max=network_ops_max,
-                        output_bytes_max=output_bytes_max,
-                        child_work_max=child_work_max,
-                        allowed_imports=allowed_imports,
-                        numa_node=numa_node,
                         cgroup_path=cg_path,
-                        capabilities=capabilities,
+                        **reset_config,
                     )
                     thread._on_violation = self._alerts.notify
                     thread._tracer = self._tracer
                 else:
                     thread = SandboxThread(
                         name=name,
-                        policy=policy,
-                        cpu_ms=cpu_ms,
-                        mem_bytes=mem_bytes,
-                        wall_time_ms=wall_time_ms,
-                        open_files_max=open_files_max,
-                        network_ops_max=network_ops_max,
-                        output_bytes_max=output_bytes_max,
-                        child_work_max=child_work_max,
-                        allowed_imports=allowed_imports,
+                        **reset_config,
                         on_violation=self._alerts.notify,
                         tracer=self._tracer,
-                        numa_node=numa_node,
                         cgroup_path=cg_path,
-                        capabilities=capabilities,
                     )
                     thread.start()
                 thread._temp_dir = temp_dir
