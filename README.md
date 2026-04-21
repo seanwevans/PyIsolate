@@ -38,6 +38,23 @@ python examples/echo.py
 pyisolate-doctor  # capture provenance + kernel/hardening feature report
 ```
 
+### CI test matrix
+
+The CI pipeline runs a security/stability matrix beyond unit tests:
+
+* adversarial and import-escape scenarios
+* runaway CPU and memory exhaustion limits
+* file/network policy-bypass attempts
+* high-concurrency race checks (including free-threaded `3.13t`)
+* soak runs with thousands of spawn/kill cycles on nightly schedule
+* crash-injection recovery checks
+* cross-kernel smoke runs on Ubuntu 22.04 and 24.04
+
+Run the hardening suite locally with:
+
+```bash
+pytest -q tests/test_matrix_hardening.py
+```
 
 ### Packaging and reproducibility
 

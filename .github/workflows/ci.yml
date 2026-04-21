@@ -3,80 +3,138 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [ main ]
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * *"
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
       - name: Install dependencies
         run: |
           python -m pip install -e .[dev]
           pre-commit install-hooks
       - name: Run isort
-        id: run_isort
-        continue-on-error: true
         run: pre-commit run isort --all-files
-      - name: Commit import sorting changes
-        if: steps.run_isort.outcome == 'failure'
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            git pull
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -am "chore: sort imports"
-            BRANCH=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
-            git push origin HEAD:$BRANCH
-          fi
       - name: Run black
-        id: run_black
-        continue-on-error: true
         run: pre-commit run black --all-files
-      - name: Commit formatting changes
-        if: steps.run_black.outcome == 'failure'
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            git pull
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -am "chore: format with black"
-            BRANCH=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
-            git push origin HEAD:$BRANCH
-          fi
       - name: Run pylint
-        id: pylint
-        run: |
-          set +e
-          pre-commit run pylint --all-files | tee pylint.log
-          ret=${PIPESTATUS[0]}
-          grep -oE 'rated at [0-9.]+' pylint.log | awk '{print $3}' > score.txt
-          echo "score=$(cat score.txt)" >> "$GITHUB_OUTPUT"
-          exit 0      
+        run: pre-commit run pylint --all-files
       - name: Run flake8
         run: pre-commit run flake8 --all-files
 
-  tests:
-    runs-on: ubuntu-latest
+  tests-unit:
+    name: unit / py${{ matrix.python-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: |
-          python -m pip install -e .[dev]
-          pre-commit install-hooks
+        run: python -m pip install -e .[dev]
+      - name: Run baseline test suite
+        run: pytest -q -m "not soak"
+
+  tests-hardening:
+    name: hardening / ${{ matrix.slice }} / py${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+        slice:
+          - adversarial
+          - runaway_cpu
+          - memory_exhaustion
+          - import_escape
+          - policy_bypass
+          - race
+          - crash_injection
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
+      - name: Run hardening slice
+        run: pytest -q tests/test_matrix_hardening.py -m "${{ matrix.slice }}"
+
+  tests-no-gil:
+    name: no-gil race / py3.13t
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13t"
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
+      - name: Run race tests under free-threaded build
+        run: pytest -q tests/test_matrix_hardening.py -m "race and no_gil"
+
+  tests-soak:
+    name: soak / 2k spawn-kill cycles
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
+      - name: Run soak test
+        env:
+          PYISOLATE_SOAK_CYCLES: "2000"
+        run: pytest -q tests/test_matrix_hardening.py -m soak
+
+  tests-cross-kernel:
+    name: kernel smoke / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Kernel info
+        run: uname -a
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
+      - name: Run kernel-facing tests
+        run: pytest -q tests/test_bpf_manager.py tests/test_watchdog.py tests/test_cgroup.py
+
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
       - name: Run tests with coverage
-        run: coverage run -m pytest
+        run: coverage run -m pytest -m "not soak"
       - name: Generate coverage report
-        run: |
-          coverage xml -o coverage.xml          
+        run: coverage xml -o coverage.xml
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: |
-            coverage.xml
+          path: coverage.xml
