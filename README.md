@@ -35,7 +35,15 @@ python -m pip install -e .[dev]  # install package for development and tooling
 # python -m pip install -e .[dev,pqcrypto]
 pytest -q          # run the test‑suite
 python examples/echo.py
+pyisolate-doctor  # capture provenance + kernel/hardening feature report
 ```
+
+
+### Packaging and reproducibility
+
+PyIsolate includes a `pyisolate-doctor` command for installation diagnostics and
+release provenance tracking (Python build hash, no-GIL status, kernel features,
+and deterministic-wheel policy flags). See [docs/packaging-reproducibility.md](docs/packaging-reproducibility.md).
 
 ### Structured logging
 
