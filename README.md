@@ -35,7 +35,32 @@ python -m pip install -e .[dev]  # install package for development and tooling
 # python -m pip install -e .[dev,pqcrypto]
 pytest -q          # run the test‑suite
 python examples/echo.py
+pyisolate-doctor  # capture provenance + kernel/hardening feature report
 ```
+
+### CI test matrix
+
+The CI pipeline runs a security/stability matrix beyond unit tests:
+
+* adversarial and import-escape scenarios
+* runaway CPU and memory exhaustion limits
+* file/network policy-bypass attempts
+* high-concurrency race checks (including free-threaded `3.13t`)
+* soak runs with thousands of spawn/kill cycles on nightly schedule
+* crash-injection recovery checks
+* cross-kernel smoke runs on Ubuntu 22.04 and 24.04
+
+Run the hardening suite locally with:
+
+```bash
+pytest -q tests/test_matrix_hardening.py
+```
+
+### Packaging and reproducibility
+
+PyIsolate includes a `pyisolate-doctor` command for installation diagnostics and
+release provenance tracking (Python build hash, no-GIL status, kernel features,
+and deterministic-wheel policy flags). See [docs/packaging-reproducibility.md](docs/packaging-reproducibility.md).
 
 ### Structured logging
 
@@ -46,6 +71,27 @@ from pyisolate.logging import setup_structured_logging
 
 setup_structured_logging()
 ```
+
+### Rollout modes
+
+Choose a supervisor rollout profile based on where you are deploying:
+
+```python
+import pyisolate as iso
+
+# default: fast local iteration
+dev = iso.Supervisor(rollout_mode="dev")
+
+# strict production posture (fail closed if BPF toolchain/load fails)
+hardened = iso.Supervisor(rollout_mode="hardened")
+
+# looser ecosystem validation (baseline BPF only, skips stricter filters)
+compat = iso.Supervisor(rollout_mode="compatibility")
+```
+
+* `dev`: lightweight, low-friction development mode.
+* `hardened`: real enforcement; any eBPF compile/load failure raises.
+* `compatibility`: reduced enforcement to maximize third-party compatibility.
 
 ### Hello World
 
@@ -86,6 +132,22 @@ sb.exec("from math import sqrt; post(sqrt(9))")
 print(sb.recv())  # 3.0
 ```
 
+For CPython 3.13 `--disable-gil` deployments, review the extension and package compatibility guidance in [docs/compatibility-matrix.md](docs/compatibility-matrix.md) before expanding `allowed_imports`.
+
+
+### Host conformance suite
+
+Run the host conformance suite to measure whether the current machine satisfies
+PyIsolate guarantees (Python build, kernel capabilities, BPF readiness, cgroup
+behavior, policy enforcement, and timeout/kill behavior):
+
+```bash
+python -m pyisolate.conformance
+python -m pyisolate.conformance --json
+```
+
+Use this in CI or admission checks to replace hand-wavy security claims with a
+repeatable pass/fail report.
 
 ### Policy editor
 
@@ -134,11 +196,21 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
 
 ---
 
+## Canonical execution model
+
+A cell is intentionally limited to seven operations: execute source, call a dotted function, import allowed modules, post messages, stream logs, emit metrics, and request broker actions.
+
+See [docs/execution-model.md](docs/execution-model.md). We keep this model small on purpose: production systems are safer when they refuse features outside a single contract.
+
+---
+
 ## Security model
 
-* **Process boundary** – single process; sub‑interpreter ≙ trust boundary.
+* **Execution cell** – each guest runs in its own sub‑interpreter, hosted by one sandbox thread.
+* **Security boundary (authoritative)** – enforcement lives at the kernel/process layer (cgroups + eBPF/LSM), not at the Python sub‑interpreter boundary.
 * **Kernel boundary** – every sandbox thread enters its own cgroup; CO‑RE eBPF programs enforce FS/net/syscall policy.
 * **Broker** – sole path to privileged syscalls, sealed with AEAD and strict replay protection.
+* **Fallback hardening** – for stronger blast‑radius isolation (or kernels with reduced features), run one sandbox per process and place that process inside a container or microVM.
 * **Verified eBPF modules** – bytecode is disassembled with `llvm-objdump -d` and must succeed `bpftool prog load` so the kernel verifier approves it before any sandbox runs.
 
 See **SECURITY.md** for a full threat‑model walkthrough.

@@ -6,9 +6,16 @@ import pyisolate as psi
 
 ## 1  Spawning & lifecycle
 
+### Canonical cell execution model
+
+PyIsolate supports exactly seven cell operations: `exec source`, `call dotted function`, `import module`, `post messages`, `stream logs`, `emit metrics`, and `request broker actions`.
+
+The canonical contract lives in [docs/execution-model.md](docs/execution-model.md). Keep this surface small; production systems win by refusing extra features.
+
 | Call | Description |
 |------|-------------|
 | `psi.spawn(name:str, policy:str|dict=None, allowed_imports:list[str]|None=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle with module whitelist. |
+| `psi.Supervisor(warm_pool:int=0, rollout_mode:str="dev")` | Build an isolated supervisor with explicit rollout posture (`dev`, `hardened`, `compatibility`). |
 | `sandbox.close(timeout=0.2)` | Graceful stop → SIGTERM; force‑kill after timeout. |
 | `with psi.spawn(name, policy)` | Context manager form; sandbox closes on exit. |
 | `psi.list_active() → Dict[str, Sandbox]` | Introspection. |

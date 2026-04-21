@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +68,30 @@ class BPFManager:
                 ) from exc
         return False
 
-    def load(self, *, strict: bool = False) -> None:
+    def load(
+        self,
+        *,
+        strict: bool | None = None,
+        mode: Literal["dev", "hardened", "compatibility"] = "dev",
+    ) -> None:
         """Compile and attempt to attach the eBPF programs.
 
-        When ``strict`` is ``True`` any failure will raise a ``RuntimeError``
-        with details from the underlying command.  In the default lenient mode
-        missing tooling simply results in ``loaded`` remaining ``False`` while
-        errors are logged.
+        Rollout modes:
+
+        * ``dev``: low-friction mode; tolerate missing tooling and keep running.
+        * ``hardened``: strict mode; any failure raises a ``RuntimeError``.
+        * ``compatibility``: looser enforcement for ecosystem testing. Loads the
+          baseline program but skips stricter filter/guard attachments.
+
+        The legacy ``strict`` argument is still honored. When provided it
+        overrides ``mode``.
         """
+        if strict is not None:
+            mode = "hardened" if strict else "dev"
+        elif mode not in {"dev", "hardened", "compatibility"}:
+            raise ValueError(f"invalid rollout mode: {mode}")
+
+        strict_mode = mode == "hardened"
 
         dummy_compile = [
             "clang",
@@ -109,57 +126,66 @@ class BPFManager:
         ok = True
         compile_cmd = dummy_compile
         if self._src not in self._skel_cache:
-            ok &= self._run(compile_cmd, raise_on_error=strict)
+            ok &= self._run(compile_cmd, raise_on_error=strict_mode)
             skel_cmd = [
                 "sh",
                 "-c",
                 f"bpftool gen skeleton {self._obj} > {self._skel}",
             ]
-            ok &= self._run(skel_cmd, raise_on_error=strict)
+            ok &= self._run(skel_cmd, raise_on_error=strict_mode)
             if ok and self._skel.exists():
                 try:
                     self._skel_cache[self._src] = self._skel.read_text()
                 except OSError:
                     self._skel_cache[self._src] = ""
+            else:
+                # Cache a placeholder so repeated loads in tool-less test
+                # environments do not repeat compile/skeleton steps.
+                self._skel_cache.setdefault(self._src, "")
             self.skeleton = self._skel_cache.get(self._src, "")
         else:
             self.skeleton = self._skel_cache[self._src]
 
-        ok &= self._run(filter_compile, raise_on_error=strict)
-        ok &= self._run(guard_compile, raise_on_error=strict)
-        ok &= self._run(["llvm-objdump", "-d", str(self._obj)], raise_on_error=strict)
         ok &= self._run(
-            ["llvm-objdump", "-d", str(self._filter_obj)], raise_on_error=strict
-        )
-        ok &= self._run(
-            ["llvm-objdump", "-d", str(self._guard_obj)], raise_on_error=strict
+            ["llvm-objdump", "-d", str(self._obj)], raise_on_error=strict_mode
         )
         ok &= self._run(
             ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"],
-            raise_on_error=strict,
+            raise_on_error=strict_mode,
         )
-        ok &= self._run(
-            [
-                "bpftool",
-                "prog",
-                "load",
-                str(self._filter_obj),
-                "/sys/fs/bpf/syscall_filter",
-            ],
-            raise_on_error=strict,
-        )
-        ok &= self._run(
-            [
-                "bpftool",
-                "prog",
-                "load",
-                str(self._guard_obj),
-                "/sys/fs/bpf/resource_guard",
-            ],
-            raise_on_error=strict,
-        )
+        if mode != "compatibility":
+            ok &= self._run(filter_compile, raise_on_error=strict_mode)
+            ok &= self._run(guard_compile, raise_on_error=strict_mode)
+            ok &= self._run(
+                ["llvm-objdump", "-d", str(self._filter_obj)],
+                raise_on_error=strict_mode,
+            )
+            ok &= self._run(
+                ["llvm-objdump", "-d", str(self._guard_obj)],
+                raise_on_error=strict_mode,
+            )
+            ok &= self._run(
+                [
+                    "bpftool",
+                    "prog",
+                    "load",
+                    str(self._filter_obj),
+                    "/sys/fs/bpf/syscall_filter",
+                ],
+                raise_on_error=strict_mode,
+            )
+            ok &= self._run(
+                [
+                    "bpftool",
+                    "prog",
+                    "load",
+                    str(self._guard_obj),
+                    "/sys/fs/bpf/resource_guard",
+                ],
+                raise_on_error=strict_mode,
+            )
         self.loaded = ok
-        if strict and not ok:
+        if strict_mode and not ok:
             raise RuntimeError("BPF load failed; see logs for details")
 
     def hot_reload(self, policy_path: str) -> None:

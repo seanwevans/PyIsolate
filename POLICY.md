@@ -1,39 +1,38 @@
-# POLICY.md — Sandbox Policy DSL (v 0.1)
+# POLICY.md — Sandbox Policy DSL (v1.0)
 
 > *Declarative, hot‑reloadable, kernel‑enforced.*
 
 ## 1  File layout
 ```yaml
-version: 0.1
+version: 1.0
 defaults:
-  fs: readonly
-  net: none
-  mem: 64MiB
-  cpu: 200ms
+  imports: [math]
 sandboxes:
-  myguest:
+  base:
     fs:
       - allow: "/srv/data/**/*.csv"
       - deny:  "/srv/data/private/**"
     net:
       - connect: ["127.0.0.1:6379"]     # redis
-    mem: 128MiB
-    cpu: 500ms
+  myguest:
+    extends: base
+    imports: [json]
 ```
 
-* **Top‑level `defaults`** apply to every sandbox unless overridden.  
+* **Top‑level `defaults`** apply to every sandbox.  
+* **`extends` inheritance** lets sandboxes layer on top of base policies.  
 * **`sandboxes.*`** keys are user‑visible names (become `cgroup`s).
 
 ## 2  Fields
 
 | Key | Type / unit | Semantics (enforced by eBPF) |
 |-----|-------------|------------------------------|
-| `fs`  | `readonly` \| `none` \| list of rules | Path globbing via **BPF‑LSM** `file_open` hook. Wildcards use `**/`. |
-| `net` | `none` \| list of rules | Hooked at `cgroup/connect*`; tuples `["ip:port", "tcp/udp"]`. |
-| `mem` | `<N>MiB` | Hard cap, checked in allocator; guest killed on exceed. |
-| `cpu` | `<N>ms` per 100 ms window | Perf‑event counter → SIGXCPU to offending thread. |
+| `fs`  | list of rules | Path globbing via **BPF‑LSM** `file_open` hook. |
+| `net` | list of rules | Hooked at `cgroup/connect*`. |
+| `imports` | list of module names | Import allow-list merged into sandbox runtime builtins. |
+| `extends` | sandbox name | Inherit parent sandbox rules before applying local rules. |
 
-*Rule precedence:* first match wins. Unmatched operation → **deny**.
+*Rule precedence:* inherited/default rules are evaluated before child rules. Unmatched operation → **deny**.
 
 ## 3  Live reloading
 `pyisolate.policy.refresh(path, token)` calls `bpftool map update` for every
@@ -43,6 +42,12 @@ The file is parsed and validated first.  Only after a successful parse
 does `BPFManager.hot_reload()` install a new set of maps.  The previous
 policy remains active until the swap completes so running sandboxes
 never observe partial state.
+
+Use `pyisolate.policy.refresh(path, token, dry_run=True)` to compile and validate
+without touching live policy maps. Compiled output includes:
+- `schema_version` (normalized, versioned policy schema)
+- `semantics_version` (stable evaluation semantics across releases)
+- `deny_log` (explicit deny entries for auditing and rollout checks)
 
 ## 4  Fallback YAML parser
 If the optional **PyYAML** dependency is missing, `pyisolate.policy` falls

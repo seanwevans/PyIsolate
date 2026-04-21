@@ -44,7 +44,10 @@ class SandboxPolicy:
 
 @dataclass
 class CompiledPolicy:
+    schema_version: str
+    semantics_version: int
     sandboxes: Dict[str, SandboxPolicy]
+    deny_log: List[str]
 
 
 def _simple_parse(text: str) -> Dict[str, Any]:
@@ -130,6 +133,88 @@ def _compile_tcp(rules: List[dict], sb_name: str) -> List[TCPRule]:
     return compiled
 
 
+def _norm_rule_list(value: object, *, field_name: str, sb_name: str) -> list:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise PolicyCompilerError(f"'{field_name}' in '{sb_name}' must be a list")
+    return value
+
+
+def _merge_unique(parent: list, child: list) -> list:
+    merged = list(parent)
+    for item in child:
+        if item not in merged:
+            merged.append(item)
+    return merged
+
+
+def _resolve_sandbox(
+    name: str, raw_boxes: dict[str, dict[str, Any]], defaults: dict[str, Any]
+) -> dict[str, Any]:
+    resolved: dict[str, dict[str, Any]] = {}
+    resolving: set[str] = set()
+
+    def _resolve(current: str) -> dict[str, Any]:
+        if current in resolved:
+            return resolved[current]
+        if current in resolving:
+            raise PolicyCompilerError(f"cyclic inheritance detected at '{current}'")
+        if current not in raw_boxes:
+            raise PolicyCompilerError(f"unknown parent sandbox '{current}'")
+        resolving.add(current)
+        cfg = raw_boxes[current]
+        parent_name = cfg.get("extends")
+        parent_cfg: dict[str, Any] = {}
+        if parent_name is not None:
+            if not isinstance(parent_name, str):
+                raise PolicyCompilerError(f"'extends' in '{current}' must be a string")
+            parent_cfg = _resolve(parent_name)
+        base = {
+            "fs": _merge_unique(
+                _norm_rule_list(defaults.get("fs", []), field_name="fs", sb_name=current),
+                _norm_rule_list(parent_cfg.get("fs", []), field_name="fs", sb_name=current),
+            ),
+            "net": _merge_unique(
+                _norm_rule_list(
+                    defaults.get("net", defaults.get("tcp", [])),
+                    field_name="net",
+                    sb_name=current,
+                ),
+                _norm_rule_list(
+                    parent_cfg.get("net", parent_cfg.get("tcp", [])),
+                    field_name="net",
+                    sb_name=current,
+                ),
+            ),
+            "imports": _merge_unique(
+                _norm_rule_list(
+                    defaults.get("imports", []), field_name="imports", sb_name=current
+                ),
+                _norm_rule_list(
+                    parent_cfg.get("imports", []), field_name="imports", sb_name=current
+                ),
+            ),
+        }
+        child_fs = _norm_rule_list(cfg.get("fs", []), field_name="fs", sb_name=current)
+        child_net = _norm_rule_list(
+            cfg.get("net", cfg.get("tcp", [])), field_name="net", sb_name=current
+        )
+        child_imports = _norm_rule_list(
+            cfg.get("imports", []), field_name="imports", sb_name=current
+        )
+        out = {
+            "fs": _merge_unique(base["fs"], child_fs),
+            "net": _merge_unique(base["net"], child_net),
+            "imports": _merge_unique(base["imports"], child_imports),
+        }
+        resolving.remove(current)
+        resolved[current] = out
+        return out
+
+    return _resolve(name)
+
+
 def compile_policy(path: str | Path) -> CompiledPolicy:
     """Parse and validate a policy YAML file."""
 
@@ -147,6 +232,16 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
     if not isinstance(data, dict):
         raise PolicyCompilerError("policy document must be a mapping")
 
+    schema_version = str(data.get("version", "0.1"))
+    if schema_version not in {"0.1", "1", "1.0"}:
+        raise PolicyCompilerError(f"unsupported policy version: {schema_version}")
+
+    defaults = data.get("defaults", {})
+    if defaults is None:
+        defaults = {}
+    if not isinstance(defaults, dict):
+        raise PolicyCompilerError("'defaults' must be a mapping")
+
     sandboxes = data.get("sandboxes")
     if sandboxes is None:
         sb_cfg = {k: v for k, v in data.items() if k != "version"}
@@ -155,21 +250,17 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
         raise PolicyCompilerError("missing or invalid 'sandboxes' section")
 
     compiled_boxes: Dict[str, SandboxPolicy] = {}
+    deny_log: list[str] = []
     for name, cfg in sandboxes.items():
         if not isinstance(cfg, dict):
             raise PolicyCompilerError(f"sandbox '{name}' must be a mapping")
-        fs_raw = cfg.get("fs", [])
-        if not isinstance(fs_raw, list):
-            raise PolicyCompilerError(f"'fs' in '{name}' must be a list")
+        resolved_cfg = _resolve_sandbox(name, sandboxes, defaults)
+        fs_raw = resolved_cfg.get("fs", [])
         fs_compiled = _compile_fs(fs_raw, name)
-        tcp_raw = cfg.get("net", cfg.get("tcp", []))
-        if not isinstance(tcp_raw, list):
-            raise PolicyCompilerError(f"'net' in '{name}' must be a list")
+        tcp_raw = resolved_cfg.get("net", [])
         tcp_compiled = _compile_tcp(tcp_raw, name)
 
-        imports_raw = cfg.get("imports", [])
-        if not isinstance(imports_raw, list):
-            raise PolicyCompilerError(f"'imports' in '{name}' must be a list")
+        imports_raw = resolved_cfg.get("imports", [])
         imports: list[str] = []
         for module in imports_raw:
             if not isinstance(module, str):
@@ -181,8 +272,19 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
         compiled_boxes[name] = SandboxPolicy(
             fs=fs_compiled, tcp=tcp_compiled, imports=imports
         )
+        deny_log.extend(
+            [f"sandbox={name} fs={r.path}" for r in fs_compiled if r.action == "deny"]
+        )
+        deny_log.extend(
+            [f"sandbox={name} net={r.addr}" for r in tcp_compiled if r.action == "deny"]
+        )
 
-    return CompiledPolicy(sandboxes=compiled_boxes)
+    return CompiledPolicy(
+        schema_version="1.0" if schema_version == "1" else schema_version,
+        semantics_version=1,
+        sandboxes=compiled_boxes,
+        deny_log=sorted(set(deny_log)),
+    )
 
 
 __all__ = ["CompiledPolicy", "compile_policy", "PolicyCompilerError"]
