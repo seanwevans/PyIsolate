@@ -1,5 +1,8 @@
 # SECURITY.md
 
+
+> Canonical boundary definition: see `docs/threat-model.md` (frozen baseline).
+
 ## 1  Threat model
 
 | Actor                                           | Capabilities                                                         | Goal                                                 |
