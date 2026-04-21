@@ -58,7 +58,8 @@ def _make_blob(payload, key):
     nonce = b"\x00" * 12
     data = json.dumps(payload).encode("utf-8")
     aead = ChaCha20Poly1305(key)
-    return nonce + aead.encrypt(nonce, data, b"")
+    sealed = nonce + aead.encrypt(nonce, data, b"")
+    return b"PYISOCP1" + len(sealed).to_bytes(4, "big") + sealed
 
 
 def test_checkpoint_roundtrip():
@@ -165,3 +166,23 @@ def test_checkpoint_closes_on_serialization_failure():
     with pytest.raises(ValueError, match="JSON serializable"):
         iso.checkpoint(sandbox, key)
     assert sandbox.closed
+
+
+
+def test_restore_rejects_truncated_envelope_before_decrypt(monkeypatch):
+    key = os.urandom(32)
+
+    from cryptography.hazmat.primitives.ciphers import aead as aead_mod
+
+    def fail_decrypt(self, nonce, data, aad):
+        raise AssertionError("decrypt should not be called")
+
+    monkeypatch.setattr(aead_mod.ChaCha20Poly1305, "decrypt", fail_decrypt)
+    with pytest.raises(ValueError, match="envelope length"):
+        iso.restore(b"PYISOCP1" + (99).to_bytes(4, "big") + b"x", key)
+
+
+def test_restore_rejects_bad_envelope_magic():
+    key = os.urandom(32)
+    with pytest.raises(ValueError, match="envelope"):
+        iso.restore(b"NOTMAGIC" + (0).to_bytes(4, "big"), key)

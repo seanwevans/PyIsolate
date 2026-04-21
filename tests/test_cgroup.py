@@ -50,3 +50,18 @@ def test_delete_logs_warning_on_error(tmp_path, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger=cgroup.__name__):
         cgroup.delete(path)
     assert "Failed to delete cgroup" in caplog.text
+
+
+
+def test_list_children_and_cleanup_orphans(tmp_path, monkeypatch):
+    monkeypatch.setattr(cgroup, "_BASE", tmp_path / "pyisolate")
+    keep = cgroup.create("keep")
+    orphan = cgroup.create("orphan")
+
+    children = {p.name for p in cgroup.list_children()}
+    assert {"keep", "orphan"}.issubset(children)
+
+    removed = cgroup.cleanup_orphans({"keep"})
+    assert {p.name for p in removed} == {"orphan"}
+    assert keep is not None and keep.exists()
+    assert orphan is not None and not orphan.exists()

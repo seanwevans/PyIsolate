@@ -11,7 +11,8 @@ sys.path.insert(0, str(ROOT))
 
 import pyisolate as iso
 from pyisolate import errors, policy
-from pyisolate.runtime.thread import _sigxcpu_handler
+from pyisolate.runtime.protocol import AttachCgroupRequest
+from pyisolate.runtime.thread import SandboxThread, _sigxcpu_handler
 
 
 def test_sigxcpu_handler_raises():
@@ -66,3 +67,33 @@ def test_other_thread_unaffected_by_sandbox():
         assert sb.recv(timeout=1) == "done"
     finally:
         sb.close()
+
+
+
+def test_attach_cgroup_control_message_is_idempotent(monkeypatch):
+    from pyisolate import cgroup
+
+    calls = {"attach": 0, "delete": 0}
+
+    def fake_attach(path):
+        calls["attach"] += 1
+
+    def fake_delete(path):
+        calls["delete"] += 1
+
+    monkeypatch.setattr(cgroup, "attach_current", fake_attach)
+    monkeypatch.setattr(cgroup, "delete", fake_delete)
+
+    t = SandboxThread(name="msg-idem")
+    t.start()
+    try:
+        t._inbox.put(AttachCgroupRequest(old_path=None, msg_id=7))
+        t._inbox.put(AttachCgroupRequest(old_path=None, msg_id=7))
+        t.exec("post('ok')")
+        assert t.recv(timeout=0.5) == "ok"
+    finally:
+        t.stop()
+
+    # One call comes from thread startup attach, one from unique control message.
+    assert calls["attach"] == 2
+    assert calls["delete"] == 0
