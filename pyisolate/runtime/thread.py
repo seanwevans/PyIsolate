@@ -175,6 +175,7 @@ class Stats:
 class _CgroupAttach:
     """Control message to (re)attach the sandbox thread to a cgroup."""
 
+    msg_id: int
     old_path: Path | None
 
 
@@ -206,6 +207,7 @@ class SandboxThread(threading.Thread):
         tracer: Optional["Tracer"] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,
+        temp_dir: Path | None = None,
     ):
         super().__init__(name=name, daemon=True)
         self._logger = logging.getLogger(f"pyisolate.{name}")
@@ -231,6 +233,9 @@ class SandboxThread(threading.Thread):
         self._cgroup_path = cgroup_path
         self._trace_enabled = False
         self._syscall_log: list[str] = []
+        self._temp_dir = temp_dir
+        self._control_seq = 0
+        self._seen_control_ids: set[int] = set()
 
     def snapshot(self) -> dict:
         """Return serializable configuration state."""
@@ -300,6 +305,7 @@ class SandboxThread(threading.Thread):
         allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,
+        temp_dir: Path | None = None,
     ) -> None:
         """Reuse this thread for a new sandbox."""
         old_path = getattr(self, "_cgroup_path", None)
@@ -320,9 +326,12 @@ class SandboxThread(threading.Thread):
         self._syscall_log = []
         self._start_time = None
         self._cgroup_path = cgroup_path
+        self._temp_dir = temp_dir
+        self._seen_control_ids.clear()
+        self._control_seq += 1
         # Request the sandbox thread to (re)attach itself to the new cgroup.
         # The attachment must happen from the sandbox thread's context.
-        self._inbox.put(_CgroupAttach(old_path))
+        self._inbox.put(_CgroupAttach(self._control_seq, old_path))
 
     @property
     def stats(self):
@@ -373,6 +382,9 @@ class SandboxThread(threading.Thread):
                 if payload is _STOP:
                     break
                 if isinstance(payload, _CgroupAttach):
+                    if payload.msg_id in self._seen_control_ids:
+                        continue
+                    self._seen_control_ids.add(payload.msg_id)
                     try:
                         from .. import cgroup
 

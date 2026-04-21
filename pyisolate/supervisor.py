@@ -19,6 +19,13 @@ from .capabilities import ROOT, RootCapability
 from .errors import PolicyAuthError
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
+from .recovery import (
+    allocate_temp_dir,
+    delete_temp_dir,
+    drop_sandbox,
+    recover,
+    update_sandbox,
+)
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
 
@@ -105,6 +112,7 @@ class Supervisor:
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
         self._policy_token: str | None = None
+        recover(active_names=set())
 
     def register_alert_handler(self, callback) -> None:
         """Subscribe to policy violation alerts."""
@@ -142,6 +150,7 @@ class Supervisor:
                 raise RuntimeError(f"sandbox '{name}' already exists")
 
             cg_path = cgroup.create(name, cpu_ms, mem_bytes)
+            temp_dir = allocate_temp_dir(name)
             if self._warm_pool:
                 thread = self._warm_pool.pop()
                 thread.reset(
@@ -152,6 +161,7 @@ class Supervisor:
                     allowed_imports=allowed_imports,
                     numa_node=numa_node,
                     cgroup_path=cg_path,
+                    temp_dir=temp_dir,
                 )
                 thread._on_violation = self._alerts.notify
                 thread._tracer = self._tracer
@@ -166,9 +176,18 @@ class Supervisor:
                     tracer=self._tracer,
                     numa_node=numa_node,
                     cgroup_path=cg_path,
+                    temp_dir=temp_dir,
                 )
                 thread.start()
             self._sandboxes[name] = thread
+            update_sandbox(
+                name,
+                {
+                    "name": name,
+                    "cgroup_path": str(cg_path) if cg_path is not None else None,
+                    "temp_dir": str(temp_dir),
+                },
+            )
         # Remove references to any terminated sandboxes
         self._cleanup()
         # Reset any temporary overrides of the name validation pattern to avoid
@@ -241,6 +260,8 @@ class Supervisor:
             for n in dead:
                 thread = self._sandboxes[n]
                 cgroup.delete(getattr(thread, "_cgroup_path", None))
+                delete_temp_dir(getattr(thread, "_temp_dir", None))
+                drop_sandbox(n)
                 del self._sandboxes[n]
             self._warm_pool = [t for t in self._warm_pool if t.is_alive()]
 

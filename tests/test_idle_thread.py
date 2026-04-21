@@ -14,7 +14,7 @@ import pytest
 
 import pyisolate as iso
 from pyisolate import cgroup as _cgroup
-from pyisolate.runtime.thread import SandboxThread
+from pyisolate.runtime.thread import SandboxThread, _CgroupAttach
 
 # Ensure the cgroup helper writes to the temporary directory even if already imported.
 _cgroup._BASE = Path(os.environ["PYISOLATE_CGROUP_ROOT"]) / "pyisolate"
@@ -80,5 +80,32 @@ def test_thread_metrics_reset_on_reuse():
         assert t.recv(timeout=0.5) == "b"
         assert t.get_syscall_log() == []
         assert t.stats.operations == 1
+    finally:
+        t.stop()
+
+
+def test_control_messages_are_idempotent(monkeypatch):
+    calls = {"delete": 0}
+    first = Path("/tmp/pyisolate-first")
+    second = Path("/tmp/pyisolate-second")
+
+    def fake_attach(path):
+        return None
+
+    def fake_delete(path):
+        calls["delete"] += 1
+
+    monkeypatch.setattr(_cgroup, "attach_current", fake_attach)
+    monkeypatch.setattr(_cgroup, "delete", fake_delete)
+
+    t = SandboxThread(name="idempotent", cgroup_path=first)
+    t.start()
+    try:
+        t._cgroup_path = second
+        t._inbox.put(_CgroupAttach(42, first))
+        t._inbox.put(_CgroupAttach(42, first))
+        t.exec("post('ok')")
+        assert t.recv(timeout=0.5) == "ok"
+        assert calls["delete"] == 1
     finally:
         t.stop()

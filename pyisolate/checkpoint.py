@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from .supervisor import Sandbox, spawn
+
+_MAGIC = b"PYISOCP1"
+_LEN_STRUCT = struct.Struct("!I")
 
 
 def checkpoint(sandbox: Sandbox, key: bytes) -> bytes:
@@ -29,7 +33,8 @@ def checkpoint(sandbox: Sandbox, key: bytes) -> bytes:
             raise ValueError("sandbox state is not JSON serializable") from exc
         aead = ChaCha20Poly1305(key)
         nonce = os.urandom(12)
-        blob = nonce + aead.encrypt(nonce, data, b"")
+        encrypted = nonce + aead.encrypt(nonce, data, b"")
+        blob = _MAGIC + _LEN_STRUCT.pack(len(encrypted)) + encrypted
         return blob
     finally:
         sandbox.close()
@@ -39,7 +44,17 @@ def restore(blob: bytes, key: bytes) -> Sandbox:
     """Decrypt *blob* with *key* and spawn a new sandbox."""
     if len(key) != 32:
         raise ValueError("key must be 32 bytes")
-    nonce, ct = blob[:12], blob[12:]
+    if len(blob) < len(_MAGIC) + _LEN_STRUCT.size:
+        raise ValueError("invalid checkpoint envelope")
+    if blob[: len(_MAGIC)] != _MAGIC:
+        raise ValueError("invalid checkpoint envelope")
+    expected_len = _LEN_STRUCT.unpack_from(blob, len(_MAGIC))[0]
+    encrypted = blob[len(_MAGIC) + _LEN_STRUCT.size :]
+    if expected_len != len(encrypted):
+        raise ValueError("invalid checkpoint envelope")
+    if len(encrypted) < 12:
+        raise ValueError("invalid checkpoint data")
+    nonce, ct = encrypted[:12], encrypted[12:]
     aead = ChaCha20Poly1305(key)
     data = aead.decrypt(nonce, ct, b"")
     try:

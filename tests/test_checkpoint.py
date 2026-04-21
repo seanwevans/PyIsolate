@@ -6,6 +6,7 @@ sys.path.insert(0, str(ROOT))
 
 import json
 import os
+import struct
 import types
 
 bpf_manager = types.ModuleType("pyisolate.bpf.manager")
@@ -58,7 +59,8 @@ def _make_blob(payload, key):
     nonce = b"\x00" * 12
     data = json.dumps(payload).encode("utf-8")
     aead = ChaCha20Poly1305(key)
-    return nonce + aead.encrypt(nonce, data, b"")
+    enc = nonce + aead.encrypt(nonce, data, b"")
+    return b"PYISOCP1" + struct.pack("!I", len(enc)) + enc
 
 
 def test_checkpoint_roundtrip():
@@ -165,3 +167,11 @@ def test_checkpoint_closes_on_serialization_failure():
     with pytest.raises(ValueError, match="JSON serializable"):
         iso.checkpoint(sandbox, key)
     assert sandbox.closed
+
+
+def test_restore_rejects_partial_checkpoint_envelope():
+    key = os.urandom(32)
+    sb = iso.spawn("cp")
+    blob = iso.checkpoint(sb, key)
+    with pytest.raises(ValueError, match="checkpoint envelope"):
+        iso.restore(blob[:-1], key)

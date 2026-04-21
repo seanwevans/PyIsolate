@@ -8,7 +8,7 @@ import os
 import threading
 from pathlib import Path
 
-__all__ = ["create", "attach_current", "delete"]
+__all__ = ["create", "attach_current", "delete", "list_children", "cleanup_orphans"]
 
 # Allow tests to override the base cgroup directory
 _BASE = Path(os.environ.get("PYISOLATE_CGROUP_ROOT", "/sys/fs/cgroup")) / "pyisolate"
@@ -75,3 +75,18 @@ def delete(path: Path | None) -> None:
         path.rmdir()
     except (OSError, PermissionError, FileNotFoundError) as exc:
         log.warning("Failed to delete cgroup %s: %s", path, exc)
+
+
+def list_children() -> list[Path]:
+    """Return cgroup children managed by PyIsolate."""
+    try:
+        return [p for p in _BASE.iterdir() if p.is_dir()]
+    except (OSError, PermissionError, FileNotFoundError):
+        return []
+
+
+def cleanup_orphans(active_names: set[str]) -> None:
+    """Delete cgroups that are not currently active."""
+    for path in list_children():
+        if path.name not in active_names:
+            delete(path)
