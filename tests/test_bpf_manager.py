@@ -203,6 +203,44 @@ def test_load_skips_when_cached(monkeypatch):
     assert skel_cmd not in calls
 
 
+def test_load_compatibility_skips_strict_programs(monkeypatch):
+    calls = []
+
+    def record(self, cmd, *, raise_on_error=False):
+        calls.append(cmd)
+        return True
+
+    monkeypatch.setattr(BPFManager, "_run", record)
+    mgr = BPFManager()
+    mgr.load(mode="compatibility")
+
+    assert ["llvm-objdump", "-d", str(mgr._obj)] in calls
+    assert [
+        "bpftool",
+        "prog",
+        "load",
+        str(mgr._obj),
+        "/sys/fs/bpf/dummy",
+    ] in calls
+    assert ["llvm-objdump", "-d", str(mgr._filter_obj)] not in calls
+    assert ["llvm-objdump", "-d", str(mgr._guard_obj)] not in calls
+
+
+def test_load_mode_hardened_sets_raise_on_error(monkeypatch):
+    raise_flags = []
+
+    def record(self, cmd, *, raise_on_error=False):
+        raise_flags.append(raise_on_error)
+        return True
+
+    monkeypatch.setattr(BPFManager, "_run", record)
+    mgr = BPFManager()
+    mgr.load(mode="hardened")
+
+    assert raise_flags
+    assert all(raise_flags)
+
+
 def test_hot_reload_failure_raises(monkeypatch, tmp_path, caplog):
     mgr = BPFManager()
     mgr.loaded = True

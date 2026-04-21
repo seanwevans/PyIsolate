@@ -47,6 +47,27 @@ from pyisolate.logging import setup_structured_logging
 setup_structured_logging()
 ```
 
+### Rollout modes
+
+Choose a supervisor rollout profile based on where you are deploying:
+
+```python
+import pyisolate as iso
+
+# default: fast local iteration
+dev = iso.Supervisor(rollout_mode="dev")
+
+# strict production posture (fail closed if BPF toolchain/load fails)
+hardened = iso.Supervisor(rollout_mode="hardened")
+
+# looser ecosystem validation (baseline BPF only, skips stricter filters)
+compat = iso.Supervisor(rollout_mode="compatibility")
+```
+
+* `dev`: lightweight, low-friction development mode.
+* `hardened`: real enforcement; any eBPF compile/load failure raises.
+* `compatibility`: reduced enforcement to maximize third-party compatibility.
+
 ### Hello World
 
 ```python
