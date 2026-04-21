@@ -137,3 +137,27 @@ def test_spawn_duplicate_name_rejected():
     finally:
         sb.close()
         sup.shutdown()
+
+
+def test_cancel_kill_reap_lifecycle():
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("life")
+        assert sb.cancel(timeout=0.2) is True
+        assert sb.kill(timeout=0.2) is True
+        assert sb.reap() is True
+    finally:
+        sup.shutdown()
+
+
+def test_quarantine_and_recycle():
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("recover")
+        sb.quarantine("wedged task")
+        assert "recover" not in sup.list_active()
+        revived = sup.spawn("recover")
+        revived.exec("post('ok')")
+        assert revived.recv(timeout=0.2) == "ok"
+    finally:
+        sup.shutdown()
