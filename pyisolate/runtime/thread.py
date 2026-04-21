@@ -8,6 +8,7 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 from __future__ import annotations
 
 import builtins
+import ctypes
 import io
 import logging
 import os
@@ -160,6 +161,10 @@ def _sigxcpu_handler(signum, frame):
 _STOP = object()
 
 
+class _KillRequest(Exception):
+    """Internal exception used for asynchronous forced thread shutdown."""
+
+
 @dataclass
 class Stats:
     cpu_ms: float
@@ -231,6 +236,7 @@ class SandboxThread(threading.Thread):
         self._cgroup_path = cgroup_path
         self._trace_enabled = False
         self._syscall_log: list[str] = []
+        self._quarantine_reason: str | None = None
 
     def snapshot(self) -> dict:
         """Return serializable configuration state."""
@@ -286,10 +292,54 @@ class SandboxThread(threading.Thread):
         except queue.Empty:
             raise errors.TimeoutError("no message received")
 
-    def stop(self, timeout: float = 0.2) -> None:
+    def cancel(self, timeout: float = 0.2) -> bool:
+        """Request cooperative shutdown and wait up to *timeout* seconds."""
         self._stop_event.set()
         self._inbox.put(_STOP)
         self.join(timeout)
+        return not self.is_alive()
+
+    def kill(self, timeout: float = 0.2) -> bool:
+        """Attempt non-cooperative termination for wedged guest code."""
+        if self.cancel(timeout=timeout):
+            return True
+        if self.ident is None:
+            return not self.is_alive()
+        for _ in range(3):
+            result = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                ctypes.c_ulong(self.ident), ctypes.py_object(_KillRequest)
+            )
+            if result > 1:
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                    ctypes.c_ulong(self.ident), None
+                )
+            self.join(timeout / 3 if timeout > 0 else 0)
+            if not self.is_alive():
+                return True
+        return False
+
+    def stop(self, timeout: float = 0.2) -> None:
+        if not self.cancel(timeout=timeout):
+            self.kill(timeout=timeout)
+
+    def reap(self) -> bool:
+        """Drain pending messages after termination."""
+        if self.is_alive():
+            return False
+        while not self._inbox.empty():
+            try:
+                self._inbox.get_nowait()
+            except queue.Empty:
+                break
+        while not self._outbox.empty():
+            try:
+                self._outbox.get_nowait()
+            except queue.Empty:
+                break
+        return True
+
+    def quarantine(self, reason: str) -> None:
+        self._quarantine_reason = reason
 
     def reset(
         self,
@@ -453,6 +503,8 @@ class SandboxThread(threading.Thread):
                         ):
                             raise errors.MemoryExceeded()
                     except Exception as exc:  # real impl would sanitize
+                        if isinstance(exc, _KillRequest):
+                            break
                         self._errors += 1
                         self._start_time = None
                         if self._on_violation and isinstance(exc, errors.PolicyError):
