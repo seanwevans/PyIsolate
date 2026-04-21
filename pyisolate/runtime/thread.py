@@ -29,13 +29,20 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from .. import errors
+from ..capabilities import (
+    ClockCapability,
+    FilesystemCapability,
+    NetworkCapability,
+    RandomCapability,
+    SecretCapability,
+    SubprocessCapability,
+)
 from .protocol import (
     AttachCgroupRequest,
     CallRequest,
     ExecRequest,
     StopRequest,
 )
-from ..capabilities import ClockCapability
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
 
@@ -44,6 +51,83 @@ _thread_local = threading.local()
 _ORIG_OPEN = builtins.open
 _ORIG_SOCKET_CONNECT = socket.socket.connect
 _ORIG_THREAD_START = threading.Thread.start
+_CAPABILITY_MARKER = "__pyisolate_capability__"
+
+
+def _serialize_capability(capability: Any) -> Any:
+    if isinstance(capability, FilesystemCapability):
+        return {
+            _CAPABILITY_MARKER: "filesystem",
+            "roots": [str(root) for root in capability.roots],
+        }
+    if isinstance(capability, NetworkCapability):
+        return {
+            _CAPABILITY_MARKER: "network",
+            "destinations": sorted(capability.destinations),
+        }
+    if isinstance(capability, SecretCapability):
+        return {
+            _CAPABILITY_MARKER: "secrets",
+            "values": {
+                key: value.hex() for key, value in sorted(capability.values.items())
+            },
+        }
+    if isinstance(capability, SubprocessCapability):
+        return {
+            _CAPABILITY_MARKER: "subprocess",
+            "allowed_commands": sorted(capability.allowed_commands),
+            "allow_shell": capability.allow_shell,
+        }
+    if isinstance(capability, ClockCapability):
+        return {_CAPABILITY_MARKER: "clock"}
+    if isinstance(capability, RandomCapability):
+        return {_CAPABILITY_MARKER: "random"}
+    return capability
+
+
+def _deserialize_capability(capability: Any) -> Any:
+    if not isinstance(capability, dict):
+        return capability
+    kind = capability.get(_CAPABILITY_MARKER)
+    if kind == "filesystem":
+        roots = capability.get("roots", [])
+        return FilesystemCapability.from_paths(*roots)
+    if kind == "network":
+        destinations = capability.get("destinations", [])
+        return NetworkCapability.from_destinations(*destinations)
+    if kind == "secrets":
+        encoded_values = capability.get("values", {})
+        decoded_values = {
+            key: bytes.fromhex(value) for key, value in encoded_values.items()
+        }
+        return SecretCapability(values=decoded_values)
+    if kind == "subprocess":
+        commands = capability.get("allowed_commands", [])
+        allow_shell = bool(capability.get("allow_shell", False))
+        return SubprocessCapability.from_commands(*commands, allow_shell=allow_shell)
+    if kind == "clock":
+        return ClockCapability()
+    if kind == "random":
+        return RandomCapability()
+    return capability
+
+
+def serialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if not capabilities:
+        return {}
+    return {
+        name: _serialize_capability(capability)
+        for name, capability in sorted(capabilities.items())
+    }
+
+
+def deserialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if not capabilities:
+        return {}
+    return {
+        name: _deserialize_capability(capability)
+        for name, capability in capabilities.items()
+    }
 
 
 def _blocked_open(file, *args, **kwargs):
@@ -356,7 +440,7 @@ class SandboxThread(threading.Thread):
         self._cgroup_path = cgroup_path
         self._trace_enabled = False
         self._syscall_log: list[str] = []
-        self._capabilities = dict(capabilities or {})
+        self._capabilities = deserialize_capabilities(capabilities)
         self._quarantine_reason: str | None = None
         self.termination_reason: str | None = None
         self._open_files = 0
@@ -377,7 +461,7 @@ class SandboxThread(threading.Thread):
             if self.allowed_imports is not None
             else None,
             "numa_node": self.numa_node,
-            "capabilities": sorted(self._capabilities),
+            "capabilities": serialize_capabilities(self._capabilities),
             "wall_time_ms": self.wall_time_ms,
             "open_files_max": self.open_files_max,
             "network_ops_max": self.network_ops_max,
@@ -547,7 +631,7 @@ class SandboxThread(threading.Thread):
         self._syscall_log = []
         self._start_time = None
         self._cgroup_path = cgroup_path
-        self._capabilities = dict(capabilities or {})
+        self._capabilities = deserialize_capabilities(capabilities)
         self.termination_reason = None
         self._open_files = 0
         self._network_ops = 0

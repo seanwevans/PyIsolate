@@ -50,6 +50,7 @@ import pytest
 
 import pyisolate as iso
 import pyisolate.policy as policy
+from pyisolate.capabilities import FilesystemCapability
 
 
 def _make_blob(payload, key):
@@ -127,6 +128,29 @@ def test_checkpoint_restores_imports_and_numa():
                 "import math, statistics\npost(math.sqrt(16) + statistics.mean([0, 2]))"
             )
             assert pytest.approx(sb2.recv(timeout=0.5)) == 5.0
+        finally:
+            sb2.close()
+    finally:
+        pass
+
+
+def test_checkpoint_restores_capabilities(tmp_path):
+    key = os.urandom(32)
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    target = allowed / "ok.txt"
+    target.write_text("ok", encoding="utf-8")
+
+    sb = iso.spawn(
+        "cap-cp",
+        capabilities={"filesystem": FilesystemCapability.from_paths(str(allowed))},
+    )
+    try:
+        blob = iso.checkpoint(sb, key)
+        sb2 = iso.restore(blob, key)
+        try:
+            sb2.exec(f"post(open({str(target)!r}).read())")
+            assert sb2.recv(timeout=0.5) == "ok"
         finally:
             sb2.close()
     finally:
