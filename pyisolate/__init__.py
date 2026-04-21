@@ -32,11 +32,17 @@ except Exception:  # pragma: no cover - optional dependency
 from .editor import PolicyEditor, check_fs, check_tcp, parse_policy  # noqa: F401
 from .errors import (
     CPUExceeded,
+    ChildWorkExceeded,
     MemoryExceeded,
+    NetworkExceeded,
+    OpenFilesExceeded,
+    OutputExceeded,
     PolicyAuthError,
     PolicyError,
     SandboxError,
+    TenantQuotaExceeded,
     TimeoutError,
+    WallTimeExceeded,
 )
 from .logging import setup_structured_logging  # noqa: F401
 
@@ -74,6 +80,12 @@ __all__ = [
     "TimeoutError",
     "MemoryExceeded",
     "CPUExceeded",
+    "WallTimeExceeded",
+    "OpenFilesExceeded",
+    "NetworkExceeded",
+    "OutputExceeded",
+    "ChildWorkExceeded",
+    "TenantQuotaExceeded",
     "sandbox",
     "Pipeline",
     "RestrictedExec",

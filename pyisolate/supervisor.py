@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import re
 import threading
 from pathlib import Path
@@ -16,7 +17,7 @@ from typing import Dict, Optional
 
 from . import cgroup
 from .capabilities import ROOT, RootCapability
-from .errors import PolicyAuthError
+from .errors import PolicyAuthError, TenantQuotaExceeded
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .runtime.protocol import CapabilityHandle, ControlRequest
@@ -71,6 +72,11 @@ class Sandbox:
             policy=self._thread.policy,
             cpu_ms=self._thread.cpu_quota_ms,
             mem_bytes=self._thread.mem_quota_bytes,
+            wall_time_ms=self._thread.wall_time_ms,
+            open_files_max=self._thread.open_files_max,
+            network_ops_max=self._thread.network_ops_max,
+            output_bytes_max=self._thread.output_bytes_max,
+            child_work_max=self._thread.child_work_max,
             allowed_imports=sorted(self._thread.allowed_imports)
             if self._thread.allowed_imports is not None
             else None,
@@ -116,6 +122,10 @@ class Sandbox:
     def stats(self):
         return self._thread.stats
 
+    @property
+    def termination_reason(self) -> str | None:
+        return self._thread.termination_reason
+
 
 class Supervisor:
     """Main supervisor owning all sandboxes."""
@@ -141,6 +151,34 @@ class Supervisor:
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
         self._policy_token: str | None = None
+        self._tenant_usage: dict[str, int] = {}
+        self._quota_ledger = os.environ.get("PYISOLATE_QUOTA_LEDGER")
+        self._replay_quota_ledger()
+
+    def _replay_quota_ledger(self) -> None:
+        if not self._quota_ledger:
+            return
+        path = Path(self._quota_ledger)
+        if not path.exists():
+            return
+        for line in path.read_text(encoding="utf-8").splitlines():
+            tenant, _, delta_str = line.partition(",")
+            if not tenant:
+                continue
+            try:
+                delta = int(delta_str)
+            except ValueError:
+                continue
+            self._tenant_usage[tenant] = self._tenant_usage.get(tenant, 0) + delta
+
+    def _record_tenant_usage(self, tenant: str, delta: int = 1) -> None:
+        self._tenant_usage[tenant] = self._tenant_usage.get(tenant, 0) + delta
+        if not self._quota_ledger:
+            return
+        path = Path(self._quota_ledger)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{tenant},{delta}\n")
 
     def register_alert_handler(self, callback) -> None:
         """Subscribe to policy violation alerts."""
@@ -152,9 +190,16 @@ class Supervisor:
         policy=None,
         cpu_ms: Optional[int] = None,
         mem_bytes: Optional[int] = None,
+        wall_time_ms: Optional[int] = None,
+        open_files_max: Optional[int] = None,
+        network_ops_max: Optional[int] = None,
+        output_bytes_max: Optional[int] = None,
+        child_work_max: Optional[int] = None,
         allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
         capabilities: Optional[dict[str, object]] = None,
+        tenant: Optional[str] = None,
+        tenant_quota: Optional[int] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         global NAME_PATTERN
@@ -177,6 +222,10 @@ class Supervisor:
             existing = self._sandboxes.get(name)
             if existing is not None and existing.is_alive():
                 raise RuntimeError(f"sandbox '{name}' already exists")
+            if tenant and tenant_quota is not None:
+                if self._tenant_usage.get(tenant, 0) >= tenant_quota:
+                    raise TenantQuotaExceeded()
+                self._record_tenant_usage(tenant, 1)
 
             cg_path = cgroup.create(name, cpu_ms, mem_bytes)
             if self._warm_pool:
@@ -186,6 +235,11 @@ class Supervisor:
                     policy=policy,
                     cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
+                    wall_time_ms=wall_time_ms,
+                    open_files_max=open_files_max,
+                    network_ops_max=network_ops_max,
+                    output_bytes_max=output_bytes_max,
+                    child_work_max=child_work_max,
                     allowed_imports=allowed_imports,
                     numa_node=numa_node,
                     cgroup_path=cg_path,
@@ -199,6 +253,11 @@ class Supervisor:
                     policy=policy,
                     cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
+                    wall_time_ms=wall_time_ms,
+                    open_files_max=open_files_max,
+                    network_ops_max=network_ops_max,
+                    output_bytes_max=output_bytes_max,
+                    child_work_max=child_work_max,
                     allowed_imports=allowed_imports,
                     on_violation=self._alerts.notify,
                     tracer=self._tracer,
@@ -317,6 +376,11 @@ class Supervisor:
             policy=snap["policy"],
             cpu_ms=snap["cpu_ms"],
             mem_bytes=snap["mem_bytes"],
+            wall_time_ms=snap["wall_time_ms"],
+            open_files_max=snap["open_files_max"],
+            network_ops_max=snap["network_ops_max"],
+            output_bytes_max=snap["output_bytes_max"],
+            child_work_max=snap["child_work_max"],
             allowed_imports=snap["allowed_imports"],
             numa_node=snap["numa_node"],
         )
