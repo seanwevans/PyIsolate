@@ -19,6 +19,7 @@ from .capabilities import ROOT, RootCapability
 from .errors import PolicyAuthError
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
+from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
 
@@ -190,23 +191,32 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
+    def _authorize_control(self, token: str | RootCapability, op: str) -> ControlRequest:
+        """Validate an authenticated control-plane operation request."""
+
+        if token is ROOT:
+            handle = CapabilityHandle(kind="root", subject=op)
+        else:
+            if self._policy_token is None or token != self._policy_token:
+                logger.warning("control operation rejected: %s", op)
+                raise PolicyAuthError("invalid policy token")
+            handle = CapabilityHandle(kind="policy-token", subject=op)
+
+        return ControlRequest(op=op, capability=handle, payload={})
+
     def set_policy_token(self, token: str) -> None:
         """Configure the secret used to authenticate policy updates."""
         self._policy_token = token
 
     def reload_policy(self, policy_path: str, token: str | RootCapability) -> None:
-        """Hot-reload policy via the BPF manager if *token* matches."""
+        """Hot-reload policy via an authenticated control-plane request."""
 
-        if token is ROOT:
-            pass
-        else:
-            if self._policy_token is not None and token != self._policy_token:
-                logger.warning("policy reload rejected: invalid token")
-                raise PolicyAuthError("invalid policy token")
+        request = self._authorize_control(token, op="policy.reload")
 
         if not Path(policy_path).is_file():
             raise FileNotFoundError(policy_path)
 
+        logger.debug("control operation accepted: %s", request.op)
         try:
             self._bpf.hot_reload(policy_path)
         except RuntimeError as exc:
