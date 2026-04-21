@@ -20,7 +20,17 @@ from .capabilities import (  # noqa: F401
 
 try:
     from .checkpoint import checkpoint, restore
-except Exception:  # pragma: no cover - optional dependency
+except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover - optional dependency
+    # Trap only dependency-related import failures; let unrelated import-time
+    # bugs in optional modules propagate so they remain visible to developers.
+    if (
+        isinstance(exc, ModuleNotFoundError)
+        and exc.name
+        and exc.name.split(".", 1)[0] != "cryptography"
+    ):
+        raise
+    if isinstance(exc, ImportError) and "cryptography" not in str(exc):
+        raise
 
     def checkpoint(*args, **kwargs):  # type: ignore[no-redef]
         raise ModuleNotFoundError("cryptography is required for checkpoint support")
@@ -48,7 +58,17 @@ from .logging import setup_structured_logging  # noqa: F401
 
 try:
     from .migration import migrate
-except Exception:  # pragma: no cover - optional dependency
+except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover - optional dependency
+    # Trap only dependency-related import failures; let unrelated import-time
+    # bugs in optional modules propagate so they remain visible to developers.
+    if (
+        isinstance(exc, ModuleNotFoundError)
+        and exc.name
+        and exc.name.split(".", 1)[0] != "cryptography"
+    ):
+        raise
+    if isinstance(exc, ImportError) and "cryptography" not in str(exc):
+        raise
 
     def migrate(*args, **kwargs):  # type: ignore[no-redef]
         raise ModuleNotFoundError("cryptography is required for migration support")
