@@ -246,6 +246,85 @@ def test_refresh_passes_compiled_policy(monkeypatch, tmp_path):
     assert sb["tcp"][0]["addr"] == "1.1.1.1:443"
     assert sb["imports"] == ["math"]
     assert sb["fs"][0]["path"] == "/tmp/**"
+    assert captured["data"]["schema_version"] == "0.1"
+    assert captured["data"]["semantics_version"] == 1
+
+
+def test_refresh_dry_run_compiles_without_reload(monkeypatch, tmp_path):
+    policy = load_policy()
+    import pyisolate as iso
+
+    called = False
+
+    def fake_reload(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("pyisolate.supervisor.reload_policy", fake_reload)
+    iso.set_policy_token("tok")
+    path = tmp_path / "p.yml"
+    path.write_text(
+        "version: 1\n"
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        '      - allow: "/tmp"\n'
+    )
+
+    compiled = policy.refresh(str(path), token="tok", dry_run=True)
+    assert compiled.schema_version == "1.0"
+    assert called is False
+
+
+def test_compile_policy_supports_inheritance_and_defaults(tmp_path):
+    import pyisolate.policy as policy
+
+    doc = (
+        "version: 1.0\n"
+        "defaults:\n"
+        "  imports:\n"
+        "    - math\n"
+        "sandboxes:\n"
+        "  base:\n"
+        "    fs:\n"
+        '      - allow: "/srv/base"\n'
+        "    net:\n"
+        '      - deny: "10.0.0.0/8"\n'
+        "  child:\n"
+        "    extends: base\n"
+        "    imports:\n"
+        "      - json\n"
+        "    fs:\n"
+        '      - allow: "/srv/child"\n'
+    )
+    f = tmp_path / "inherit.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    child = compiled.sandboxes["child"]
+    assert [r.path for r in child.fs] == ["/srv/base", "/srv/child"]
+    assert [r.addr for r in child.tcp] == ["10.0.0.0/8"]
+    assert child.imports == ["math", "json"]
+    assert compiled.deny_log == ["sandbox=base net=10.0.0.0/8", "sandbox=child net=10.0.0.0/8"]
+
+
+def test_refresh_logs_explicit_deny_rules(tmp_path, caplog, monkeypatch):
+    policy = load_policy()
+    import pyisolate as iso
+
+    monkeypatch.setattr(
+        "pyisolate.bpf.manager.BPFManager.hot_reload", lambda *a, **k: None
+    )
+    iso.set_policy_token("tok")
+    path = tmp_path / "deny.yml"
+    path.write_text(
+        "version: 0.1\n"
+        "net:\n"
+        '  - deny: "10.0.0.0/8"\n'
+    )
+    with caplog.at_level("WARNING"):
+        policy.refresh(str(path), token="tok")
+    assert "policy deny rule active" in caplog.text
 
 
 def test_reload_policy_missing_path(tmp_path):
