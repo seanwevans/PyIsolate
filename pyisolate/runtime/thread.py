@@ -478,6 +478,40 @@ class SandboxThread(threading.Thread):
             "child_work_max": self.child_work_max,
         }
 
+    def reset_config(self) -> dict[str, Any]:
+        """Return the runtime options consumed by ``reset`` for reconfiguration."""
+        return {
+            "policy": self.policy,
+            "cpu_ms": self.cpu_quota_ms,
+            "mem_bytes": self.mem_quota_bytes,
+            "wall_time_ms": self.wall_time_ms,
+            "open_files_max": self.open_files_max,
+            "network_ops_max": self.network_ops_max,
+            "output_bytes_max": self.output_bytes_max,
+            "child_work_max": self.child_work_max,
+            "allowed_imports": sorted(self.allowed_imports)
+            if self.allowed_imports is not None
+            else None,
+            "numa_node": self.numa_node,
+            "capabilities": serialize_capabilities(self._capabilities),
+        }
+
+    def apply_reset_config(self, config: dict[str, Any]) -> None:
+        """Apply a serialized runtime config produced by ``reset_config``."""
+        self.policy = config.get("policy")
+        self.cpu_quota_ms = config.get("cpu_ms")
+        self.mem_quota_bytes = config.get("mem_bytes")
+        self.wall_time_ms = config.get("wall_time_ms")
+        self.open_files_max = config.get("open_files_max")
+        self.network_ops_max = config.get("network_ops_max")
+        self.output_bytes_max = config.get("output_bytes_max")
+        self.child_work_max = config.get("child_work_max")
+        self.numa_node = config.get("numa_node")
+        self.allowed_imports = self._merge_allowed_imports(
+            self.policy, config.get("allowed_imports")
+        )
+        self._capabilities = deserialize_capabilities(config.get("capabilities"))
+
     @staticmethod
     def _estimate_output_size(item: Any) -> int:
         if isinstance(item, bytes):
@@ -619,17 +653,22 @@ class SandboxThread(threading.Thread):
         """Reuse this thread for a new sandbox."""
         old_path = getattr(self, "_cgroup_path", None)
         self.name = name
-        self.policy = policy
-        self.cpu_quota_ms = cpu_ms
-        self.mem_quota_bytes = mem_bytes
-        self.wall_time_ms = wall_time_ms
-        self.open_files_max = open_files_max
-        self.network_ops_max = network_ops_max
-        self.output_bytes_max = output_bytes_max
-        self.child_work_max = child_work_max
-        self.numa_node = numa_node
+        self.apply_reset_config(
+            {
+                "policy": policy,
+                "cpu_ms": cpu_ms,
+                "mem_bytes": mem_bytes,
+                "wall_time_ms": wall_time_ms,
+                "open_files_max": open_files_max,
+                "network_ops_max": network_ops_max,
+                "output_bytes_max": output_bytes_max,
+                "child_work_max": child_work_max,
+                "allowed_imports": allowed_imports,
+                "numa_node": numa_node,
+                "capabilities": capabilities,
+            }
+        )
         self._bound_numa_node = None
-        self.allowed_imports = self._merge_allowed_imports(policy, allowed_imports)
         self._cpu_time = 0.0
         self._mem_peak = 0
         self._ops = 0
@@ -640,7 +679,6 @@ class SandboxThread(threading.Thread):
         self._syscall_log = []
         self._start_time = None
         self._cgroup_path = cgroup_path
-        self._capabilities = deserialize_capabilities(capabilities)
         self.termination_reason = None
         self._open_files = 0
         self._network_ops = 0
