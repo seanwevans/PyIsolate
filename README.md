@@ -89,6 +89,20 @@ print(sb.recv())  # 3.0
 For CPython 3.13 `--disable-gil` deployments, review the extension and package compatibility guidance in [docs/compatibility-matrix.md](docs/compatibility-matrix.md) before expanding `allowed_imports`.
 
 
+### Host conformance suite
+
+Run the host conformance suite to measure whether the current machine satisfies
+PyIsolate guarantees (Python build, kernel capabilities, BPF readiness, cgroup
+behavior, policy enforcement, and timeout/kill behavior):
+
+```bash
+python -m pyisolate.conformance
+python -m pyisolate.conformance --json
+```
+
+Use this in CI or admission checks to replace hand-wavy security claims with a
+repeatable pass/fail report.
+
 ### Policy editor
 
 Run a minimal GUI to tweak and hot‑reload YAML policies:
