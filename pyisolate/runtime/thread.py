@@ -296,7 +296,7 @@ def _wrap_module(name: str, module):
         mod = types.ModuleType("pathlib", module.__doc__)
         mod.__dict__.update({k: getattr(module, k) for k in dir(module)})
 
-        class SandboxedPath(module.Path):
+        class SandboxedPath(type(module.Path())):
             def open(
                 self,
                 mode="r",

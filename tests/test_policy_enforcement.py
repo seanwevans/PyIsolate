@@ -99,3 +99,43 @@ def test_fs_allows_creating_new_files(tmp_path):
 
     assert allowed_target.read_text() == "hello world"
     assert not blocked_target.exists()
+
+
+def test_pathlib_path_read_text_respects_fs_policy(tmp_path):
+    allowed_file = tmp_path / "allowed.txt"
+    allowed_file.write_text("ok")
+
+    blocked_dir = tmp_path / "blocked"
+    blocked_dir.mkdir()
+    blocked_file = blocked_dir / "blocked.txt"
+    blocked_file.write_text("nope")
+
+    p = policy.Policy().allow_import("pathlib").allow_fs(str(tmp_path))
+    sb = iso.spawn("pifs-pathlib-read-text", policy=p)
+    try:
+        sb.exec(
+            (
+                "import pathlib\n"
+                f"post(pathlib.Path({str(allowed_file)!r}).read_text())\n"
+            )
+        )
+        assert sb.recv(timeout=1) == "ok"
+
+        sb.exec(
+            (
+                "import pathlib\n"
+                f"post(pathlib.Path({str(blocked_file)!r}).read_text())\n"
+            )
+        )
+        assert sb.recv(timeout=1) == "nope"
+
+        sb.exec(
+            (
+                "import pathlib\n"
+                "post(pathlib.Path('/etc/hosts').read_text())\n"
+            )
+        )
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
