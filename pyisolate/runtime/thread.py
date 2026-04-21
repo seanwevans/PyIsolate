@@ -27,6 +27,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from .. import errors
+from .protocol import (
+    AttachCgroupRequest,
+    CallRequest,
+    ExecRequest,
+    StopRequest,
+)
 from ..capabilities import ClockCapability
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
@@ -241,13 +247,6 @@ class Stats:
     cost: float
 
 
-@dataclass
-class _CgroupAttach:
-    """Control message to (re)attach the sandbox thread to a cgroup."""
-
-    old_path: Path | None
-
-
 class SandboxThread(threading.Thread):
     """Thread that runs guest code and communicates via a queue."""
 
@@ -336,13 +335,13 @@ class SandboxThread(threading.Thread):
         if self._trace_enabled:
             self._syscall_log.append(src)
         self._logger.debug("exec", extra={"code": src})
-        self._inbox.put(src)
+        self._inbox.put(ExecRequest(source=src))
 
     def call(self, func: str, *args, timeout: float | None = None, **kwargs) -> Any:
         if self._trace_enabled:
             self._syscall_log.append(f"call {func}")
         self._logger.debug("call", extra={"func": func})
-        self._inbox.put(("call", func, args, kwargs))
+        self._inbox.put(CallRequest(target=func, args=args, kwargs=kwargs))
         try:
             result = self.recv(timeout)
         except Exception as exc:  # sandbox raised
@@ -363,7 +362,7 @@ class SandboxThread(threading.Thread):
     def cancel(self, timeout: float = 0.2) -> bool:
         """Request cooperative shutdown and wait up to *timeout* seconds."""
         self._stop_event.set()
-        self._inbox.put(_STOP)
+        self._inbox.put(StopRequest())
         self.join(timeout)
         return not self.is_alive()
 
@@ -442,7 +441,7 @@ class SandboxThread(threading.Thread):
         self._capabilities = dict(capabilities or {})
         # Request the sandbox thread to (re)attach itself to the new cgroup.
         # The attachment must happen from the sandbox thread's context.
-        self._inbox.put(_CgroupAttach(old_path))
+        self._inbox.put(AttachCgroupRequest(old_path=old_path))
 
     @property
     def stats(self):
@@ -490,9 +489,9 @@ class SandboxThread(threading.Thread):
 
             while True:
                 payload = self._inbox.get()
-                if payload is _STOP:
+                if isinstance(payload, StopRequest):
                     break
-                if isinstance(payload, _CgroupAttach):
+                if isinstance(payload, AttachCgroupRequest):
                     try:
                         from .. import cgroup
 
@@ -543,27 +542,25 @@ class SandboxThread(threading.Thread):
                     try:
                         start_cpu = time.thread_time()
                         self._start_time = time.monotonic()
-                        if isinstance(payload, tuple):
-                            kind, func, args, kwargs = payload
-                            if kind == "call":
-                                importer = builtins_dict["__import__"]
-                                try:
-                                    module_name, func_name = func.rsplit(".", 1)
-                                except ValueError as exc:
-                                    raise errors.SandboxError(
-                                        "call target {!r} must include a module path (e.g. 'module.func')".format(
-                                            func
-                                        )
-                                    ) from exc
-                                mod = importer(module_name, fromlist=["_"])
-                                res = object.__getattribute__(mod, func_name)(
-                                    *args, **kwargs
-                                )
-                                self._outbox.put(res)
-                            else:
-                                raise errors.SandboxError("unknown operation")
+                        if isinstance(payload, CallRequest):
+                            importer = builtins_dict["__import__"]
+                            try:
+                                module_name, func_name = payload.target.rsplit(".", 1)
+                            except ValueError as exc:
+                                raise errors.SandboxError(
+                                    "call target {!r} must include a module path (e.g. 'module.func')".format(
+                                        payload.target
+                                    )
+                                ) from exc
+                            mod = importer(module_name, fromlist=["_"])
+                            res = object.__getattribute__(mod, func_name)(
+                                *payload.args, **payload.kwargs
+                            )
+                            self._outbox.put(res)
+                        elif isinstance(payload, ExecRequest):
+                            exec(payload.source, local_vars, local_vars)
                         else:
-                            exec(payload, local_vars, local_vars)
+                            raise errors.SandboxError("unknown request type")
                         end_cpu = time.thread_time()
                         self._cpu_time += (end_cpu - start_cpu) * 1000
                         self._start_time = None
