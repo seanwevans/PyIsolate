@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 from typing import Dict, Optional
 
-from . import cgroup
+from . import cgroup, recovery
 from .capabilities import ROOT, RootCapability
 from .errors import PolicyAuthError
 from .observability.alerts import AlertManager
@@ -133,6 +133,7 @@ class Supervisor:
         self._bpf = bpf_mod.BPFManager()
         self._rollout_mode = rollout_mode
         self._bpf.load(mode=rollout_mode)
+        self._recover_state()
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
             t = SandboxThread(name=f"warm-{i}")
@@ -141,6 +142,24 @@ class Supervisor:
         self._watchdog = ResourceWatchdog(self)
         self._watchdog.start()
         self._policy_token: str | None = None
+
+    def _recover_state(self) -> None:
+        """Recover durable supervisor state and clean stale resources."""
+        stale = recovery.recover()
+        for name, meta in stale.items():
+            cg_path = meta.get("cgroup_path")
+            if isinstance(cg_path, str) and cg_path:
+                cgroup.delete(Path(cg_path))
+            else:
+                cgroup.delete(cgroup._BASE / name)
+            temp_dir = meta.get("temp_dir")
+            if isinstance(temp_dir, str) and temp_dir:
+                recovery.cleanup_temp_dir(Path(temp_dir))
+            else:
+                recovery.cleanup_temp_dir(name)
+            recovery.drop_sandbox(name)
+        cgroup.cleanup_orphans(set())
+        recovery.cleanup_temp_orphans(set())
 
     def register_alert_handler(self, callback) -> None:
         """Subscribe to policy violation alerts."""
@@ -179,6 +198,7 @@ class Supervisor:
                 raise RuntimeError(f"sandbox '{name}' already exists")
 
             cg_path = cgroup.create(name, cpu_ms, mem_bytes)
+            temp_dir = recovery.allocate_temp_dir(name)
             if self._warm_pool:
                 thread = self._warm_pool.pop()
                 thread.reset(
@@ -207,7 +227,16 @@ class Supervisor:
                     capabilities=capabilities,
                 )
                 thread.start()
+            thread._temp_dir = temp_dir
             self._sandboxes[name] = thread
+            recovery.update_sandbox(
+                name,
+                {
+                    "name": name,
+                    "cgroup_path": str(cg_path) if cg_path is not None else None,
+                    "temp_dir": str(temp_dir),
+                },
+            )
         # Remove references to any terminated sandboxes
         self._cleanup()
         # Reset any temporary overrides of the name validation pattern to avoid
@@ -297,6 +326,8 @@ class Supervisor:
         with self._lock:
             self._sandboxes.pop(name, None)
         cgroup.delete(getattr(thread, "_cgroup_path", None))
+        recovery.cleanup_temp_dir(getattr(thread, "_temp_dir", name))
+        recovery.drop_sandbox(name)
 
     def recycle(self, name: str) -> Sandbox:
         """Replace a sandbox thread with a fresh instance using prior config."""
@@ -328,6 +359,8 @@ class Supervisor:
             for n in dead:
                 thread = self._sandboxes[n]
                 cgroup.delete(getattr(thread, "_cgroup_path", None))
+                recovery.cleanup_temp_dir(getattr(thread, "_temp_dir", n))
+                recovery.drop_sandbox(n)
                 del self._sandboxes[n]
             self._warm_pool = [t for t in self._warm_pool if t.is_alive()]
 

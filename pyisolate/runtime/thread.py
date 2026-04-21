@@ -303,6 +303,8 @@ class SandboxThread(threading.Thread):
         self._syscall_log: list[str] = []
         self._capabilities = dict(capabilities or {})
         self._quarantine_reason: str | None = None
+        self._next_attach_msg_id = 1
+        self._seen_attach_msg_ids: set[int] = set()
 
     def snapshot(self) -> dict:
         """Return serializable configuration state."""
@@ -441,7 +443,9 @@ class SandboxThread(threading.Thread):
         self._capabilities = dict(capabilities or {})
         # Request the sandbox thread to (re)attach itself to the new cgroup.
         # The attachment must happen from the sandbox thread's context.
-        self._inbox.put(AttachCgroupRequest(old_path=old_path))
+        msg_id = self._next_attach_msg_id
+        self._next_attach_msg_id += 1
+        self._inbox.put(AttachCgroupRequest(old_path=old_path, msg_id=msg_id))
 
     @property
     def stats(self):
@@ -492,6 +496,9 @@ class SandboxThread(threading.Thread):
                 if isinstance(payload, StopRequest):
                     break
                 if isinstance(payload, AttachCgroupRequest):
+                    if payload.msg_id in self._seen_attach_msg_ids:
+                        continue
+                    self._seen_attach_msg_ids.add(payload.msg_id)
                     try:
                         from .. import cgroup
 

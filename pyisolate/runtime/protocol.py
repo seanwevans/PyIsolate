@@ -40,6 +40,7 @@ class AttachCgroupRequest:
     """Control-plane request to (re)attach to a cgroup path."""
 
     old_path: Path | None
+    msg_id: int = 0
 
 
 @dataclass(frozen=True)
