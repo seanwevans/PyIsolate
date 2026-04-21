@@ -178,6 +178,30 @@ def test_quarantine_and_recycle():
         sup.shutdown()
 
 
+def test_recycle_preserves_capabilities(tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    target = allowed / "ok.txt"
+    target.write_text("ok")
+
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn(
+            "recycle-cap",
+            capabilities={
+                "filesystem": iso.FilesystemCapability.from_paths(str(allowed)),
+            },
+        )
+        sb.exec(f"post(open({str(target)!r}).read())")
+        assert sb.recv(timeout=0.5) == "ok"
+
+        recycled = sb.recycle()
+        recycled.exec(f"post(open({str(target)!r}).read())")
+        assert recycled.recv(timeout=0.5) == "ok"
+    finally:
+        sup.shutdown()
+
+
 def test_sandbox_termination_reason_passthrough():
     sup = iso.Supervisor()
     try:

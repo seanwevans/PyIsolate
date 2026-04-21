@@ -414,6 +414,7 @@ class Supervisor:
             child_work_max=snap["child_work_max"],
             allowed_imports=snap["allowed_imports"],
             numa_node=snap["numa_node"],
+            capabilities=snap["capabilities"],
         )
 
     def _cleanup(self) -> None:
