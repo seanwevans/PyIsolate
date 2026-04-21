@@ -1,5 +1,8 @@
 # SECURITY.md
 
+
+> Canonical boundary definition: see `docs/threat-model.md` (frozen baseline).
+
 ## 1  Threat model
 
 | Actor                                           | Capabilities                                                         | Goal                                                 |
@@ -15,6 +18,10 @@ We **assume** the kernel and hardware are trusted and un‑compromised.  Kernel 
 ---
 
 ## 2  Security guarantees
+
+### Authoritative boundary statement
+
+PyIsolate uses **sub‑interpreters as execution cells** for scheduling and lifecycle, while the **actual security boundary is kernel/process level enforcement** (cgroups, eBPF/LSM, and broker mediation). Sub‑interpreters alone are not treated as a hard isolation boundary in production.
 
 1. **Process containment** — Guest code cannot execute syscalls outside the eBPF allow‑list.
 2. **Memory safety** — Each interpreter is hard‑capped to its RAM quota at the allocator level; no guest can corrupt another’s heap.
@@ -64,6 +71,15 @@ Anything not listed above is *not* guaranteed.
 | **Side‑channel leakage (L1/L3 cache, branch predictors)** | Use one process per tenant on highly sensitive workloads.                         |
 | **Cooperative multithreading abuse**                      | Scheduler starvation possible; employ cgroup CPU quotas.                          |
 | **Spectre v2**                                            | Mitigations inherit from host kernel; PyIsolate adds none.                        |
+
+---
+
+### Isolation hierarchy (recommended interpretation)
+
+1. **Sub‑interpreter**: execution cell only.
+2. **Thread**: scheduling/accounting unit.
+3. **Process + kernel policy**: primary production security boundary.
+4. **Container/microVM**: stronger boundary and recommended fallback for hostile multi‑tenant environments.
 
 ---
 

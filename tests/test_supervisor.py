@@ -13,8 +13,8 @@ from pyisolate.bpf.manager import BPFManager
 def test_module_import_is_lazy(monkeypatch):
     calls: list[str] = []
 
-    def fake_load(self):
-        calls.append("load")
+    def fake_load(self, *, mode="dev", strict=None):
+        calls.append(f"load:{mode}:{strict}")
 
     def fake_watchdog_start(self):
         calls.append("watchdog")
@@ -30,7 +30,7 @@ def test_module_import_is_lazy(monkeypatch):
 
     sup_mod.list_active()
 
-    assert calls == ["load", "watchdog"]
+    assert calls == ["load:dev:None", "watchdog"]
     sup_mod._supervisor = None
 
 
@@ -75,6 +75,21 @@ def test_spawn_uses_warm_pool():
         assert len(sup._warm_pool) == 0
     finally:
         sb.close()
+        sup.shutdown()
+
+
+def test_supervisor_rollout_mode_passed_to_bpf(monkeypatch):
+    seen = {}
+
+    def fake_load(self, *, mode="dev", strict=None):
+        seen["mode"] = mode
+        seen["strict"] = strict
+
+    monkeypatch.setattr(BPFManager, "load", fake_load)
+    sup = iso.Supervisor(rollout_mode="compatibility")
+    try:
+        assert seen == {"mode": "compatibility", "strict": None}
+    finally:
         sup.shutdown()
 
 
@@ -136,4 +151,28 @@ def test_spawn_duplicate_name_rejected():
         assert active["dup"]._thread is sb._thread
     finally:
         sb.close()
+        sup.shutdown()
+
+
+def test_cancel_kill_reap_lifecycle():
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("life")
+        assert sb.cancel(timeout=0.2) is True
+        assert sb.kill(timeout=0.2) is True
+        assert sb.reap() is True
+    finally:
+        sup.shutdown()
+
+
+def test_quarantine_and_recycle():
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("recover")
+        sb.quarantine("wedged task")
+        assert "recover" not in sup.list_active()
+        revived = sup.spawn("recover")
+        revived.exec("post('ok')")
+        assert revived.recv(timeout=0.2) == "ok"
+    finally:
         sup.shutdown()

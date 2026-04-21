@@ -4,7 +4,19 @@ This module exposes the high-level API described in API.md.
 """
 
 from . import bpf  # noqa: F401
-from .capabilities import ROOT, Capability, RootCapability, Token  # noqa: F401
+from .capabilities import (  # noqa: F401
+    ROOT,
+    IPCChannelCapability,
+    Capability,
+    ClockCapability,
+    FilesystemCapability,
+    NetworkCapability,
+    RandomCapability,
+    RootCapability,
+    SecretCapability,
+    SubprocessCapability,
+    Token,
+)
 
 try:
     from .checkpoint import checkpoint, restore
@@ -71,6 +83,13 @@ __all__ = [
     "RootCapability",
     "ROOT",
     "set_policy_token",
+    "FilesystemCapability",
+    "NetworkCapability",
+    "SecretCapability",
+    "SubprocessCapability",
+    "IPCChannelCapability",
+    "ClockCapability",
+    "RandomCapability",
     "PolicyEditor",
     "parse_policy",
     "check_fs",

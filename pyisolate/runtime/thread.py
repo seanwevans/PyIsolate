@@ -8,12 +8,16 @@ sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
 from __future__ import annotations
 
 import builtins
+import ctypes
 import io
 import logging
 import os
 import queue
+import random
+import secrets as pysecrets
 import signal
 import socket
+import subprocess
 import threading
 import time
 import tracemalloc
@@ -23,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from .. import errors
+from ..capabilities import ClockCapability
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
 
@@ -41,40 +46,81 @@ def _blocked_open(file, *args, **kwargs):
     if isinstance(file, (str, bytes)):
         path = Path(file).resolve(strict=False)
 
+        fs_cap = getattr(_thread_local, "fs_capability", None)
         allowed = getattr(_thread_local, "fs", None)
-
-        if allowed is not None:
+        if fs_cap is not None:
+            if not fs_cap.allows(path):
+                raise errors.PolicyError("file access blocked")
+        elif allowed is not None:
             if not any(path.is_relative_to(a) for a in allowed):
                 raise errors.PolicyError("file access blocked")
-        elif getattr(_thread_local, "active", False) and path.is_relative_to(
-            Path("/etc")
-        ):
+        elif getattr(_thread_local, "active", False):
             raise errors.PolicyError("file access blocked")
 
     return _ORIG_OPEN(file, *args, **kwargs)
 
 
 def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
+    net_cap = getattr(_thread_local, "net_capability", None)
     allowed = getattr(_thread_local, "tcp", None)
-    if allowed is not None:
-        if isinstance(address, tuple):
-            host, port, *_ = address
-        else:
-            host, port = address
+    if isinstance(address, tuple):
+        host, port, *_ = address
+    else:
+        host, port = address
+    if net_cap is not None:
+        if not net_cap.allows(str(host), int(port)):
+            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    elif allowed is not None:
         if f"{host}:{port}" not in allowed:
             raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    else:
+        raise errors.PolicyError(f"connect blocked: {host}:{port}")
     return _ORIG_SOCKET_CONNECT(self_socket, address)
+
+
+def _blocked_subprocess_run(*args, **kwargs):
+    cap = getattr(_thread_local, "subprocess_capability", None)
+    if cap is None:
+        raise errors.PolicyError("subprocess access blocked")
+    return cap.run(*args, **kwargs)
+
+
+def _guarded_urandom(n: int) -> bytes:
+    cap = getattr(_thread_local, "random_capability", None)
+    if cap is None:
+        raise errors.PolicyError("randomness access blocked")
+    return cap.bytes(n)
 
 
 def _wrap_module(name: str, module):
     base = name.split(".")[0]
     if base == "time":
+        def _require_clock() -> ClockCapability:
+            cap = getattr(_thread_local, "clock_capability", None)
+            return cap
+
+        def _time() -> float:
+            cap = _require_clock()
+            if cap is None:
+                return 0.0
+            return cap.time()
+
+        def _monotonic() -> float:
+            cap = _require_clock()
+            if cap is None:
+                return 0.0
+            return cap.monotonic()
 
         def _perf_counter() -> float:
-            return 0.0
+            cap = _require_clock()
+            if cap is None:
+                return 0.0
+            return cap.monotonic()
 
         mod = types.ModuleType("time", module.__doc__)
         mod.__dict__.update({k: getattr(time, k) for k in dir(time)})
+        mod.time = _time
+        mod.monotonic = _monotonic
         mod.perf_counter = _perf_counter
         return mod
     if base == "io":
@@ -90,6 +136,26 @@ def _wrap_module(name: str, module):
             connect = _guarded_connect
 
         mod.socket = GuardedSocket
+        return mod
+    if base == "subprocess":
+        mod = types.ModuleType("subprocess", module.__doc__)
+        mod.__dict__.update({k: getattr(subprocess, k) for k in dir(subprocess)})
+        mod.run = _blocked_subprocess_run
+        return mod
+    if base == "os":
+        mod = types.ModuleType("os", module.__doc__)
+        mod.__dict__.update({k: getattr(os, k) for k in dir(os)})
+        mod.urandom = _guarded_urandom
+        return mod
+    if base == "secrets":
+        mod = types.ModuleType("secrets", module.__doc__)
+        mod.__dict__.update({k: getattr(pysecrets, k) for k in dir(pysecrets)})
+        mod.token_bytes = _guarded_urandom
+        return mod
+    if base == "random":
+        mod = types.ModuleType("random", module.__doc__)
+        mod.__dict__.update({k: getattr(random, k) for k in dir(random)})
+        mod.randbytes = _guarded_urandom
         return mod
     if base == "pathlib":
         mod = types.ModuleType("pathlib", module.__doc__)
@@ -160,6 +226,10 @@ def _sigxcpu_handler(signum, frame):
 _STOP = object()
 
 
+class _KillRequest(Exception):
+    """Internal exception used for asynchronous forced thread shutdown."""
+
+
 @dataclass
 class Stats:
     cpu_ms: float
@@ -206,6 +276,7 @@ class SandboxThread(threading.Thread):
         tracer: Optional["Tracer"] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,
+        capabilities: Optional[dict[str, Any]] = None,
     ):
         super().__init__(name=name, daemon=True)
         self._logger = logging.getLogger(f"pyisolate.{name}")
@@ -231,6 +302,8 @@ class SandboxThread(threading.Thread):
         self._cgroup_path = cgroup_path
         self._trace_enabled = False
         self._syscall_log: list[str] = []
+        self._capabilities = dict(capabilities or {})
+        self._quarantine_reason: str | None = None
 
     def snapshot(self) -> dict:
         """Return serializable configuration state."""
@@ -243,6 +316,7 @@ class SandboxThread(threading.Thread):
             if self.allowed_imports is not None
             else None,
             "numa_node": self.numa_node,
+            "capabilities": sorted(self._capabilities),
         }
 
     def enable_tracing(self) -> None:
@@ -286,10 +360,54 @@ class SandboxThread(threading.Thread):
         except queue.Empty:
             raise errors.TimeoutError("no message received")
 
-    def stop(self, timeout: float = 0.2) -> None:
+    def cancel(self, timeout: float = 0.2) -> bool:
+        """Request cooperative shutdown and wait up to *timeout* seconds."""
         self._stop_event.set()
         self._inbox.put(_STOP)
         self.join(timeout)
+        return not self.is_alive()
+
+    def kill(self, timeout: float = 0.2) -> bool:
+        """Attempt non-cooperative termination for wedged guest code."""
+        if self.cancel(timeout=timeout):
+            return True
+        if self.ident is None:
+            return not self.is_alive()
+        for _ in range(3):
+            result = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                ctypes.c_ulong(self.ident), ctypes.py_object(_KillRequest)
+            )
+            if result > 1:
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                    ctypes.c_ulong(self.ident), None
+                )
+            self.join(timeout / 3 if timeout > 0 else 0)
+            if not self.is_alive():
+                return True
+        return False
+
+    def stop(self, timeout: float = 0.2) -> None:
+        if not self.cancel(timeout=timeout):
+            self.kill(timeout=timeout)
+
+    def reap(self) -> bool:
+        """Drain pending messages after termination."""
+        if self.is_alive():
+            return False
+        while not self._inbox.empty():
+            try:
+                self._inbox.get_nowait()
+            except queue.Empty:
+                break
+        while not self._outbox.empty():
+            try:
+                self._outbox.get_nowait()
+            except queue.Empty:
+                break
+        return True
+
+    def quarantine(self, reason: str) -> None:
+        self._quarantine_reason = reason
 
     def reset(
         self,
@@ -300,6 +418,7 @@ class SandboxThread(threading.Thread):
         allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,
+        capabilities: Optional[dict[str, Any]] = None,
     ) -> None:
         """Reuse this thread for a new sandbox."""
         old_path = getattr(self, "_cgroup_path", None)
@@ -320,6 +439,7 @@ class SandboxThread(threading.Thread):
         self._syscall_log = []
         self._start_time = None
         self._cgroup_path = cgroup_path
+        self._capabilities = dict(capabilities or {})
         # Request the sandbox thread to (re)attach itself to the new cgroup.
         # The attachment must happen from the sandbox thread's context.
         self._inbox.put(_CgroupAttach(old_path))
@@ -362,7 +482,7 @@ class SandboxThread(threading.Thread):
             self._cpu_time = 0.0
             self._start_time = None
 
-            local_vars = {"post": self._outbox.put}
+            local_vars = {"post": self._outbox.put, "caps": self._capabilities}
 
             if self.numa_node is not None:
                 bind_current_thread(self.numa_node)
@@ -404,6 +524,13 @@ class SandboxThread(threading.Thread):
                 else:
                     _thread_local.tcp = allowed_tcp
                 _thread_local.fs = allowed_fs
+                _thread_local.fs_capability = self._capabilities.get("filesystem")
+                _thread_local.net_capability = self._capabilities.get("network")
+                _thread_local.subprocess_capability = self._capabilities.get(
+                    "subprocess"
+                )
+                _thread_local.clock_capability = self._capabilities.get("clock")
+                _thread_local.random_capability = self._capabilities.get("random")
 
                 builtins_dict = _SAFE_BUILTINS.copy()
                 builtins_dict["open"] = _blocked_open
@@ -453,6 +580,8 @@ class SandboxThread(threading.Thread):
                         ):
                             raise errors.MemoryExceeded()
                     except Exception as exc:  # real impl would sanitize
+                        if isinstance(exc, _KillRequest):
+                            break
                         self._errors += 1
                         self._start_time = None
                         if self._on_violation and isinstance(exc, errors.PolicyError):

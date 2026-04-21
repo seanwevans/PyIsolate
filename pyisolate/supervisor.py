@@ -32,8 +32,9 @@ NAME_PATTERN = DEFAULT_NAME_PATTERN
 class Sandbox:
     """Handle to a sandbox thread."""
 
-    def __init__(self, thread: SandboxThread):
+    def __init__(self, thread: SandboxThread, supervisor: "Supervisor"):
         self._thread = thread
+        self._supervisor = supervisor
 
     def exec(self, src: str) -> None:
         """Execute Python source inside the sandbox."""
@@ -49,6 +50,35 @@ class Sandbox:
 
     def close(self, timeout: float = 0.2) -> None:
         self._thread.stop(timeout)
+
+    def cancel(self, timeout: float = 0.2) -> bool:
+        return self._thread.cancel(timeout=timeout)
+
+    def kill(self, timeout: float = 0.2) -> bool:
+        return self._thread.kill(timeout=timeout)
+
+    def reap(self) -> bool:
+        return self._thread.reap()
+
+    def quarantine(self, reason: str = "manual quarantine") -> None:
+        self._thread.quarantine(reason)
+        self._supervisor.quarantine(self._thread.name, reason)
+
+    def reset(self) -> None:
+        self._thread.reset(
+            self._thread.name,
+            policy=self._thread.policy,
+            cpu_ms=self._thread.cpu_quota_ms,
+            mem_bytes=self._thread.mem_quota_bytes,
+            allowed_imports=sorted(self._thread.allowed_imports)
+            if self._thread.allowed_imports is not None
+            else None,
+            numa_node=self._thread.numa_node,
+            cgroup_path=self._thread._cgroup_path,
+        )
+
+    def recycle(self) -> "Sandbox":
+        return self._supervisor.recycle(self._thread.name)
 
     def enable_tracing(self) -> None:
         self._thread.enable_tracing()
@@ -89,14 +119,19 @@ class Sandbox:
 class Supervisor:
     """Main supervisor owning all sandboxes."""
 
-    def __init__(self, warm_pool: int = 0):
+    def __init__(
+        self,
+        warm_pool: int = 0,
+        rollout_mode: str = "dev",
+    ):
         self._sandboxes: Dict[str, SandboxThread] = {}
         self._lock = threading.Lock()
         self._alerts = AlertManager()
         self._tracer = Tracer()
         bpf_mod = importlib.import_module("pyisolate.bpf.manager")
         self._bpf = bpf_mod.BPFManager()
-        self._bpf.load()
+        self._rollout_mode = rollout_mode
+        self._bpf.load(mode=rollout_mode)
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
             t = SandboxThread(name=f"warm-{i}")
@@ -118,6 +153,7 @@ class Supervisor:
         mem_bytes: Optional[int] = None,
         allowed_imports: Optional[list[str]] = None,
         numa_node: Optional[int] = None,
+        capabilities: Optional[dict[str, object]] = None,
     ) -> Sandbox:
         """Create and start a sandbox thread."""
         global NAME_PATTERN
@@ -152,6 +188,7 @@ class Supervisor:
                     allowed_imports=allowed_imports,
                     numa_node=numa_node,
                     cgroup_path=cg_path,
+                    capabilities=capabilities,
                 )
                 thread._on_violation = self._alerts.notify
                 thread._tracer = self._tracer
@@ -166,6 +203,7 @@ class Supervisor:
                     tracer=self._tracer,
                     numa_node=numa_node,
                     cgroup_path=cg_path,
+                    capabilities=capabilities,
                 )
                 thread.start()
             self._sandboxes[name] = thread
@@ -174,14 +212,16 @@ class Supervisor:
         # Reset any temporary overrides of the name validation pattern to avoid
         # leaking state across sandboxes.
         NAME_PATTERN = DEFAULT_NAME_PATTERN
-        return Sandbox(thread)
+        return Sandbox(thread, self)
 
     def list_active(self) -> Dict[str, Sandbox]:
         """Return currently active sandboxes."""
         self._cleanup()
         with self._lock:
             return {
-                name: Sandbox(t) for name, t in self._sandboxes.items() if t.is_alive()
+                name: Sandbox(t, self)
+                for name, t in self._sandboxes.items()
+                if t.is_alive()
             }
 
     def get_active_threads(self) -> list[SandboxThread]:
@@ -233,6 +273,43 @@ class Supervisor:
         for sb in sandboxes + warm:
             sb.stop()
         self._cleanup()
+
+    def quarantine(self, name: str, reason: str) -> None:
+        with self._lock:
+            thread = self._sandboxes.get(name)
+        if thread is None:
+            return
+        logger.warning("sandbox %s quarantined: %s", name, reason)
+        thread.quarantine(reason)
+        if thread.is_alive():
+            thread.kill(timeout=0.2)
+        thread.reap()
+        with self._lock:
+            self._sandboxes.pop(name, None)
+        cgroup.delete(getattr(thread, "_cgroup_path", None))
+
+    def recycle(self, name: str) -> Sandbox:
+        """Replace a sandbox thread with a fresh instance using prior config."""
+        with self._lock:
+            thread = self._sandboxes.get(name)
+            if thread is None:
+                raise KeyError(f"unknown sandbox: {name}")
+            snap = thread.snapshot()
+        if thread.is_alive():
+            if not thread.cancel(timeout=0.2):
+                self.quarantine(name, "recycle requested on unresponsive sandbox")
+            else:
+                thread.reap()
+        with self._lock:
+            self._sandboxes.pop(name, None)
+        return self.spawn(
+            name=snap["name"],
+            policy=snap["policy"],
+            cpu_ms=snap["cpu_ms"],
+            mem_bytes=snap["mem_bytes"],
+            allowed_imports=snap["allowed_imports"],
+            numa_node=snap["numa_node"],
+        )
 
     def _cleanup(self) -> None:
         """Remove dead sandboxes from the registry."""

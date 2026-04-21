@@ -4,6 +4,7 @@ import os
 import socket
 import tempfile
 import urllib.request
+import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.error import URLError
@@ -68,6 +69,7 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
 
 
 from .compiler import PolicyCompilerError, compile_policy  # noqa: F401
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -98,8 +100,8 @@ def _validate(data: object) -> None:
     if "version" not in data:
         raise ValueError('policy missing "version" key')
 
-    version = data.get("version")
-    if str(version) != "0.1":
+    version = str(data.get("version"))
+    if version not in {"0.1", "1", "1.0"}:
         raise ValueError(f"unsupported policy version: {version}")
 
     for section in ("defaults", "sandboxes"):
@@ -107,7 +109,7 @@ def _validate(data: object) -> None:
             raise ValueError(f'"{section}" must be a mapping')
 
 
-def refresh(path: str, token: str) -> None:
+def refresh(path: str, token: str, *, dry_run: bool = False):
     """Parse *path* and atomically update eBPF policy maps."""
 
     # Fail fast if the YAML is malformed/schema-invalid before compiling/reloading.
@@ -123,6 +125,13 @@ def refresh(path: str, token: str) -> None:
     compiled = compile_policy(path)
 
     import json
+
+    if compiled.deny_log:
+        for line in compiled.deny_log:
+            logger.warning("policy deny rule active: %s", line)
+
+    if dry_run:
+        return compiled
 
     # Write the compiled representation for the BPF manager
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp:
@@ -150,8 +159,13 @@ def _is_timeout_error(exc: Exception) -> bool:
 
 
 def refresh_remote(
-    url: str, token: str, timeout: float | None = None, max_retries: int = 0
-) -> None:
+    url: str,
+    token: str,
+    timeout: float | None = None,
+    max_retries: int = 0,
+    *,
+    dry_run: bool = False,
+):
     """Fetch policy YAML from *url* and apply it."""
     attempts = max(1, max_retries + 1)
 
@@ -175,7 +189,7 @@ def refresh_remote(
         tmp_path = tmp.name
 
     try:
-        refresh(tmp_path, token)
+        return refresh(tmp_path, token, dry_run=dry_run)
     finally:
         os.unlink(tmp_path)
 
