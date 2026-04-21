@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import logging
 import os
 import threading
@@ -66,15 +67,37 @@ def attach_current(path: Path | None) -> None:
 
 
 def delete(path: Path | None) -> None:
-    """Remove an empty cgroup."""
+    """Remove a cgroup directory with best-effort thread drain."""
     if path is None:
         return
+
+    parent_threads = path.parent / "cgroup.threads"
+    child_threads = path / "cgroup.threads"
+
+    # Best-effort drain of lingering tasks so rmdir has a chance to succeed.
     try:
-        for f in path.iterdir():
-            f.unlink(missing_ok=True)
+        tids = child_threads.read_text().splitlines()
+    except (OSError, PermissionError, FileNotFoundError):
+        tids = []
+
+    for tid in tids:
+        try:
+            parent_threads.write_text(tid)
+        except (OSError, PermissionError, FileNotFoundError):
+            # Still attempt rmdir and rely on errno-aware logging below.
+            break
+
+    try:
         path.rmdir()
-    except (OSError, PermissionError, FileNotFoundError) as exc:
-        log.warning("Failed to delete cgroup %s: %s", path, exc)
+    except FileNotFoundError as exc:
+        log.warning("Cgroup path missing while deleting %s: %s", path, exc)
+    except PermissionError as exc:
+        log.warning("Permission denied deleting cgroup %s: %s", path, exc)
+    except OSError as exc:
+        if exc.errno in {errno.EBUSY, errno.ENOTEMPTY}:
+            log.warning("Cgroup %s is busy/non-empty; skipping delete: %s", path, exc)
+        else:
+            log.warning("Failed to delete cgroup %s: %s", path, exc)
 
 
 def list_children() -> list[Path]:
