@@ -119,14 +119,19 @@ class Sandbox:
 class Supervisor:
     """Main supervisor owning all sandboxes."""
 
-    def __init__(self, warm_pool: int = 0):
+    def __init__(
+        self,
+        warm_pool: int = 0,
+        rollout_mode: str = "dev",
+    ):
         self._sandboxes: Dict[str, SandboxThread] = {}
         self._lock = threading.Lock()
         self._alerts = AlertManager()
         self._tracer = Tracer()
         bpf_mod = importlib.import_module("pyisolate.bpf.manager")
         self._bpf = bpf_mod.BPFManager()
-        self._bpf.load()
+        self._rollout_mode = rollout_mode
+        self._bpf.load(mode=rollout_mode)
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
             t = SandboxThread(name=f"warm-{i}")
