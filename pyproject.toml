@@ -13,8 +13,16 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["pyisolate"]
 
+[project.scripts]
+pyisolate-doctor = "pyisolate.doctor:main"
+
 [project.optional-dependencies]
 pqcrypto = ["pqcrypto"]
+release = [
+    "build",
+    "twine",
+    "sigstore",
+]
 dev = [
     "pytest",
     "pre-commit",
