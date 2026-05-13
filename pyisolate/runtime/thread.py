@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import ctypes
+import fnmatch
 import io
 import logging
 import os
@@ -24,7 +25,7 @@ import time
 import tracemalloc
 import types
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
@@ -45,19 +46,74 @@ from ..capabilities import (
 )
 from .protocol import (
     AttachCgroupRequest,
+    BrokerRequest,
     CallRequest,
     ExecRequest,
+    LogEvent,
+    MetricEvent,
     StopRequest,
 )
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
+from ..telemetry import DenialEvent
+from ..policy.model import from_sandbox_policy
 
 _thread_local = threading.local()
 
 _ORIG_OPEN = builtins.open
 _ORIG_SOCKET_CONNECT = socket.socket.connect
+_ORIG_SOCKET_CONNECT_EX = socket.socket.connect_ex
+_ORIG_SOCKET_SENDTO = socket.socket.sendto
 _ORIG_THREAD_START = threading.Thread.start
 _CAPABILITY_MARKER = "__pyisolate_capability__"
+# No modules are imported by default. Examples and tests must name every
+# module they need via Policy.allow_import(...) or allowed_imports=[...].
+# Keeping this empty makes missing import policy fail closed instead of
+# falling back to unrestricted Python imports.
+DEFAULT_ALLOWED_IMPORTS: frozenset[str] = frozenset()
+_BLOCKED_MODULES = {"ctypes", "multiprocessing"}
+
+
+def _active_sandbox() -> "SandboxThread | None":
+    return getattr(_thread_local, "sandbox", None)
+
+
+def _deny(
+    capability: str,
+    attempted_action: str,
+    policy_rule: str,
+    message: str,
+    *,
+    kernel_decision: str = "not_evaluated",
+    broker_decision: str = "deny",
+) -> errors.PolicyError:
+    sandbox = _active_sandbox()
+    cell = sandbox.name if sandbox is not None else "<unknown>"
+    event = DenialEvent(
+        cell=cell,
+        capability=capability,
+        attempted_action=attempted_action,
+        policy_rule=policy_rule,
+        kernel_decision=kernel_decision,
+        broker_decision=broker_decision,
+    )
+    if sandbox is not None:
+        sandbox._record_denial(event)
+    return errors.PolicyError(message, denial_event=event)
+
+
+def _format_roots(roots: Iterable[Path]) -> str:
+    return ",".join(str(root) for root in roots)
+
+
+def _subprocess_command_name(args: object) -> str | None:
+    if isinstance(args, str):
+        return args.split(maxsplit=1)[0] if args else ""
+    if isinstance(args, (list, tuple)):
+        if not args:
+            return None
+        return str(args[0])
+    return str(args)
 
 
 def _serialize_capability(capability: Any) -> Any:
@@ -186,6 +242,18 @@ def _iter_authorities(policy, capabilities: Optional[dict[str, Any]]) -> list[ob
                 authorities.append(capability)
     return authorities
 
+def _fs_rule_matches(pattern: str, path: Path) -> bool:
+    path_text = str(path)
+    if pattern.endswith("/**"):
+        root = Path(pattern[:-3]).resolve(strict=False)
+        return path == root or path.is_relative_to(root)
+    if any(char in pattern for char in "*?["):
+        return fnmatch.fnmatch(path_text, pattern)
+    return path == Path(pattern).resolve(strict=False) or path.is_relative_to(
+        Path(pattern).resolve(strict=False)
+    )
+
+
 def _blocked_open(file, *args, **kwargs):
     """Restrict file access based on the current thread's policy."""
 
@@ -209,13 +277,38 @@ def _blocked_open(file, *args, **kwargs):
             if not permitted:
                 raise errors.PolicyError("file access blocked")
         elif fs_cap is not None:
+        runtime_policy = getattr(_thread_local, "runtime_policy", None)
+        if fs_cap is not None:
             if not fs_cap.allows(path):
-                raise errors.PolicyError("file access blocked")
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    f"capability:filesystem roots={_format_roots(fs_cap.roots)}",
+                    "file access blocked",
+                )
         elif allowed is not None:
             if not any(path.is_relative_to(a) for a in allowed):
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    f"allow_fs:{_format_roots(allowed)}",
+                    "file access blocked",
+                )
+                raise errors.PolicyError("file access blocked")
+        elif runtime_policy is not None:
+            if any(_fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs):
+                raise errors.PolicyError("file access blocked")
+            if not any(
+                _fs_rule_matches(rule.path, path) for rule in runtime_policy.allow_fs
+            ):
                 raise errors.PolicyError("file access blocked")
         elif getattr(_thread_local, "active", False):
-            raise errors.PolicyError("file access blocked")
+            raise _deny(
+                "filesystem",
+                f"open:{path}",
+                "deny-by-default",
+                "file access blocked",
+            )
 
     sandbox = getattr(_thread_local, "sandbox", None)
     if sandbox is not None:
@@ -234,8 +327,10 @@ def _blocked_open(file, *args, **kwargs):
 
 def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
     authority = getattr(_thread_local, "authority", None)
+    
+def _check_network_destination(address: Iterable[str]) -> None:
     net_cap = getattr(_thread_local, "net_capability", None)
-    allowed = getattr(_thread_local, "tcp", None)
+    runtime_policy = getattr(_thread_local, "runtime_policy", None)
     if isinstance(address, tuple):
         host, port, *_ = address
     else:
@@ -244,13 +339,37 @@ def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
         if not authority.allows_tcp(str(host), int(port)):
             raise errors.PolicyError(f"connect blocked: {host}:{port}")
     elif net_cap is not None:
+    destination = f"{host}:{port}"
+    if net_cap is not None:
         if not net_cap.allows(str(host), int(port)):
-            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+            raise _deny(
+                "network",
+                f"connect:{host}:{port}",
+                f"capability:network destinations={','.join(sorted(net_cap.destinations))}",
+                f"connect blocked: {host}:{port}",
+            )
     elif allowed is not None:
         if f"{host}:{port}" not in allowed:
-            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+            raise _deny(
+                "network",
+                f"connect:{host}:{port}",
+                f"allow_tcp:{','.join(sorted(allowed))}",
+                f"connect blocked: {host}:{port}",
+            )
     else:
-        raise errors.PolicyError(f"connect blocked: {host}:{port}")
+        raise _deny(
+            "network",
+            f"connect:{host}:{port}",
+            "deny-by-default",
+            f"connect blocked: {host}:{port}",
+        )            
+    elif runtime_policy is not None:
+        if any(rule.destination == destination for rule in runtime_policy.deny_tcp):
+            raise errors.PolicyError(f"connect blocked: {destination}")
+        if not any(rule.destination == destination for rule in runtime_policy.allow_tcp):
+            raise errors.PolicyError(f"connect blocked: {destination}")
+    else:
+        raise errors.PolicyError(f"connect blocked: {destination}")
     sandbox = getattr(_thread_local, "sandbox", None)
     if sandbox is not None:
         sandbox._network_ops += 1
@@ -259,20 +378,78 @@ def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
             and sandbox._network_ops > sandbox.network_ops_max
         ):
             raise errors.NetworkExceeded()
+
+
+def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
+    _check_network_destination(address)
     return _ORIG_SOCKET_CONNECT(self_socket, address)
+
+
+def _guarded_connect_ex(self_socket: socket.socket, address: Iterable[str]):
+    _check_network_destination(address)
+    return _ORIG_SOCKET_CONNECT_EX(self_socket, address)
+
+
+def _guarded_sendto(self_socket: socket.socket, data, *args, **kwargs):
+    if args and isinstance(args[-1], tuple):
+        _check_network_destination(args[-1])
+    elif "address" in kwargs:
+        _check_network_destination(kwargs["address"])
+    else:
+        raise errors.PolicyError("socket sendto blocked")
+    return _ORIG_SOCKET_SENDTO(self_socket, data, *args, **kwargs)
+
+
+def _deny_side_effect_api(api_name: str):
+    def _blocked(*args, **kwargs):
+        raise errors.PolicyError(
+            f"{api_name} is blocked in the Python sandbox wrapper; "
+            "production enforcement must come from the BPF/cgroup broker path"
+        )
+
+    _blocked.__name__ = f"blocked_{api_name.replace('.', '_')}"
+    return _blocked
 
 
 def _blocked_subprocess_run(*args, **kwargs):
     cap = getattr(_thread_local, "subprocess_capability", None)
+    attempted = args[0] if args else kwargs.get("args")
+    command_name = _subprocess_command_name(attempted)
+    action = (
+        f"subprocess.run:{command_name}" if command_name else "subprocess.run:<empty>"
+    )
     if cap is None:
-        raise errors.PolicyError("subprocess access blocked")
+        raise _deny(
+            "subprocess", action, "deny-by-default", "subprocess access blocked"
+        )
+    if isinstance(attempted, str) and not cap.allow_shell:
+        raise _deny(
+            "subprocess",
+            action,
+            "capability:subprocess shell=false",
+            "shell string commands are not permitted",
+        )
+    if command_name is None:
+        raise ValueError("empty command")
+    if command_name not in cap.allowed_commands:
+        raise _deny(
+            "subprocess",
+            action,
+            f"capability:subprocess allowed_commands={','.join(sorted(cap.allowed_commands))}",
+            f"subprocess blocked: {command_name}",
+        )
     return cap.run(*args, **kwargs)
 
 
 def _guarded_urandom(n: int) -> bytes:
     cap = getattr(_thread_local, "random_capability", None)
     if cap is None:
-        raise errors.PolicyError("randomness access blocked")
+        raise _deny(
+            "random",
+            f"random.bytes:{n}",
+            "deny-by-default",
+            "randomness access blocked",
+        )
     return cap.bytes(n)
 
 
@@ -300,8 +477,18 @@ def _make_sandbox_thread_class(sandbox: "SandboxThread"):
 
 
 def _wrap_module(name: str, module):
+    """Return developer-ergonomic wrappers around risky modules.
+
+    These Python wrappers fail fast for tests and local development. They are
+    not a production sandbox boundary; production denial and brokering should
+    be enforced by the supervisor's BPF/cgroup broker path.
+    """
+
     base = name.split(".")[0]
+    if base in _BLOCKED_MODULES:
+        raise errors.PolicyError(f"import of {base!r} is not permitted")
     if base == "time":
+
         def _require_clock() -> ClockCapability:
             cap = getattr(_thread_local, "clock_capability", None)
             return cap
@@ -340,19 +527,77 @@ def _wrap_module(name: str, module):
         mod.__dict__.update({k: getattr(socket, k) for k in dir(socket)})
 
         class GuardedSocket(socket.socket):
+            def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+                sock_type = type if type != -1 else socket.SOCK_STREAM
+                # Socket type may include flags such as SOCK_NONBLOCK; the low
+                # nibble carries the base type on Linux. Do not treat regular
+                # SOCK_STREAM as raw just because 1 & 3 is truthy.
+                if int(sock_type) & 0xF == int(socket.SOCK_RAW):
+                    raise errors.PolicyError("raw sockets are blocked")
+                if hasattr(socket, "AF_PACKET") and family == socket.AF_PACKET:
+                    raise errors.PolicyError("packet sockets are blocked")
+                super().__init__(family, type, proto, fileno)
+
             connect = _guarded_connect
+            connect_ex = _guarded_connect_ex
+            sendto = _guarded_sendto
+
+        def _create_connection(
+            address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None
+        ):
+            sock = GuardedSocket(socket.AF_INET, socket.SOCK_STREAM)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address is not None:
+                sock.bind(source_address)
+            try:
+                sock.connect(address)
+                return sock
+            except Exception:
+                sock.close()
+                raise
 
         mod.socket = GuardedSocket
+        mod.create_connection = _create_connection
+        mod.socketpair = _deny_side_effect_api("socket.socketpair")
+        mod.fromfd = _deny_side_effect_api("socket.fromfd")
+        if hasattr(socket, "create_server"):
+            mod.create_server = _deny_side_effect_api("socket.create_server")
         return mod
     if base == "subprocess":
         mod = types.ModuleType("subprocess", module.__doc__)
         mod.__dict__.update({k: getattr(subprocess, k) for k in dir(subprocess)})
         mod.run = _blocked_subprocess_run
+        for attr in (
+            "Popen",
+            "call",
+            "check_call",
+            "check_output",
+            "getoutput",
+            "getstatusoutput",
+        ):
+            if hasattr(mod, attr):
+                setattr(mod, attr, _deny_side_effect_api(f"subprocess.{attr}"))
         return mod
     if base == "os":
         mod = types.ModuleType("os", module.__doc__)
         mod.__dict__.update({k: getattr(os, k) for k in dir(os)})
         mod.urandom = _guarded_urandom
+        for attr in (
+            "open",
+            "system",
+            "popen",
+            "fork",
+            "forkpty",
+            "posix_spawn",
+            "posix_spawnp",
+            "startfile",
+        ):
+            if hasattr(mod, attr):
+                setattr(mod, attr, _deny_side_effect_api(f"os.{attr}"))
+        for attr in dir(os):
+            if attr.startswith("exec") or attr.startswith("spawn"):
+                setattr(mod, attr, _deny_side_effect_api(f"os.{attr}"))
         return mod
     if base == "secrets":
         mod = types.ModuleType("secrets", module.__doc__)
@@ -399,15 +644,18 @@ def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
     return _wrap_module(name, module)
 
 
-def _make_importer(allowed: Optional[Iterable[str]]):
-    if allowed is None:
-        return _sandbox_import
+def _make_importer(allowed: Iterable[str]):
     allowed_set = {name.split(".")[0] for name in allowed}
 
     def _import(name, globals=None, locals=None, fromlist=(), level=0):
         base = name.split(".")[0]
         if base not in allowed_set:
-            raise errors.PolicyError(f"import of {name!r} is not permitted")
+            raise _deny(
+                "import",
+                f"import:{name}",
+                f"allow_import:{','.join(sorted(allowed_set))}",
+                f"import of {name!r} is not permitted",
+            )
         module = builtins.__import__(name, globals, locals, fromlist, level)
         return _wrap_module(name, module)
 
@@ -454,6 +702,7 @@ class Stats:
     errors: int
     operations: int
     cost: float
+    denials: list[DenialEvent] = field(default_factory=list)
 
 
 class SandboxThread(threading.Thread):
@@ -466,14 +715,17 @@ class SandboxThread(threading.Thread):
             imports.update(policy.imports)
         if policy is not None:
             imports.update(AuthoritySet.from_authorities(getattr(policy, "capabilities", []) or []).imports)
+        runtime_policy = from_sandbox_policy(policy) if policy is not None else None
+        if runtime_policy is not None and runtime_policy.imports:
+            imports.update(runtime_policy.imports)
 
         allowed_imports_provided = allowed_imports is not None
         if allowed_imports_provided:
             imports.update(allowed_imports)
 
-        if imports or allowed_imports_provided:
-            return imports
-        return None
+        if not imports and not allowed_imports_provided:
+            imports.update(DEFAULT_ALLOWED_IMPORTS)
+        return imports
 
     def _init_config_wiring(
         self,
@@ -489,10 +741,12 @@ class SandboxThread(threading.Thread):
         numa_node: Optional[int] = None,
         cgroup_path=None,
         capabilities: Optional[dict[str, Any]] = None,
+        enforcement_status: Any = None,
     ) -> None:
         self.policy = policy
         self._authority = AuthoritySet.from_authorities(_iter_authorities(policy, capabilities))
         self.cpu_quota_ms = cpu_ms if cpu_ms is not None else self._authority.cpu_ms
+        self.runtime_policy = from_sandbox_policy(policy) if policy is not None else None        
         self.mem_quota_bytes = mem_bytes
         self.wall_time_ms = wall_time_ms
         self.open_files_max = open_files_max
@@ -503,7 +757,28 @@ class SandboxThread(threading.Thread):
         self.numa_node = numa_node
         self._bound_numa_node = None
         self._cgroup_path = cgroup_path
+        self.quota_enforcement = enforcement_status
         self._capabilities = deserialize_capabilities(capabilities)
+        self._add_broker_ergonomic_imports()
+
+    def _add_broker_ergonomic_imports(self) -> None:
+        """Allow modules that are only useful with an explicit broker surface.
+
+        The baseline default remains empty. These additions are tied to
+        explicit policy/capability grants so examples can use the brokered
+        Python modules without weakening the fail-closed import default.
+        """
+
+        if self.policy is not None and getattr(self.policy, "tcp", None):
+            self.allowed_imports.add("socket")
+        if "network" in self._capabilities:
+            self.allowed_imports.add("socket")
+        if "subprocess" in self._capabilities:
+            self.allowed_imports.add("subprocess")
+        if "random" in self._capabilities:
+            self.allowed_imports.update({"os", "random", "secrets"})
+        if "clock" in self._capabilities:
+            self.allowed_imports.add("time")
 
     def _reset_runtime_state(self) -> None:
         self._cpu_time = 0.0
@@ -522,6 +797,7 @@ class SandboxThread(threading.Thread):
         self._network_ops = 0
         self._output_bytes = 0
         self._child_work = 0
+        self._denial_events: list[DenialEvent] = []
 
     def __init__(
         self,
@@ -540,6 +816,7 @@ class SandboxThread(threading.Thread):
         numa_node: Optional[int] = None,
         cgroup_path=None,
         capabilities: Optional[dict[str, Any]] = None,
+        enforcement_status: Any = None,
     ):
         super().__init__(name=name, daemon=True)
         self._logger = logging.getLogger(f"pyisolate.{name}")
@@ -561,6 +838,7 @@ class SandboxThread(threading.Thread):
             numa_node=numa_node,
             cgroup_path=cgroup_path,
             capabilities=capabilities,
+            enforcement_status=enforcement_status,
         )
         self._reset_runtime_state()
         # Dedup set spans sandbox lifetimes for this thread; message IDs are monotonic
@@ -575,9 +853,11 @@ class SandboxThread(threading.Thread):
             "policy": self.policy,
             "cpu_ms": self.cpu_quota_ms,
             "mem_bytes": self.mem_quota_bytes,
-            "allowed_imports": sorted(self.allowed_imports)
-            if self.allowed_imports is not None
-            else None,
+            "allowed_imports": (
+                sorted(self.allowed_imports)
+                if self.allowed_imports is not None
+                else None
+            ),
             "numa_node": self.numa_node,
             "capabilities": serialize_capabilities(self._capabilities),
             "wall_time_ms": self.wall_time_ms,
@@ -598,9 +878,11 @@ class SandboxThread(threading.Thread):
             "network_ops_max": self.network_ops_max,
             "output_bytes_max": self.output_bytes_max,
             "child_work_max": self.child_work_max,
-            "allowed_imports": sorted(self.allowed_imports)
-            if self.allowed_imports is not None
-            else None,
+            "allowed_imports": (
+                sorted(self.allowed_imports)
+                if self.allowed_imports is not None
+                else None
+            ),
             "numa_node": self.numa_node,
             "capabilities": serialize_capabilities(self._capabilities),
         }
@@ -630,10 +912,37 @@ class SandboxThread(threading.Thread):
         return len(repr(item).encode("utf-8"))
 
     def _post(self, item: Any) -> None:
+        self._emit(item)
+
+    def _emit(self, item: Any) -> None:
         self._output_bytes += self._estimate_output_size(item)
-        if self.output_bytes_max is not None and self._output_bytes > self.output_bytes_max:
+        if (
+            self.output_bytes_max is not None
+            and self._output_bytes > self.output_bytes_max
+        ):
             raise errors.OutputExceeded()
         self._outbox.put(item)
+
+    def _log(self, level: str, message: str, **fields: Any) -> None:
+        self._emit(LogEvent(level=level, message=message, fields=fields))
+
+    def _metric(
+        self, name: str, value: int | float, tags: Optional[dict[str, str]] = None
+    ) -> None:
+        self._emit(MetricEvent(name=name, value=value, tags=tags or {}))
+
+    def _request(
+        self, capability: str, action: str, payload: Optional[dict[str, Any]] = None
+    ) -> None:
+        if capability not in self._capabilities:
+            raise errors.PolicyError(f"capability request blocked: {capability}")
+        self._emit(
+            BrokerRequest(
+                capability=capability,
+                action=action,
+                payload=payload or {},
+            )
+        )
 
     def _check_open_files_quota(self) -> None:
         if self.open_files_max is not None and self._open_files >= self.open_files_max:
@@ -652,6 +961,16 @@ class SandboxThread(threading.Thread):
         if elapsed_ms > self.wall_time_ms:
             raise errors.WallTimeExceeded()
         return self._trace_guard
+
+    def _record_denial(self, event: DenialEvent) -> None:
+        self._denial_events.append(event)
+        self._logger.warning(
+            "operation denied", extra={"denial_event": event.to_dict()}
+        )
+
+    def get_denial_events(self) -> list[dict[str, str]]:
+        """Return structured denial telemetry for this sandbox."""
+        return [event.to_dict() for event in self._denial_events]
 
     def enable_tracing(self) -> None:
         """Start recording guest operations."""
@@ -724,6 +1043,22 @@ class SandboxThread(threading.Thread):
         if not self.cancel(timeout=timeout):
             self.kill(timeout=timeout)
 
+    def enforce_quota_breach(self, exc: Exception, reason: str, timeout: float = 0.05) -> bool:
+        """Record a kernel/watchdog quota breach and stop guest execution.
+
+        The watchdog calls this path from outside the sandbox thread, so it does
+        not depend on guest bytecode returning to Python-level quota checks.
+        If asynchronous termination cannot stop the thread promptly, the sandbox
+        is marked quarantined for supervisor cleanup.
+        """
+
+        self.termination_reason = reason
+        stopped = self.kill(timeout=timeout)
+        if not stopped:
+            self.quarantine(reason)
+        self._outbox.put(exc)
+        return stopped
+
     def reap(self) -> bool:
         """Drain pending messages after termination."""
         if self.is_alive():
@@ -758,6 +1093,7 @@ class SandboxThread(threading.Thread):
         numa_node: Optional[int] = None,
         cgroup_path=None,
         capabilities: Optional[dict[str, Any]] = None,
+        enforcement_status: Any = None,
     ) -> None:
         """Reuse this thread for a new sandbox."""
         old_path = getattr(self, "_cgroup_path", None)
@@ -775,6 +1111,7 @@ class SandboxThread(threading.Thread):
             numa_node=numa_node,
             cgroup_path=cgroup_path,
             capabilities=capabilities,
+            enforcement_status=enforcement_status,
         )
         self._reset_runtime_state()
         # Request the sandbox thread to (re)attach itself to the new cgroup.
@@ -797,6 +1134,7 @@ class SandboxThread(threading.Thread):
             errors=self._errors,
             operations=self._ops,
             cost=cost,
+            denials=list(self._denial_events),
         )
 
     # internal thread run loop
@@ -821,7 +1159,13 @@ class SandboxThread(threading.Thread):
             self._cpu_time = 0.0
             self._start_time = None
 
-            local_vars = {"post": self._post, "caps": self._capabilities}
+            local_vars = {
+                "post": self._post,
+                "log": self._log,
+                "metric": self._metric,
+                "request": self._request,
+                "caps": self._capabilities,
+            }
 
             if self.numa_node is not None:
                 bind_current_thread(self.numa_node)
@@ -875,6 +1219,7 @@ class SandboxThread(threading.Thread):
                     if _iter_authorities(self.policy, self._capabilities)
                     else None
                 )
+                _thread_local.runtime_policy = self.runtime_policy
                 _thread_local.fs_capability = self._capabilities.get("filesystem")
                 _thread_local.net_capability = self._capabilities.get("network")
                 _thread_local.subprocess_capability = self._capabilities.get(
@@ -921,16 +1266,9 @@ class SandboxThread(threading.Thread):
                         self._start_time = None
                         cur, peak = tracemalloc.get_traced_memory()
                         self._mem_peak = max(self._mem_peak, peak - self._mem_base)
-                        if (
-                            self.cpu_quota_ms is not None
-                            and self._cpu_time > self.cpu_quota_ms
-                        ):
-                            raise errors.CPUExceeded()
-                        if (
-                            self.mem_quota_bytes is not None
-                            and self._mem_peak > self.mem_quota_bytes
-                        ):
-                            raise errors.MemoryExceeded()
+                        # CPU and RSS quotas are enforced by cgroups/eBPF and
+                        # ResourceWatchdog.  tracemalloc remains debugging
+                        # telemetry for Stats only; it is not a security limit.
                     except Exception as exc:  # real impl would sanitize
                         if isinstance(exc, _KillRequest):
                             break

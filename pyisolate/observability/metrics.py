@@ -59,6 +59,35 @@ class MetricsExporter:
                 "counter",
                 f'pyisolate_errors_total{{sandbox="{label}"}} {stats.errors}',
             )
+            denials = getattr(stats, "denials", [])
+            emit(
+                "pyisolate_denials_total",
+                "Total denied operations by sandbox",
+                "counter",
+                f'pyisolate_denials_total{{sandbox="{label}"}} {len(denials)}',
+            )
+            for event in denials:
+                if hasattr(event, "to_dict"):
+                    event = event.to_dict()
+                capability = _escape_label(str(event.get("capability", "unknown")))
+                policy_rule = _escape_label(str(event.get("policy_rule", "unknown")))
+                kernel_decision = _escape_label(
+                    str(event.get("kernel_decision", "unknown"))
+                )
+                broker_decision = _escape_label(
+                    str(event.get("broker_decision", "unknown"))
+                )
+                emit(
+                    "pyisolate_denial_events_total",
+                    "Structured denied operations labeled by decision dimensions",
+                    "counter",
+                    (
+                        f'pyisolate_denial_events_total{{sandbox="{label}",'
+                        f'capability="{capability}",policy_rule="{policy_rule}",'
+                        f'kernel_decision="{kernel_decision}",'
+                        f'broker_decision="{broker_decision}"}} 1'
+                    ),
+                )
             emit(
                 "pyisolate_cost",
                 "Internal cost score for sandbox",

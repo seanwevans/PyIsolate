@@ -5,7 +5,7 @@ import socket
 import tempfile
 import urllib.request
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.error import URLError
 
@@ -70,6 +70,16 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
 
 from ..capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
 from .compiler import PolicyCompilerError, compile_policy  # noqa: F401
+from .model import (  # noqa: F401
+    FilesystemRule,
+    NetworkRule,
+    RuntimePolicy,
+    RuntimePolicySet,
+    from_compiled_policy,
+    from_sandbox_policy,
+    from_yaml_dict,
+    to_bpf_map_entries,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -231,7 +241,7 @@ def refresh(path: str, token: str, *, dry_run: bool = False):
 
     # Write the compiled representation for the BPF manager
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp:
-        json.dump(asdict(compiled), tmp)
+        json.dump(from_compiled_policy(compiled).to_dict(), tmp)
         json_path = Path(tmp.name)
 
     # Upon successful parse, swap the live maps via the supervisor

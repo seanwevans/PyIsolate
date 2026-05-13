@@ -13,7 +13,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from . import cgroup, recovery
 from .capabilities import ROOT, RootCapability
@@ -22,6 +22,7 @@ from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
+from .telemetry import DenialEvent
 from .watchdog import ResourceWatchdog
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,32 @@ logger = logging.getLogger(__name__)
 # Allowed sandbox name pattern: alphanumerics, hyphen, underscore
 DEFAULT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 NAME_PATTERN = DEFAULT_NAME_PATTERN
+
+BackendMode = Literal["subinterpreter", "process", "microvm"]
+DEFAULT_BACKEND: BackendMode = "subinterpreter"
+SUPPORTED_BACKENDS: tuple[BackendMode, ...] = (
+    "subinterpreter",
+    "process",
+    "microvm",
+)
+IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = ("subinterpreter",)
+
+
+def _normalize_backend(backend: str) -> BackendMode:
+    if backend not in SUPPORTED_BACKENDS:
+        options = ", ".join(repr(item) for item in SUPPORTED_BACKENDS)
+        raise ValueError(f"backend must be one of: {options}")
+    return backend  # type: ignore[return-value]
+
+
+def _require_implemented_backend(backend: BackendMode) -> None:
+    if backend in IMPLEMENTED_BACKENDS:
+        return
+    raise NotImplementedError(
+        f"backend={backend!r} is an explicit isolation mode, but this build only "
+        "implements backend='subinterpreter'. Use an external process or microVM "
+        "launcher until the native backend is available."
+    )
 
 
 class Sandbox:
@@ -72,6 +99,7 @@ class Sandbox:
         self._thread.reset(
             self._thread.name,
             cgroup_path=self._thread._cgroup_path,
+            enforcement_status=self._thread.quota_enforcement,
             **reset_config,
         )
 
@@ -83,6 +111,10 @@ class Sandbox:
 
     def get_syscall_log(self) -> list[str]:
         return self._thread.get_syscall_log()
+
+    def get_denial_events(self) -> list[dict[str, str]]:
+        """Return structured denial telemetry emitted by this sandbox."""
+        return self._thread.get_denial_events()
 
     def profile(self):
         return self._thread.profile()
@@ -110,12 +142,26 @@ class Sandbox:
                 pass
 
     @property
+    def backend(self) -> BackendMode:
+        """Return the isolation backend used by this sandbox handle."""
+        return getattr(self._thread, "_backend", DEFAULT_BACKEND)
+
+    @property
     def stats(self):
         return self._thread.stats
 
     @property
     def termination_reason(self) -> str | None:
         return self._thread.termination_reason
+
+    @property
+    def quota_enforcement(self):
+        """Return cgroup quota enforcement status for this sandbox."""
+        return self._thread.quota_enforcement
+
+    @property
+    def quarantine_reason(self) -> str | None:
+        return self._thread._quarantine_reason
 
 
 class Supervisor:
@@ -133,7 +179,15 @@ class Supervisor:
         bpf_mod = importlib.import_module("pyisolate.bpf.manager")
         self._bpf = bpf_mod.BPFManager()
         self._rollout_mode = rollout_mode
-        self._bpf.load(mode=rollout_mode)
+        try:
+            self._bpf.load(mode=rollout_mode)
+        except TypeError as exc:
+            # Test and compatibility shims may still expose the legacy
+            # load(strict=False) signature.  Real BPFManager validates rollout
+            # modes itself.
+            if "mode" not in str(exc):
+                raise
+            self._bpf.load(strict=(rollout_mode == "hardened"))
         self._recover_state()
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
@@ -210,9 +264,18 @@ class Supervisor:
         capabilities: Optional[dict[str, object]] = None,
         tenant: Optional[str] = None,
         tenant_quota: Optional[int] = None,
+        backend: BackendMode = DEFAULT_BACKEND,
     ) -> Sandbox:
-        """Create and start a sandbox thread."""
+        """Create and start a sandbox in the requested isolation backend.
+
+        ``backend="subinterpreter"`` is the execution-cell backend and is not
+        a hard security boundary by itself. ``backend="process"`` and
+        ``backend="microvm"`` are explicit boundary modes; they are reserved
+        API choices and fail closed until native launchers are available.
+        """
         global NAME_PATTERN
+        backend = _normalize_backend(backend)
+        _require_implemented_backend(backend)
         if not isinstance(name, str) or not name:
             raise ValueError("Sandbox name must be non-empty string")
         if len(name) > 64:
@@ -243,7 +306,10 @@ class Supervisor:
             temp_dir = None
             thread = None
             try:
-                cg_path = cgroup.create(name, cpu_ms, mem_bytes)
+                cg_status = cgroup.create(
+                    name, cpu_ms, mem_bytes, mode=self._rollout_mode
+                )
+                cg_path = cg_status.path
                 temp_dir = recovery.allocate_temp_dir(name)
                 reset_config = {
                     "policy": policy,
@@ -264,10 +330,12 @@ class Supervisor:
                     thread.reset(
                         name,
                         cgroup_path=cg_path,
+                        enforcement_status=cg_status,
                         **reset_config,
                     )
                     thread._on_violation = self._alerts.notify
                     thread._tracer = self._tracer
+                    thread._backend = backend
                 else:
                     thread = SandboxThread(
                         name=name,
@@ -275,7 +343,9 @@ class Supervisor:
                         on_violation=self._alerts.notify,
                         tracer=self._tracer,
                         cgroup_path=cg_path,
+                        enforcement_status=cg_status,
                     )
+                    thread._backend = backend
                     thread.start()
                 thread._temp_dir = temp_dir
                 self._sandboxes[name] = thread
@@ -284,6 +354,12 @@ class Supervisor:
                     {
                         "name": name,
                         "cgroup_path": str(cg_path) if cg_path is not None else None,
+                        "quota_enforcement": {
+                            "mode": cg_status.mode,
+                            "cpu": cg_status.cpu,
+                            "memory": cg_status.memory,
+                            "errors": list(cg_status.errors),
+                        },
                         "temp_dir": str(temp_dir),
                     },
                 )
@@ -321,15 +397,25 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
-    def _authorize_control(self, token: str | RootCapability, op: str) -> ControlRequest:
+    def _authorize_control(
+        self, token: str | RootCapability, op: str
+    ) -> ControlRequest:
         """Validate an authenticated control-plane operation request."""
 
         if token is ROOT:
             handle = CapabilityHandle(kind="root", subject=op)
         else:
             if self._policy_token is None or token != self._policy_token:
-                logger.warning("control operation rejected: %s: invalid token", op)
-                raise PolicyAuthError("invalid policy token")
+                logger.warning("control operation rejected: invalid token for %s", op)
+                event = DenialEvent(
+                    cell="supervisor",
+                    capability="control",
+                    attempted_action=op,
+                    policy_rule="policy-token",
+                    kernel_decision="not_evaluated",
+                    broker_decision="deny",
+                )
+                raise PolicyAuthError("invalid policy token", denial_event=event)
             handle = CapabilityHandle(kind="policy-token", subject=op)
 
         return ControlRequest(op=op, capability=handle, payload={})
@@ -444,6 +530,10 @@ def _get_supervisor() -> Supervisor:
 
 # Public API
 def spawn(*args, **kwargs):
+    if "backend" in kwargs:
+        backend = _normalize_backend(kwargs["backend"])
+        _require_implemented_backend(backend)
+        kwargs["backend"] = backend
     return _get_supervisor().spawn(*args, **kwargs)
 
 

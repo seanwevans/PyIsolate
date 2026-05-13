@@ -327,4 +327,11 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
     )
 
 
-__all__ = ["CompiledPolicy", "compile_policy", "PolicyCompilerError"]
+__all__ = [
+    "CompiledPolicy",
+    "FSRule",
+    "SandboxPolicy",
+    "TCPRule",
+    "compile_policy",
+    "PolicyCompilerError",
+]
