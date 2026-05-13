@@ -11,6 +11,8 @@ import sysconfig
 from pathlib import Path
 from typing import Any
 
+from .nogil import no_gil_readiness_report
+
 
 def _safe_read_text(path: str) -> str | None:
     try:
@@ -117,6 +119,7 @@ def installation_report() -> dict[str, Any]:
             "features": kernel_feature_flags(),
         },
         "hardening": hardening_feature_flags(),
+        "no_gil": no_gil_readiness_report(),
     }
 
 

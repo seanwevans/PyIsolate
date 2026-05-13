@@ -263,3 +263,28 @@ MIT – see `LICENSE`.
 ## Acknowledgements
 
 Inspired by PyO3, Tetragon and libsodium.
+
+## No-GIL readiness is a release axis
+
+PyIsolate distinguishes **parallel cells** from **scheduled compartments**. A
+host may claim parallel-cell semantics only when the interpreter is a
+`--disable-gil` build, the process GIL is not enabled, and loaded native
+extensions have explicit no-GIL safety declarations. Otherwise PyIsolate treats
+work as scheduled compartments: isolated and policy-controlled, but not a hard
+parallel execution guarantee.
+
+Use the doctor subcommands to make this visible in CI and fleet diagnostics:
+
+```bash
+pyisolate doctor gil
+pyisolate doctor gil --json
+pyisolate doctor extensions
+pyisolate doctor extensions --json
+```
+
+The legacy `pyisolate-doctor` command still prints the full provenance report,
+including the `no_gil.axis.mode` field. On free-threaded builds, PyIsolate emits
+a `RuntimeWarning` when native extensions are already imported but not declared
+safe through `PYISOLATE_NOGIL_SAFE_MODULES`. Only set that environment variable
+after auditing upstream support for subinterpreters and CPython no-GIL/free
+threading.
