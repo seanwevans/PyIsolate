@@ -416,6 +416,7 @@ class SandboxThread(threading.Thread):
         numa_node: Optional[int] = None,
         cgroup_path=None,
         capabilities: Optional[dict[str, Any]] = None,
+        enforcement_status: Any = None,
     ) -> None:
         self.policy = policy
         self.cpu_quota_ms = cpu_ms
@@ -429,6 +430,7 @@ class SandboxThread(threading.Thread):
         self.numa_node = numa_node
         self._bound_numa_node = None
         self._cgroup_path = cgroup_path
+        self.quota_enforcement = enforcement_status
         self._capabilities = deserialize_capabilities(capabilities)
 
     def _reset_runtime_state(self) -> None:
@@ -466,6 +468,7 @@ class SandboxThread(threading.Thread):
         numa_node: Optional[int] = None,
         cgroup_path=None,
         capabilities: Optional[dict[str, Any]] = None,
+        enforcement_status: Any = None,
     ):
         super().__init__(name=name, daemon=True)
         self._logger = logging.getLogger(f"pyisolate.{name}")
@@ -487,6 +490,7 @@ class SandboxThread(threading.Thread):
             numa_node=numa_node,
             cgroup_path=cgroup_path,
             capabilities=capabilities,
+            enforcement_status=enforcement_status,
         )
         self._reset_runtime_state()
         # Dedup set spans sandbox lifetimes for this thread; message IDs are monotonic
@@ -650,6 +654,22 @@ class SandboxThread(threading.Thread):
         if not self.cancel(timeout=timeout):
             self.kill(timeout=timeout)
 
+    def enforce_quota_breach(self, exc: Exception, reason: str, timeout: float = 0.05) -> bool:
+        """Record a kernel/watchdog quota breach and stop guest execution.
+
+        The watchdog calls this path from outside the sandbox thread, so it does
+        not depend on guest bytecode returning to Python-level quota checks.
+        If asynchronous termination cannot stop the thread promptly, the sandbox
+        is marked quarantined for supervisor cleanup.
+        """
+
+        self.termination_reason = reason
+        stopped = self.kill(timeout=timeout)
+        if not stopped:
+            self.quarantine(reason)
+        self._outbox.put(exc)
+        return stopped
+
     def reap(self) -> bool:
         """Drain pending messages after termination."""
         if self.is_alive():
@@ -684,6 +704,7 @@ class SandboxThread(threading.Thread):
         numa_node: Optional[int] = None,
         cgroup_path=None,
         capabilities: Optional[dict[str, Any]] = None,
+        enforcement_status: Any = None,
     ) -> None:
         """Reuse this thread for a new sandbox."""
         old_path = getattr(self, "_cgroup_path", None)
@@ -701,6 +722,7 @@ class SandboxThread(threading.Thread):
             numa_node=numa_node,
             cgroup_path=cgroup_path,
             capabilities=capabilities,
+            enforcement_status=enforcement_status,
         )
         self._reset_runtime_state()
         # Request the sandbox thread to (re)attach itself to the new cgroup.
@@ -842,16 +864,9 @@ class SandboxThread(threading.Thread):
                         self._start_time = None
                         cur, peak = tracemalloc.get_traced_memory()
                         self._mem_peak = max(self._mem_peak, peak - self._mem_base)
-                        if (
-                            self.cpu_quota_ms is not None
-                            and self._cpu_time > self.cpu_quota_ms
-                        ):
-                            raise errors.CPUExceeded()
-                        if (
-                            self.mem_quota_bytes is not None
-                            and self._mem_peak > self.mem_quota_bytes
-                        ):
-                            raise errors.MemoryExceeded()
+                        # CPU and RSS quotas are enforced by cgroups/eBPF and
+                        # ResourceWatchdog.  tracemalloc remains debugging
+                        # telemetry for Stats only; it is not a security limit.
                     except Exception as exc:  # real impl would sanitize
                         if isinstance(exc, _KillRequest):
                             break

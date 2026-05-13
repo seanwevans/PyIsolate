@@ -89,9 +89,9 @@ hardened = iso.Supervisor(rollout_mode="hardened")
 compat = iso.Supervisor(rollout_mode="compatibility")
 ```
 
-* `dev`: lightweight, low-friction development mode.
-* `hardened`: real enforcement; any eBPF compile/load failure raises.
-* `compatibility`: reduced enforcement to maximize third-party compatibility.
+* `dev`: lightweight, low-friction development mode. BPF/cgroup setup failures are reported through per-sandbox `quota_enforcement` status and logs, but sandbox creation continues so local development remains unblocked. CPU/RSS quota tests should be treated as best-effort unless the status reports the relevant controller as enforced.
+* `hardened`: production fail-closed mode. BPF compile/load failures and cgroup controller failures raise during supervisor start or sandbox spawn; CPU/RSS quotas must be enforced by cgroups/eBPF and watchdog breach events terminate or quarantine the sandbox. Python `tracemalloc` values are exposed only as debugging telemetry.
+* `compatibility`: ecosystem validation mode. Baseline BPF loading is attempted while stricter filters/guards may be skipped; cgroup quota status is still surfaced, and missing controllers degrade to explicit status/logs rather than silent `None`. Use this mode to find package compatibility issues, not as the authoritative security boundary.
 
 ### Hello World
 

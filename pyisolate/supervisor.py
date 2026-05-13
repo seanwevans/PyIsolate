@@ -72,6 +72,7 @@ class Sandbox:
         self._thread.reset(
             self._thread.name,
             cgroup_path=self._thread._cgroup_path,
+            enforcement_status=self._thread.quota_enforcement,
             **reset_config,
         )
 
@@ -117,6 +118,15 @@ class Sandbox:
     def termination_reason(self) -> str | None:
         return self._thread.termination_reason
 
+    @property
+    def quota_enforcement(self):
+        """Return cgroup quota enforcement status for this sandbox."""
+        return self._thread.quota_enforcement
+
+    @property
+    def quarantine_reason(self) -> str | None:
+        return self._thread._quarantine_reason
+
 
 class Supervisor:
     """Main supervisor owning all sandboxes."""
@@ -133,7 +143,15 @@ class Supervisor:
         bpf_mod = importlib.import_module("pyisolate.bpf.manager")
         self._bpf = bpf_mod.BPFManager()
         self._rollout_mode = rollout_mode
-        self._bpf.load(mode=rollout_mode)
+        try:
+            self._bpf.load(mode=rollout_mode)
+        except TypeError as exc:
+            # Test and compatibility shims may still expose the legacy
+            # load(strict=False) signature.  Real BPFManager validates rollout
+            # modes itself.
+            if "mode" not in str(exc):
+                raise
+            self._bpf.load(strict=(rollout_mode == "hardened"))
         self._recover_state()
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
@@ -243,7 +261,10 @@ class Supervisor:
             temp_dir = None
             thread = None
             try:
-                cg_path = cgroup.create(name, cpu_ms, mem_bytes)
+                cg_status = cgroup.create(
+                    name, cpu_ms, mem_bytes, mode=self._rollout_mode
+                )
+                cg_path = cg_status.path
                 temp_dir = recovery.allocate_temp_dir(name)
                 reset_config = {
                     "policy": policy,
@@ -264,6 +285,7 @@ class Supervisor:
                     thread.reset(
                         name,
                         cgroup_path=cg_path,
+                        enforcement_status=cg_status,
                         **reset_config,
                     )
                     thread._on_violation = self._alerts.notify
@@ -275,6 +297,7 @@ class Supervisor:
                         on_violation=self._alerts.notify,
                         tracer=self._tracer,
                         cgroup_path=cg_path,
+                        enforcement_status=cg_status,
                     )
                     thread.start()
                 thread._temp_dir = temp_dir
@@ -284,6 +307,12 @@ class Supervisor:
                     {
                         "name": name,
                         "cgroup_path": str(cg_path) if cg_path is not None else None,
+                        "quota_enforcement": {
+                            "mode": cg_status.mode,
+                            "cpu": cg_status.cpu,
+                            "memory": cg_status.memory,
+                            "errors": list(cg_status.errors),
+                        },
                         "temp_dir": str(temp_dir),
                     },
                 )
