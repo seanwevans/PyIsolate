@@ -8,6 +8,7 @@ requires eBPF enforcement which is not implemented here.
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 import os
 import re
@@ -200,6 +201,16 @@ class Supervisor:
         self._tenant_usage: dict[str, int] = {}
         self._quota_ledger = os.environ.get("PYISOLATE_QUOTA_LEDGER")
         self._replay_quota_ledger()
+
+    def _load_bpf(self, rollout_mode: str) -> None:
+        """Load BPF manager while tolerating legacy test doubles."""
+
+        load = self._bpf.load
+        parameters = inspect.signature(load).parameters
+        if "mode" in parameters:
+            load(mode=rollout_mode)
+        else:
+            load()
 
     def _replay_quota_ledger(self) -> None:
         if not self._quota_ledger:
