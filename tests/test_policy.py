@@ -170,7 +170,9 @@ def test_validation_bad_section_type(tmp_path):
         ("version: 0.1\nsandboxes: []\n", "sandboxes"),
     ],
 )
-def test_refresh_validation_fails_before_compile_or_reload(monkeypatch, tmp_path, doc, msg):
+def test_refresh_validation_fails_before_compile_or_reload(
+    monkeypatch, tmp_path, doc, msg
+):
     policy = load_policy(no_yaml=True)
     import pyisolate as iso
 
@@ -243,9 +245,9 @@ def test_refresh_passes_compiled_policy(monkeypatch, tmp_path):
     policy.refresh(str(path), token="tok")
 
     sb = captured["data"]["sandboxes"]["default"]
-    assert sb["tcp"][0]["addr"] == "1.1.1.1:443"
+    assert sb["allow_tcp"][0]["destination"] == "1.1.1.1:443"
     assert sb["imports"] == ["math"]
-    assert sb["fs"][0]["path"] == "/tmp/**"
+    assert sb["allow_fs"][0]["path"] == "/tmp/**"
     assert captured["data"]["schema_version"] == "0.1"
     assert captured["data"]["semantics_version"] == 1
 
@@ -264,11 +266,7 @@ def test_refresh_dry_run_compiles_without_reload(monkeypatch, tmp_path):
     iso.set_policy_token("tok")
     path = tmp_path / "p.yml"
     path.write_text(
-        "version: 1\n"
-        "sandboxes:\n"
-        "  sb:\n"
-        "    fs:\n"
-        '      - allow: "/tmp"\n'
+        "version: 1\n" "sandboxes:\n" "  sb:\n" "    fs:\n" '      - allow: "/tmp"\n'
     )
 
     compiled = policy.refresh(str(path), token="tok", dry_run=True)
@@ -305,7 +303,10 @@ def test_compile_policy_supports_inheritance_and_defaults(tmp_path):
     assert [r.path for r in child.fs] == ["/srv/base", "/srv/child"]
     assert [r.addr for r in child.tcp] == ["10.0.0.0/8"]
     assert child.imports == ["math", "json"]
-    assert compiled.deny_log == ["sandbox=base net=10.0.0.0/8", "sandbox=child net=10.0.0.0/8"]
+    assert compiled.deny_log == [
+        "sandbox=base net=10.0.0.0/8",
+        "sandbox=child net=10.0.0.0/8",
+    ]
 
 
 def test_refresh_logs_explicit_deny_rules(tmp_path, caplog, monkeypatch):
@@ -317,11 +318,7 @@ def test_refresh_logs_explicit_deny_rules(tmp_path, caplog, monkeypatch):
     )
     iso.set_policy_token("tok")
     path = tmp_path / "deny.yml"
-    path.write_text(
-        "version: 0.1\n"
-        "net:\n"
-        '  - deny: "10.0.0.0/8"\n'
-    )
+    path.write_text("version: 0.1\n" "net:\n" '  - deny: "10.0.0.0/8"\n')
     with caplog.at_level("WARNING"):
         policy.refresh(str(path), token="tok")
     assert "policy deny rule active" in caplog.text
@@ -374,3 +371,185 @@ def test_reload_policy_rejects_non_canonical_root(monkeypatch, tmp_path, caplog)
         with pytest.raises(iso.PolicyAuthError):
             iso.reload_policy(str(path), token=fake)
     assert "invalid token" in caplog.text
+
+
+def test_resolve_unknown_policy_fails_closed():
+    import pyisolate.policy as policy
+
+    with pytest.raises(policy.PolicyCompilerError, match="unknown policy"):
+        policy.resolve_policy("does-not-exist")
+
+
+def test_named_policy_applies_runtime_restrictions(tmp_path):
+    import pyisolate as iso
+
+    allowed = tmp_path / "allowed.txt"
+    allowed.write_text("ok")
+
+    sb = iso.spawn("named-policy", policy="stdlib.readonly")
+    try:
+        sb.exec("import math; post(math.sqrt(25))")
+        assert sb.recv(timeout=1) == 5.0
+
+        sb.exec("import random")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+
+        sb.exec(f"post(open({str(allowed)!r}).read())")
+        assert sb.recv(timeout=1) == "ok"
+
+        sb.exec("post(open('/etc/hosts').read())")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+
+        sb.exec(
+            "import socket\n"
+            "s = socket.socket()\n"
+            "try:\n"
+            "    s.connect(('127.0.0.1', 9))\n"
+            "finally:\n"
+            "    s.close()\n"
+        )
+def test_compile_policy_emits_first_class_capabilities(tmp_path):
+    import pyisolate.policy as policy
+    from pyisolate.capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
+
+    doc = (
+        "version: 1.0\n"
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        '      - read: "/tmp/input"\n'
+        '      - write: "/tmp/output"\n'
+        "    net:\n"
+        '      - connect: "api.example.com:443"\n'
+        "    imports: [math]\n"
+        "    cpu_ms: 50\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    caps = compiled.sandboxes["sb"].capabilities
+    assert any(isinstance(cap, ReadPath) and str(cap.path) == "/tmp/input" for cap in caps)
+    assert any(isinstance(cap, WritePath) and str(cap.path) == "/tmp/output" for cap in caps)
+    assert any(isinstance(cap, ConnectTCP) and cap.address == "api.example.com:443" for cap in caps)
+    assert any(isinstance(cap, Import) and cap.module == "math" for cap in caps)
+    assert any(isinstance(cap, CpuBudget) and cap.ms == 50 for cap in caps)
+    assert compiled.sandboxes["sb"].cpu_ms == 50
+
+
+def test_policy_objects_serialize_to_yaml_shape():
+    import pyisolate as iso
+    from pyisolate import policy
+
+    p = policy.Policy().grant(
+        iso.ReadPath("/tmp/input"),
+        iso.WritePath("/tmp/output"),
+        iso.ConnectTCP("api.example.com", 443),
+        iso.Import("math"),
+        iso.CpuBudget(50),
+    )
+
+    assert p.to_dict("job") == {
+        "version": "1.0",
+        "sandboxes": {
+            "job": {
+                "fs": [{"read": "/tmp/input"}, {"write": "/tmp/output"}],
+                "net": [{"connect": "api.example.com:443"}],
+                "imports": ["math"],
+                "cpu_ms": 50,
+            }
+        },
+    }
+def test_canonical_yaml_policy_drives_sandbox_and_bpf_maps(tmp_path, monkeypatch):
+    import pyisolate as iso
+    import pyisolate.policy as policy
+    from pyisolate.bpf.manager import BPFManager
+    from pyisolate.policy import from_compiled_policy
+
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    allowed_file = allowed_dir / "data.txt"
+    allowed_file.write_text("ok")
+    blocked_file = tmp_path / "blocked.txt"
+    blocked_file.write_text("nope")
+
+    policy_path = tmp_path / "policy.yml"
+    policy_path.write_text(
+        "version: 1.0\n"
+        "sandboxes:\n"
+        "  default:\n"
+        "    imports:\n"
+        "      - pathlib\n"
+        "    fs:\n"
+        f'      - allow: "{allowed_dir}/**"\n'
+        f'      - deny: "{blocked_file}"\n'
+        "    net:\n"
+        '      - connect: "127.0.0.1:9"\n'
+        '      - deny: "127.0.0.1:10"\n'
+    )
+
+    runtime_policies = from_compiled_policy(policy.compile_policy(str(policy_path)))
+    runtime_policy = runtime_policies.sandbox("default")
+
+    sb = iso.spawn("canonical-policy", policy=runtime_policy)
+    try:
+        sb.exec(
+            "import pathlib\n"
+            f"post(pathlib.Path({str(allowed_file)!r}).read_text())\n"
+        )
+        assert sb.recv(timeout=1) == "ok"
+
+        sb.exec(
+            "import pathlib\n"
+            f"post(pathlib.Path({str(blocked_file)!r}).read_text())\n"
+        )
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+
+        sb.exec("import math")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+    calls = []
+
+    def record(self, cmd, *, raise_on_error=False):
+        calls.append(cmd)
+        return True
+
+    monkeypatch.setattr(BPFManager, "_run", record)
+    mgr = BPFManager()
+    mgr.loaded = True
+    canonical_path = tmp_path / "policy.json"
+    canonical_path.write_text(json.dumps(runtime_policies.to_dict()))
+
+    mgr.hot_reload(str(canonical_path))
+
+    assert mgr.policy_maps == runtime_policies.to_dict()
+    assert [
+        "bpftool",
+        "map",
+        "update",
+        "pinned",
+        "/sys/fs/bpf/policy_fs_allow",
+        "key",
+        "default:0",
+        "value",
+        f"{allowed_dir}/**",
+        "any",
+    ] in calls
+    assert [
+        "bpftool",
+        "map",
+        "update",
+        "pinned",
+        "/sys/fs/bpf/policy_net_allow",
+        "key",
+        "default:0",
+        "value",
+        "127.0.0.1:9",
+        "any",
+    ] in calls

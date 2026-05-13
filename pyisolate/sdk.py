@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .policy import Policy, resolve_policy
 from .supervisor import spawn
 
 
 def sandbox(
-    policy: str | None = None, timeout: float | None = None
+    policy: str | Policy | dict | None = None, timeout: float | None = None
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorate a function to run inside a sandbox when called.
 
@@ -19,11 +20,15 @@ def sandbox(
     timeout:
         Seconds to wait for the sandboxed call to complete before raising
         :class:`pyisolate.errors.TimeoutError`.
+    backend:
+        Isolation backend: ``"subinterpreter"`` for an execution cell, or
+        explicit boundary modes ``"process"`` / ``"microvm"`` when available.
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            sb = spawn(func.__name__, policy=policy)
+            resolved_policy = resolve_policy(policy)
+            sb = spawn(func.__name__, policy=resolved_policy)
             try:
                 return sb.call(
                     f"{func.__module__}.{func.__name__}",
@@ -43,24 +48,27 @@ class Pipeline:
     """Sequential sandboxed stages."""
 
     def __init__(self) -> None:
-        self._stages: list[tuple[str, str | None]] = []
+        self._stages: list[tuple[str, str | Policy | dict | None]] = []
 
     def add_stage(
-        self, stage: str | Callable[[Any], Any], policy: str | None = None
+        self,
+        stage: str | Callable[[Any], Any],
+        policy: str | Policy | dict | None = None,
     ) -> "Pipeline":
         """Register a stage by dotted path or callable."""
         if callable(stage):
             dotted = f"{stage.__module__}.{stage.__name__}"
         else:
             dotted = stage
-        self._stages.append((dotted, policy))
+        self._stages.append((dotted, policy, backend))
         return self
 
     def run(self, data: Any) -> Any:
         """Run data through all stages sequentially."""
         value = data
-        for dotted, policy in self._stages:
+        for dotted, policy, backend in self._stages:
             name = dotted.rsplit(".", 1)[-1]
-            with spawn(name, policy=policy) as sb:
+            resolved_policy = resolve_policy(policy)
+            with spawn(name, policy=resolved_policy) as sb:
                 value = sb.call(dotted, value)
         return value

@@ -4,7 +4,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import sys
 import types
 
 
@@ -128,7 +127,9 @@ def test_export_latency_bucket_order_and_cumulative_values(monkeypatch):
                 latency_sum=17.5,
             )
 
-    monkeypatch.setattr(supervisor, "list_active", lambda: {"sandbox-z": _FakeSandbox()})
+    monkeypatch.setattr(
+        supervisor, "list_active", lambda: {"sandbox-z": _FakeSandbox()}
+    )
     metrics = MetricsExporter().export()
     bucket_lines = [
         line
@@ -175,3 +176,23 @@ def test_export_latency_missing_buckets_default_to_zero(monkeypatch):
         'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="10"} 1',
         'pyisolate_latency_ms_bucket{sandbox="sandbox-missing",le="+Inf"} 1',
     ]
+
+
+def test_export_contains_denial_metrics():
+    sb = iso.spawn("metrics-denial")
+    try:
+        sb.exec("open('/etc/hosts').read()")
+        try:
+            sb.recv(timeout=0.5)
+        except iso.PolicyError:
+            pass
+        metrics = MetricsExporter().export()
+        assert "# HELP pyisolate_denials_total" in metrics
+        assert "# TYPE pyisolate_denials_total counter" in metrics
+        assert 'pyisolate_denials_total{sandbox="metrics-denial"} 1' in metrics
+        assert "pyisolate_denial_events_total" in metrics
+        assert 'capability="filesystem"' in metrics
+        assert 'kernel_decision="not_evaluated"' in metrics
+        assert 'broker_decision="deny"' in metrics
+    finally:
+        sb.close()

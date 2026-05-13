@@ -65,9 +65,34 @@ from contextlib import contextmanager
 
 @contextmanager
 def assert_policy_error():
+    caught = type("Caught", (), {"value": None})()
     try:
-        yield
-    except iso.PolicyError:
-        pass
+        yield caught
+    except iso.PolicyError as exc:
+        caught.value = exc
     else:
         raise AssertionError("PolicyError not raised")
+
+
+def test_denied_operation_emits_structured_telemetry(tmp_path):
+    p = iso.policy.Policy().allow_fs(str(tmp_path))
+    sup = iso.Supervisor()
+    sb = sup.spawn("deny-telemetry", policy=p)
+    try:
+        sb.exec("open('/etc/hosts').read()")
+        with assert_policy_error() as caught:
+            sb.recv(timeout=1)
+    finally:
+        sup.shutdown()
+
+    event = caught.value.denial_event
+    assert event is not None
+    assert event.to_dict() == {
+        "cell": "deny-telemetry",
+        "capability": "filesystem",
+        "attempted_action": "open:/etc/hosts",
+        "policy_rule": f"allow_fs:{tmp_path.resolve(strict=False)}",
+        "kernel_decision": "not_evaluated",
+        "broker_decision": "deny",
+    }
+    assert sb.get_denial_events() == [event.to_dict()]

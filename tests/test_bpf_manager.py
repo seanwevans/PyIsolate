@@ -12,6 +12,23 @@ sys.path.insert(0, str(ROOT))
 from pyisolate.bpf.manager import BPFManager
 
 
+def _canonical_policy(*, fs_path="/tmp/**", tcp_addr="1.1.1.1:80"):
+    return {
+        "schema_version": "1.0",
+        "semantics_version": 1,
+        "sandboxes": {
+            "default": {
+                "allow_fs": [{"action": "allow", "path": fs_path}],
+                "deny_fs": [],
+                "allow_tcp": [{"action": "connect", "destination": tcp_addr}],
+                "deny_tcp": [],
+                "imports": ["math"],
+            }
+        },
+        "deny_log": [],
+    }
+
+
 def test_load_runs_toolchain(monkeypatch):
     calls = []
 
@@ -122,13 +139,15 @@ def test_hot_reload_updates_maps(tmp_path, monkeypatch):
     mgr.load()
 
     policy = tmp_path / "policy.json"
-    policy.write_text(json.dumps({"cpu": "100ms"}))
+    first = _canonical_policy(fs_path="/tmp/one/**", tcp_addr="1.1.1.1:80")
+    policy.write_text(json.dumps(first))
     mgr.hot_reload(str(policy))
-    assert mgr.policy_maps["cpu"] == "100ms"
+    assert mgr.policy_maps == first
 
-    policy.write_text(json.dumps({"cpu": "200ms", "mem": "64MiB"}))
+    second = _canonical_policy(fs_path="/tmp/two/**", tcp_addr="1.1.1.1:443")
+    policy.write_text(json.dumps(second))
     mgr.hot_reload(str(policy))
-    assert mgr.policy_maps == {"cpu": "200ms", "mem": "64MiB"}
+    assert mgr.policy_maps == second
 
 
 def test_hot_reload_handles_nested_policy(tmp_path, monkeypatch):
@@ -143,21 +162,24 @@ def test_hot_reload_handles_nested_policy(tmp_path, monkeypatch):
     mgr.loaded = True
 
     policy = tmp_path / "policy.json"
-    nested = {
-        "sandboxes": {
-            "default": {
-                "fs": [{"action": "allow", "path": "/tmp/**"}],
-                "tcp": [{"action": "connect", "addr": "1.1.1.1:80"}],
-                "imports": ["math"],
-            }
-        }
-    }
+    nested = _canonical_policy()
     policy.write_text(json.dumps(nested))
 
     mgr.hot_reload(str(policy))
 
     assert mgr.policy_maps == nested
-    assert any('"tcp"' in cmd[-2] for cmd in calls)
+    assert [
+        "bpftool",
+        "map",
+        "update",
+        "pinned",
+        "/sys/fs/bpf/policy_net_allow",
+        "key",
+        "default:0",
+        "value",
+        "1.1.1.1:80",
+        "any",
+    ] in calls
 
 
 def test_load_failure_logs_and_raises(monkeypatch, caplog):
@@ -262,10 +284,10 @@ def test_hot_reload_failure_raises(monkeypatch, tmp_path, caplog):
     mgr = BPFManager()
     mgr.loaded = True
     policy = tmp_path / "policy.json"
-    policy.write_text(json.dumps({"cpu": "100ms", "mem": "64MiB"}))
+    policy.write_text(json.dumps(_canonical_policy()))
 
     def fake_run(cmd, check, capture_output, text):
-        if "update" in cmd and any("cpu" in part for part in cmd):
+        if "update" in cmd and any("policy_fs_allow" in part for part in cmd):
             raise subprocess.CalledProcessError(1, cmd, stderr="map boom")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -286,10 +308,10 @@ def test_hot_reload_logs_updates(tmp_path, monkeypatch, caplog):
     mgr = BPFManager()
     mgr.load()
     policy = tmp_path / "policy.json"
-    policy.write_text(json.dumps({"cpu": "100ms"}))
+    policy.write_text(json.dumps(_canonical_policy()))
     caplog.set_level(logging.INFO)
     mgr.hot_reload(str(policy))
-    assert any("cpu" in rec.getMessage() for rec in caplog.records)
+    assert any("policy_fs_allow" in rec.getMessage() for rec in caplog.records)
 
 
 @pytest.mark.parametrize("missing_tool", ["clang", "bpftool"])

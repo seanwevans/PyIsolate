@@ -34,7 +34,43 @@ sandboxes:
 
 *Rule precedence:* inherited/default rules are evaluated before child rules. Unmatched operation → **deny**.
 
-## 3  Live reloading
+
+## 3 First-class capabilities
+
+Policy is an authority model first and a YAML format second.  The same grants can
+be expressed as Python objects or serialized in YAML:
+
+```python
+from pyisolate import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
+from pyisolate.policy import Policy
+
+policy = Policy().grant(
+    ReadPath("/tmp/input"),
+    WritePath("/tmp/output"),
+    ConnectTCP("api.example.com", 443),
+    Import("math"),
+    CpuBudget(50),
+)
+```
+
+```yaml
+version: 1.0
+sandboxes:
+  job:
+    fs:
+      - read: "/tmp/input"
+      - write: "/tmp/output"
+    net:
+      - connect: "api.example.com:443"
+    imports: [math]
+    cpu_ms: 50
+```
+
+Legacy `allow` filesystem entries deserialize to both `ReadPath` and
+`WritePath`, so existing policies keep their read/write behavior while new
+policies can split input and output authority.
+
+## 4  Live reloading
 `pyisolate.policy.refresh(path, token)` calls `bpftool map update` for every
 changed row; the supervisor verifies *token* and new limits apply within µs—no
 guest restart required.
@@ -49,7 +85,7 @@ without touching live policy maps. Compiled output includes:
 - `semantics_version` (stable evaluation semantics across releases)
 - `deny_log` (explicit deny entries for auditing and rollout checks)
 
-## 4  Fallback YAML parser
+## 5  Fallback YAML parser
 If the optional **PyYAML** dependency is missing, `pyisolate.policy` falls
 back to a very small parser.  It understands only two constructs:
 
@@ -63,7 +99,7 @@ back to a very small parser.  It understands only two constructs:
 
 Anything more complex results in a `ValueError` during `refresh()`.
 
-## 5  Extending the schema
+## 6  Extending the schema
 Add custom keys by shipping a new eBPF object and registering a
 `PolicyPlugin`:
 
@@ -80,14 +116,32 @@ class IpcLimiter(PolicyPlugin):
 register_plugin(IpcLimiter)
 ```
 
-## 6  Policy templates
+## 7  Policy templates
 
-Several ready-to-use policies are included under the `policy/` directory:
+Named policies live as YAML files in the repository-level `policy/` directory.
+Sandbox creation APIs resolve public string names with `pyisolate.policy.resolve_policy()`
+before a `SandboxThread` is constructed. Unknown names fail closed with
+`PolicyCompilerError` rather than falling back to an unconstrained sandbox.
 
-| File | Intended use |
-|------|--------------|
-| `ml.yml` | Machine learning jobs with outbound HTTPS and generous quotas |
-| `web_scraper.yml` | Basic web scraping with only HTTP/HTTPS access |
+Supported public names are:
 
-Load any template with `pyisolate.policy.refresh("policy/<name>.yml", token)` and the
-new limits take effect instantly.
+| Public name | File | Intended use |
+|-------------|------|--------------|
+| `stdlib.readonly` | `policy/stdlib.readonly.yml` | Standard-library-oriented sandbox with a small import allow-list, `/tmp` filesystem access, and no outbound network. |
+| `ml-inference` | `policy/ml-inference.yml` | Offline ML inference workloads with model/data paths and no outbound network by default. |
+| `readonly-fs` | `policy/readonly-fs.yml` | Filesystem-focused sandbox rooted at `/tmp` with no imports or outbound network by default. |
+| `ml` | `policy/ml.yml` | Legacy machine learning template loaded by filename stem. |
+| `web_scraper` | `policy/web_scraper.yml` | Legacy web scraping template loaded by filename stem. |
+
+Use a public name directly when spawning a sandbox:
+
+```python
+import pyisolate as iso
+
+with iso.spawn("worker", policy="stdlib.readonly") as sb:
+    sb.exec("import math; post(math.sqrt(16))")
+```
+
+You can still hot-reload a template with
+`pyisolate.policy.refresh("policy/<name>.yml", token)` when updating live eBPF maps;
+the resolver is for sandbox construction-time policy selection.

@@ -1,7 +1,7 @@
 [project]
 name = "pyisolate"
 version = "0.0.1"
-description = "Minimal skeleton for PyIsolate sandbox"
+description = "Prototype PyIsolate sandbox; kernel enforcement and no-GIL support are experimental roadmap items"
 authors = [{ name = "PyIsolate" }]
 requires-python = ">=3.11"
 dependencies = ["pyyaml", "cryptography"]
@@ -11,9 +11,10 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["pyisolate"]
+include = ["pyisolate", "pyisolate.*"]
 
 [project.scripts]
+pyisolate = "pyisolate.cli:main"
 pyisolate-doctor = "pyisolate.doctor:main"
 
 [project.optional-dependencies]
@@ -47,7 +48,7 @@ markers = [
     "import_escape: module import escape attempts",
     "policy_bypass: file/network policy bypass attempts",
     "race: high-concurrency race scenarios",
-    "no_gil: free-threaded/no-GIL focused scenarios",
+    "no_gil: experimental free-threaded/no-GIL roadmap scenarios",
     "soak: long-running spawn/kill stability coverage",
     "crash_injection: injected crash/fault-recovery scenarios",
     "cross_kernel: kernel-version compatibility scenarios",
