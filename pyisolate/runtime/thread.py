@@ -52,8 +52,16 @@ _thread_local = threading.local()
 
 _ORIG_OPEN = builtins.open
 _ORIG_SOCKET_CONNECT = socket.socket.connect
+_ORIG_SOCKET_CONNECT_EX = socket.socket.connect_ex
+_ORIG_SOCKET_SENDTO = socket.socket.sendto
 _ORIG_THREAD_START = threading.Thread.start
 _CAPABILITY_MARKER = "__pyisolate_capability__"
+# No modules are imported by default. Examples and tests must name every
+# module they need via Policy.allow_import(...) or allowed_imports=[...].
+# Keeping this empty makes missing import policy fail closed instead of
+# falling back to unrestricted Python imports.
+DEFAULT_ALLOWED_IMPORTS: frozenset[str] = frozenset()
+_BLOCKED_MODULES = {"ctypes", "multiprocessing"}
 
 
 def _serialize_capability(capability: Any) -> Any:
@@ -183,7 +191,7 @@ def _blocked_open(file, *args, **kwargs):
     return opened
 
 
-def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
+def _check_network_destination(address: Iterable[str]) -> None:
     net_cap = getattr(_thread_local, "net_capability", None)
     runtime_policy = getattr(_thread_local, "runtime_policy", None)
     if isinstance(address, tuple):
@@ -209,7 +217,37 @@ def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
             and sandbox._network_ops > sandbox.network_ops_max
         ):
             raise errors.NetworkExceeded()
+
+
+def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
+    _check_network_destination(address)
     return _ORIG_SOCKET_CONNECT(self_socket, address)
+
+
+def _guarded_connect_ex(self_socket: socket.socket, address: Iterable[str]):
+    _check_network_destination(address)
+    return _ORIG_SOCKET_CONNECT_EX(self_socket, address)
+
+
+def _guarded_sendto(self_socket: socket.socket, data, *args, **kwargs):
+    if args and isinstance(args[-1], tuple):
+        _check_network_destination(args[-1])
+    elif "address" in kwargs:
+        _check_network_destination(kwargs["address"])
+    else:
+        raise errors.PolicyError("socket sendto blocked")
+    return _ORIG_SOCKET_SENDTO(self_socket, data, *args, **kwargs)
+
+
+def _deny_side_effect_api(api_name: str):
+    def _blocked(*args, **kwargs):
+        raise errors.PolicyError(
+            f"{api_name} is blocked in the Python sandbox wrapper; "
+            "production enforcement must come from the BPF/cgroup broker path"
+        )
+
+    _blocked.__name__ = f"blocked_{api_name.replace('.', '_')}"
+    return _blocked
 
 
 def _blocked_subprocess_run(*args, **kwargs):
@@ -250,8 +288,18 @@ def _make_sandbox_thread_class(sandbox: "SandboxThread"):
 
 
 def _wrap_module(name: str, module):
+    """Return developer-ergonomic wrappers around risky modules.
+
+    These Python wrappers fail fast for tests and local development. They are
+    not a production sandbox boundary; production denial and brokering should
+    be enforced by the supervisor's BPF/cgroup broker path.
+    """
+
     base = name.split(".")[0]
+    if base in _BLOCKED_MODULES:
+        raise errors.PolicyError(f"import of {base!r} is not permitted")
     if base == "time":
+
         def _require_clock() -> ClockCapability:
             cap = getattr(_thread_local, "clock_capability", None)
             return cap
@@ -290,19 +338,77 @@ def _wrap_module(name: str, module):
         mod.__dict__.update({k: getattr(socket, k) for k in dir(socket)})
 
         class GuardedSocket(socket.socket):
+            def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+                sock_type = type if type != -1 else socket.SOCK_STREAM
+                # Socket type may include flags such as SOCK_NONBLOCK; the low
+                # nibble carries the base type on Linux. Do not treat regular
+                # SOCK_STREAM as raw just because 1 & 3 is truthy.
+                if int(sock_type) & 0xF == int(socket.SOCK_RAW):
+                    raise errors.PolicyError("raw sockets are blocked")
+                if hasattr(socket, "AF_PACKET") and family == socket.AF_PACKET:
+                    raise errors.PolicyError("packet sockets are blocked")
+                super().__init__(family, type, proto, fileno)
+
             connect = _guarded_connect
+            connect_ex = _guarded_connect_ex
+            sendto = _guarded_sendto
+
+        def _create_connection(
+            address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None
+        ):
+            sock = GuardedSocket(socket.AF_INET, socket.SOCK_STREAM)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address is not None:
+                sock.bind(source_address)
+            try:
+                sock.connect(address)
+                return sock
+            except Exception:
+                sock.close()
+                raise
 
         mod.socket = GuardedSocket
+        mod.create_connection = _create_connection
+        mod.socketpair = _deny_side_effect_api("socket.socketpair")
+        mod.fromfd = _deny_side_effect_api("socket.fromfd")
+        if hasattr(socket, "create_server"):
+            mod.create_server = _deny_side_effect_api("socket.create_server")
         return mod
     if base == "subprocess":
         mod = types.ModuleType("subprocess", module.__doc__)
         mod.__dict__.update({k: getattr(subprocess, k) for k in dir(subprocess)})
         mod.run = _blocked_subprocess_run
+        for attr in (
+            "Popen",
+            "call",
+            "check_call",
+            "check_output",
+            "getoutput",
+            "getstatusoutput",
+        ):
+            if hasattr(mod, attr):
+                setattr(mod, attr, _deny_side_effect_api(f"subprocess.{attr}"))
         return mod
     if base == "os":
         mod = types.ModuleType("os", module.__doc__)
         mod.__dict__.update({k: getattr(os, k) for k in dir(os)})
         mod.urandom = _guarded_urandom
+        for attr in (
+            "open",
+            "system",
+            "popen",
+            "fork",
+            "forkpty",
+            "posix_spawn",
+            "posix_spawnp",
+            "startfile",
+        ):
+            if hasattr(mod, attr):
+                setattr(mod, attr, _deny_side_effect_api(f"os.{attr}"))
+        for attr in dir(os):
+            if attr.startswith("exec") or attr.startswith("spawn"):
+                setattr(mod, attr, _deny_side_effect_api(f"os.{attr}"))
         return mod
     if base == "secrets":
         mod = types.ModuleType("secrets", module.__doc__)
@@ -349,9 +455,7 @@ def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
     return _wrap_module(name, module)
 
 
-def _make_importer(allowed: Optional[Iterable[str]]):
-    if allowed is None:
-        return _sandbox_import
+def _make_importer(allowed: Iterable[str]):
     allowed_set = {name.split(".")[0] for name in allowed}
 
     def _import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -420,9 +524,9 @@ class SandboxThread(threading.Thread):
         if allowed_imports_provided:
             imports.update(allowed_imports)
 
-        if imports or allowed_imports_provided:
-            return imports
-        return None
+        if not imports and not allowed_imports_provided:
+            imports.update(DEFAULT_ALLOWED_IMPORTS)
+        return imports
 
     def _init_config_wiring(
         self,
@@ -455,6 +559,26 @@ class SandboxThread(threading.Thread):
         self._cgroup_path = cgroup_path
         self.quota_enforcement = enforcement_status
         self._capabilities = deserialize_capabilities(capabilities)
+        self._add_broker_ergonomic_imports()
+
+    def _add_broker_ergonomic_imports(self) -> None:
+        """Allow modules that are only useful with an explicit broker surface.
+
+        The baseline default remains empty. These additions are tied to
+        explicit policy/capability grants so examples can use the brokered
+        Python modules without weakening the fail-closed import default.
+        """
+
+        if self.policy is not None and getattr(self.policy, "tcp", None):
+            self.allowed_imports.add("socket")
+        if "network" in self._capabilities:
+            self.allowed_imports.add("socket")
+        if "subprocess" in self._capabilities:
+            self.allowed_imports.add("subprocess")
+        if "random" in self._capabilities:
+            self.allowed_imports.update({"os", "random", "secrets"})
+        if "clock" in self._capabilities:
+            self.allowed_imports.add("time")
 
     def _reset_runtime_state(self) -> None:
         self._cpu_time = 0.0
@@ -528,9 +652,7 @@ class SandboxThread(threading.Thread):
             "policy": self.policy,
             "cpu_ms": self.cpu_quota_ms,
             "mem_bytes": self.mem_quota_bytes,
-            "allowed_imports": sorted(self.allowed_imports)
-            if self.allowed_imports is not None
-            else None,
+            "allowed_imports": sorted(self.allowed_imports),
             "numa_node": self.numa_node,
             "capabilities": serialize_capabilities(self._capabilities),
             "wall_time_ms": self.wall_time_ms,
@@ -551,9 +673,7 @@ class SandboxThread(threading.Thread):
             "network_ops_max": self.network_ops_max,
             "output_bytes_max": self.output_bytes_max,
             "child_work_max": self.child_work_max,
-            "allowed_imports": sorted(self.allowed_imports)
-            if self.allowed_imports is not None
-            else None,
+            "allowed_imports": sorted(self.allowed_imports),
             "numa_node": self.numa_node,
             "capabilities": serialize_capabilities(self._capabilities),
         }
@@ -584,7 +704,10 @@ class SandboxThread(threading.Thread):
 
     def _post(self, item: Any) -> None:
         self._output_bytes += self._estimate_output_size(item)
-        if self.output_bytes_max is not None and self._output_bytes > self.output_bytes_max:
+        if (
+            self.output_bytes_max is not None
+            and self._output_bytes > self.output_bytes_max
+        ):
             raise errors.OutputExceeded()
         self._outbox.put(item)
 
