@@ -84,7 +84,12 @@ except (
 from .policy import refresh_remote  # noqa: F401
 from .sdk import Pipeline, sandbox  # noqa: F401
 from .subset import OwnershipError, RestrictedExec  # noqa: F401
+from .nogil import no_gil_readiness_report, warn_if_unsafe_native_extensions  # noqa: F401
 from .supervisor import (
+    BackendMode,
+    DEFAULT_BACKEND,
+    IMPLEMENTED_BACKENDS,
+    SUPPORTED_BACKENDS,
     Sandbox,
     Supervisor,
     list_active,
@@ -96,6 +101,10 @@ from .supervisor import (
 
 __all__ = [
     "spawn",
+    "BackendMode",
+    "DEFAULT_BACKEND",
+    "SUPPORTED_BACKENDS",
+    "IMPLEMENTED_BACKENDS",
     "list_active",
     "Sandbox",
     "Supervisor",
@@ -139,5 +148,9 @@ __all__ = [
     "refresh_remote",
     "setup_structured_logging",
     "DenialEvent",
+    "no_gil_readiness_report",
+    "warn_if_unsafe_native_extensions",
     "bpf",
 ]
+
+warn_if_unsafe_native_extensions()

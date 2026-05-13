@@ -7,49 +7,153 @@ import errno
 import logging
 import os
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
-__all__ = ["create", "attach_current", "delete", "list_children", "cleanup_orphans"]
+__all__ = [
+    "CgroupEnforcement",
+    "create",
+    "attach_current",
+    "delete",
+    "list_children",
+    "cleanup_orphans",
+]
 
 # Allow tests to override the base cgroup directory
 _BASE = Path(os.environ.get("PYISOLATE_CGROUP_ROOT", "/sys/fs/cgroup")) / "pyisolate"
 
 log = logging.getLogger(__name__)
 
+RolloutMode = Literal["dev", "compatibility", "hardened"]
 
-def _write(file: Path, val: str) -> None:
+
+@dataclass(frozen=True)
+class CgroupEnforcement:
+    """Result of creating a sandbox cgroup and installing quota controls.
+
+    ``path`` is ``None`` only when the cgroup directory could not be created.
+    ``cpu`` and ``memory`` indicate whether each requested controller accepted
+    its limit.  ``errors`` contains human-readable diagnostics for degraded
+    fallback modes so callers do not have to infer enforcement by checking for
+    ``None``.
+    """
+
+    path: Path | None
+    mode: str
+    cpu: bool = False
+    memory: bool = False
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def enforced(self) -> bool:
+        """Return ``True`` when all requested cgroup controls were applied."""
+
+        return self.path is not None and not self.errors
+
+    def __bool__(self) -> bool:
+        return self.path is not None
+
+    def __fspath__(self) -> str:
+        if self.path is None:
+            raise TypeError("cgroup path is unavailable")
+        return os.fspath(self.path)
+
+    def __getattr__(self, name: str):
+        if self.path is None:
+            raise AttributeError(name)
+        return getattr(self.path, name)
+
+
+def _write(file: Path, val: str) -> bool:
     try:
         file.write_text(val)
+        return True
     except (OSError, PermissionError, FileNotFoundError) as exc:
         log.warning("Failed to write %s: %s", file, exc)
+        return False
+
+
+def _failure(status: CgroupEnforcement, message: str) -> CgroupEnforcement:
+    errors = (*status.errors, message)
+    failed = CgroupEnforcement(
+        path=status.path,
+        mode=status.mode,
+        cpu=status.cpu,
+        memory=status.memory,
+        errors=errors,
+    )
+    if status.mode == "hardened":
+        raise RuntimeError(message)
+    return failed
 
 
 def create(
-    name: str, cpu_ms: int | None = None, mem_bytes: int | None = None
-) -> Path | None:
-    """Create a cgroup and apply optional limits."""
+    name: str,
+    cpu_ms: int | None = None,
+    mem_bytes: int | None = None,
+    *,
+    mode: RolloutMode = "dev",
+) -> CgroupEnforcement:
+    """Create a cgroup and report which optional limits were enforced.
+
+    In ``hardened`` mode, missing cgroup support or failed controller writes are
+    fail-closed errors.  ``dev`` and ``compatibility`` modes return a degraded
+    status object that callers can inspect and expose to operators.
+    """
+
+    if mode not in {"dev", "compatibility", "hardened"}:
+        raise ValueError(f"invalid rollout mode: {mode}")
+
     path = _BASE / name
     try:
         path.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError) as exc:
-        log.warning("Failed to create cgroup %s: %s", path, exc)
-        return None
+        msg = f"Failed to create cgroup {path}: {exc}"
+        log.warning(msg)
+        status = CgroupEnforcement(path=None, mode=mode)
+        return _failure(status, msg)
 
+    status = CgroupEnforcement(path=path, mode=mode)
     if cpu_ms is not None:
         quota_us = cpu_ms * 1000
-        _write(path / "cpu.max", f"{quota_us} 1000000")
+        if _write(path / "cpu.max", f"{quota_us} 1000000"):
+            status = CgroupEnforcement(
+                path=status.path,
+                mode=mode,
+                cpu=True,
+                memory=status.memory,
+                errors=status.errors,
+            )
+        else:
+            status = _failure(status, f"Failed to enforce CPU quota for {path}")
     if mem_bytes is not None:
-        _write(path / "memory.max", str(mem_bytes))
+        if _write(path / "memory.max", str(mem_bytes)):
+            status = CgroupEnforcement(
+                path=status.path,
+                mode=mode,
+                cpu=status.cpu,
+                memory=True,
+                errors=status.errors,
+            )
+        else:
+            status = _failure(status, f"Failed to enforce memory quota for {path}")
+    return status
+
+def _as_path(path: Path | CgroupEnforcement | None) -> Path | None:
+    if isinstance(path, CgroupEnforcement):
+        return path.path
     return path
 
 
-def attach_current(path: Path | None) -> None:
+def attach_current(path: Path | CgroupEnforcement | None) -> None:
     """Move the current thread into the given cgroup.
 
     Uses :func:`threading.get_native_id` to determine the thread ID. For
     Python versions lacking this API, falls back to a raw ``syscall`` via
     ``ctypes``.
     """
+    path = _as_path(path)
     if path is None:
         return
     try:
@@ -66,8 +170,9 @@ def attach_current(path: Path | None) -> None:
         log.warning("Failed to attach thread to %s: %s", path, exc)
 
 
-def delete(path: Path | None) -> None:
+def delete(path: Path | CgroupEnforcement | None) -> None:
     """Remove a cgroup directory with best-effort thread drain."""
+    path = _as_path(path)
     if path is None:
         return
 
