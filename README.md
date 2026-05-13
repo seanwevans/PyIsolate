@@ -198,7 +198,7 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
 
 ## Canonical execution model
 
-A cell is intentionally limited to seven operations: execute source, call a dotted function, import allowed modules, post messages, stream logs, emit metrics, and request broker actions.
+A cell is intentionally limited to seven operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.
 
 The API makes the isolation choice explicit: `backend="subinterpreter"` means an execution cell, `backend="process"` means a separate OS process boundary, and `backend="microvm"` means a process behind a microVM boundary. The cell contract stays the same across modes, but the security boundary does not: sub-interpreters are not treated as a hard boundary.
 

@@ -8,7 +8,7 @@ import pyisolate as psi
 
 ### Canonical cell execution model
 
-PyIsolate supports exactly seven cell operations: `exec source`, `call dotted function`, `import module`, `post messages`, `stream logs`, `emit metrics`, and `request broker actions`.
+PyIsolate supports exactly seven cell operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.
 
 Isolation mode is explicit in the public API. Use `backend="subinterpreter"` for the execution-cell backend, `backend="process"` for one sandbox per OS process, and `backend="microvm"` for a process placed behind a microVM boundary. The cell contract is the same in every mode, but only the process and microVM modes are intended to represent hard blast-radius boundaries.
 
@@ -33,9 +33,12 @@ result = sb.recv(timeout=0.1)      # 1.4142135623
 | Method | Semantics |
 |--------|-----------|
 | `exec(src)` | Run source in guest. Exceptions are posted to the outbox and must be retrieved with `recv()`. |
-| `call(func, *args, **kw)` | Import‑free RPC: call dotted `func` inside guest. |
+| `call(func, *args, **kw)` | Call dotted `func` inside guest using policy-controlled module resolution. |
 | `recv(timeout=None)` | Blocking receive from guest channel. |
 | `post(obj)` *(guest side)* | Send picklable object to supervisor. |
+| `log(level, message, **fields)` *(guest side)* | Emit a structured log event. |
+| `metric(name, value, tags=None)` *(guest side)* | Emit a metric datapoint. |
+| `request(capability, action, payload=None)` *(guest side)* | Ask the broker to perform a privileged action through an explicit capability. |
 | `enable_tracing()` | Start recording guest operations. |
 | `get_syscall_log()` | Return recorded operations. |
 | `profile()` | Snapshot of current CPU and memory usage. |

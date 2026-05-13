@@ -8,18 +8,36 @@ as separate systems.
 
 Crossings are intentionally minimal and explicit.
 
+## Minimal cell ABI
+
+`pyisolate.runtime.protocol.MINIMAL_CELL_ABI` pins the public cell surface at
+version 1. The only cell operations are:
+
+- `exec` -> `ExecRequest(source)`
+- `call` -> `CallRequest(target, args, kwargs)`
+- `post` -> guest message send
+- `recv` -> host receive from the cell channel
+- `log` -> `LogEvent(level, message, fields)`
+- `metric` -> `MetricEvent(name, value, tags)`
+- `request` -> `BrokerRequest(capability, action, payload)`
+
+Everything else must go through broker capabilities. New filesystem, network,
+secret, subprocess, or other privileged behavior should not add new cell ABI
+verbs; it should add or refine a broker capability and use `request`.
+
 ## Plane crossings
 
 Only structured messages are allowed across the queue boundary.
-`pyisolate.runtime.protocol` defines the request vocabulary:
+`pyisolate.runtime.protocol` defines the trusted/internal request vocabulary:
 
 - `ExecRequest(source)`
 - `CallRequest(target, args, kwargs)`
-- `AttachCgroupRequest(old_path)`
-- `StopRequest()`
-- `ControlRequest(op, capability, payload)`
+- `AttachCgroupRequest(old_path)` (internal supervisor plumbing)
+- `StopRequest()` (internal lifecycle sentinel)
+- `ControlRequest(op, capability, payload)` (authenticated supervisor control)
 
-This replaces ambient tuple/string payloads with typed requests.
+This replaces ambient tuple/string payloads with typed requests while keeping the
+public cell ABI frozen.
 
 ## Capability handles
 
