@@ -33,7 +33,7 @@ def test_adversarial_syntax_error_does_not_poison_sandbox():
 
 
 @pytest.mark.runaway_cpu
-def test_runaway_cpu_loop_is_stopped_by_quota(monkeypatch):
+def test_cpu_quota_without_watchdog_is_telemetry(monkeypatch):
     import pyisolate.runtime.thread as thread_mod
 
     def fake_thread_time():
@@ -45,20 +45,20 @@ def test_runaway_cpu_loop_is_stopped_by_quota(monkeypatch):
 
     sb = iso.spawn(_name("cpu"), cpu_ms=2)
     try:
-        sb.exec("pass")
-        with pytest.raises(iso.CPUExceeded):
-            sb.recv(timeout=1)
+        sb.exec("post('ok')")
+        assert sb.recv(timeout=1) == "ok"
+        assert sb.stats.cpu_ms > 2
     finally:
         sb.close()
 
 
 @pytest.mark.memory_exhaustion
-def test_memory_exhaustion_is_stopped_by_quota():
+def test_memory_quota_without_watchdog_is_telemetry():
     sb = iso.spawn(_name("mem"), mem_bytes=64 * 1024)
     try:
-        sb.exec("x = 'A' * (2 * 1024 * 1024)")
-        with pytest.raises(iso.MemoryExceeded):
-            sb.recv(timeout=1)
+        sb.exec("x = 'A' * (2 * 1024 * 1024)\npost('ok')")
+        assert sb.recv(timeout=1) == "ok"
+        assert sb.stats.mem_bytes > 64 * 1024
     finally:
         sb.close()
 

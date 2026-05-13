@@ -20,6 +20,9 @@ def sandbox(
     timeout:
         Seconds to wait for the sandboxed call to complete before raising
         :class:`pyisolate.errors.TimeoutError`.
+    backend:
+        Isolation backend: ``"subinterpreter"`` for an execution cell, or
+        explicit boundary modes ``"process"`` / ``"microvm"`` when available.
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -57,13 +60,13 @@ class Pipeline:
             dotted = f"{stage.__module__}.{stage.__name__}"
         else:
             dotted = stage
-        self._stages.append((dotted, policy))
+        self._stages.append((dotted, policy, backend))
         return self
 
     def run(self, data: Any) -> Any:
         """Run data through all stages sequentially."""
         value = data
-        for dotted, policy in self._stages:
+        for dotted, policy, backend in self._stages:
             name = dotted.rsplit(".", 1)[-1]
             resolved_policy = resolve_policy(policy)
             with spawn(name, policy=resolved_policy) as sb:

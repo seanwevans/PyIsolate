@@ -5,7 +5,7 @@ import socket
 import tempfile
 import urllib.request
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.error import URLError
 
@@ -75,6 +75,17 @@ from .compiler import (
     compile_policy,
 )  # noqa: F401
 
+from ..capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
+from .model import (  # noqa: F401
+    FilesystemRule,
+    NetworkRule,
+    RuntimePolicy,
+    RuntimePolicySet,
+    from_compiled_policy,
+    from_sandbox_policy,
+    from_yaml_dict,
+    to_bpf_map_entries,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -84,18 +95,113 @@ class Policy:
     fs: list[str] = field(default_factory=list)
     tcp: list[str] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)
+    capabilities: list[object] = field(default_factory=list)
+
+    def grant(self, *capabilities: object) -> "Policy":
+        """Add first-class authority objects to this policy."""
+        self.capabilities.extend(capabilities)
+        for capability in capabilities:
+            if isinstance(capability, (ReadPath, WritePath)):
+                continue
+            if isinstance(capability, ConnectTCP):
+                if capability.address not in self.tcp:
+                    self.tcp.append(capability.address)
+            elif isinstance(capability, Import):
+                if capability.module not in self.imports:
+                    self.imports.append(capability.module)
+        return self
 
     def allow_fs(self, path: str) -> "Policy":
         self.fs.append(path)
+        self.capabilities.extend([ReadPath(path), WritePath(path)])
+        return self
+
+    def allow_read(self, path: str) -> "Policy":
+        self.capabilities.append(ReadPath(path))
+        return self
+
+    def allow_write(self, path: str) -> "Policy":
+        self.capabilities.append(WritePath(path))
         return self
 
     def allow_tcp(self, addr: str) -> "Policy":
         self.tcp.append(addr)
+        try:
+            self.capabilities.append(ConnectTCP.from_address(addr))
+        except ValueError:
+            pass
         return self
 
     def allow_import(self, module: str) -> "Policy":
         self.imports.append(module)
+        self.capabilities.append(Import(module))
         return self
+
+    def cpu_budget(self, ms: int) -> "Policy":
+        self.capabilities.append(CpuBudget(ms))
+        return self
+
+    def to_dict(self, name: str = "default") -> dict[str, object]:
+        """Serialize this authority model to the YAML policy schema."""
+        fs_rules: list[object] = []
+        net_rules: list[object] = []
+        imports: list[str] = []
+        cpu_ms: int | None = None
+        for path in self.fs:
+            fs_rules.append({"allow": path})
+        for addr in self.tcp:
+            net_rules.append({"connect": addr})
+        imports.extend(self.imports)
+        for capability in self.capabilities:
+            if isinstance(capability, ReadPath):
+                fs_rules.append(capability.to_policy_rule())
+            elif isinstance(capability, WritePath):
+                fs_rules.append(capability.to_policy_rule())
+            elif isinstance(capability, ConnectTCP):
+                rule = capability.to_policy_rule()
+                if rule not in net_rules:
+                    net_rules.append(rule)
+            elif isinstance(capability, Import):
+                if capability.module not in imports:
+                    imports.append(capability.module)
+            elif isinstance(capability, CpuBudget):
+                cpu_ms = capability.ms if cpu_ms is None else min(cpu_ms, capability.ms)
+
+        sandbox: dict[str, object] = {}
+        if fs_rules:
+            sandbox["fs"] = fs_rules
+        if net_rules:
+            sandbox["net"] = net_rules
+        if imports:
+            sandbox["imports"] = imports
+        if cpu_ms is not None:
+            sandbox["cpu_ms"] = cpu_ms
+        return {"version": "1.0", "sandboxes": {name: sandbox}}
+
+    def to_yaml(self, name: str = "default") -> str:
+        """Serialize this policy to YAML using the configured YAML backend."""
+        data = self.to_dict(name)
+        if hasattr(yaml, "safe_dump"):
+            return yaml.safe_dump(data, sort_keys=False)
+
+        lines = ["version: 1.0", "sandboxes:", f"  {name}:"]
+        sandbox = data["sandboxes"][name]  # type: ignore[index]
+        for rule in sandbox.get("fs", []):
+            key, value = next(iter(rule.items()))
+            lines.append("    fs:" if "    fs:" not in lines else "")
+            lines.append(f"      - {key}: {value!r}")
+        if sandbox.get("net"):
+            lines.append("    net:")
+            for rule in sandbox["net"]:
+                key, value = next(iter(rule.items()))
+                lines.append(f"      - {key}: {value!r}")
+        if sandbox.get("imports"):
+            lines.append("    imports:")
+            for module in sandbox["imports"]:
+                lines.append(f"      - {module}")
+        if sandbox.get("cpu_ms") is not None:
+            lines.append(f"    cpu_ms: {sandbox['cpu_ms']}")
+        return "\n".join(line for line in lines if line) + "\n"
 
 
 def _validate(data: object) -> None:
@@ -141,7 +247,7 @@ def refresh(path: str, token: str, *, dry_run: bool = False):
 
     # Write the compiled representation for the BPF manager
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp:
-        json.dump(asdict(compiled), tmp)
+        json.dump(from_compiled_policy(compiled).to_dict(), tmp)
         json_path = Path(tmp.name)
 
     # Upon successful parse, swap the live maps via the supervisor
@@ -359,6 +465,11 @@ def resolve_policy(policy: str | Policy | SandboxPolicy | CompiledPolicy | dict 
 
 __all__ = [
     "Policy",
+    "ReadPath",
+    "WritePath",
+    "ConnectTCP",
+    "Import",
+    "CpuBudget",
     "refresh",
     "compile_policy",
     "PolicyCompilerError",
