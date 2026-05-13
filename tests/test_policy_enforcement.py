@@ -129,12 +129,46 @@ def test_pathlib_path_read_text_respects_fs_policy(tmp_path):
         )
         assert sb.recv(timeout=1) == "nope"
 
-        sb.exec(
-            (
-                "import pathlib\n"
-                "post(pathlib.Path('/etc/hosts').read_text())\n"
-            )
-        )
+        sb.exec(("import pathlib\n" "post(pathlib.Path('/etc/hosts').read_text())\n"))
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "imports"),
+    [
+        ("os-open", "import os; os.open('/etc/hosts', os.O_RDONLY)", ["os"]),
+        ("os-system", "import os; os.system('true')", ["os"]),
+        ("os-exec", "import os; os.execve('/bin/true', ['true'], {})", ["os"]),
+        ("os-spawn", "import os; os.spawnvp(os.P_WAIT, 'true', ['true'])", ["os"]),
+        (
+            "subprocess-popen",
+            "import subprocess; subprocess.Popen(['true'])",
+            ["subprocess"],
+        ),
+        (
+            "socket-create-connection",
+            "import socket; socket.create_connection(('127.0.0.1', 9), timeout=0.01)",
+            ["socket"],
+        ),
+        (
+            "socket-raw",
+            "import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW)",
+            ["socket"],
+        ),
+        ("ctypes-import", "import ctypes", ["ctypes"]),
+        ("multiprocessing-import", "import multiprocessing", ["multiprocessing"]),
+    ],
+)
+def test_policy_blocks_side_effect_import_escape_surfaces(name, source, imports):
+    p = policy.Policy()
+    for module in imports:
+        p.allow_import(module)
+    sb = iso.spawn(f"policy-{name}", policy=p)
+    try:
+        sb.exec(source)
         with pytest.raises(iso.PolicyError):
             sb.recv(timeout=1)
     finally:

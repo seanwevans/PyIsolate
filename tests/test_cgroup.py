@@ -6,6 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import pytest
+
 import pyisolate.cgroup as cgroup
 
 
@@ -24,8 +26,22 @@ def test_create_logs_warning_on_error(monkeypatch, tmp_path, caplog):
 
     monkeypatch.setattr(Path, "mkdir", failing_mkdir)
     with caplog.at_level(logging.WARNING, logger=cgroup.__name__):
-        assert cgroup.create("cg") is None
+        status = cgroup.create("cg")
+    assert status.path is None
+    assert not status.enforced
+    assert status.errors
     assert "Failed to create cgroup" in caplog.text
+
+
+def test_create_fails_closed_in_hardened_mode(monkeypatch, tmp_path):
+    monkeypatch.setattr(cgroup, "_BASE", tmp_path)
+
+    def failing_mkdir(self, parents=True, exist_ok=True):
+        raise PermissionError("boom")
+
+    monkeypatch.setattr(Path, "mkdir", failing_mkdir)
+    with pytest.raises(RuntimeError):
+        cgroup.create("cg", mode="hardened")
 
 
 def test_attach_logs_warning_on_error(tmp_path, monkeypatch, caplog):
@@ -92,3 +108,15 @@ def test_list_children_and_cleanup_orphans(tmp_path, monkeypatch):
     assert {p.name for p in removed} == {"orphan"}
     assert keep is not None and keep.exists()
     assert orphan is not None and not orphan.exists()
+
+
+def test_create_reports_controller_enforcement(tmp_path, monkeypatch):
+    monkeypatch.setattr(cgroup, "_BASE", tmp_path / "pyisolate")
+
+    status = cgroup.create("limited", cpu_ms=5, mem_bytes=4096)
+
+    assert status.path == tmp_path / "pyisolate" / "limited"
+    assert status.cpu is True
+    assert status.memory is True
+    assert status.enforced is True
+    assert status.errors == ()

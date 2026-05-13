@@ -122,3 +122,53 @@ def test_watchdog_survives_ring_buffer_iterator_exceptions(caplog):
         wd.stop()
 
     assert "watchdog ring-buffer iterator failed; resetting" in caplog.text
+
+
+def test_watchdog_kills_non_returning_cpu_loop_without_guest_cooperation(monkeypatch):
+    def fake_rb(self):
+        def gen():
+            time.sleep(0.05)
+            while True:
+                yield {"name": "spin-kill", "cpu_ms": 50, "rss_bytes": 0}
+                time.sleep(0.01)
+
+        return gen()
+
+    monkeypatch.setattr(BPFManager, "open_ring_buffer", fake_rb)
+    monkeypatch.setattr(BPFManager, "_run", lambda *a, **k: True)
+    iso.shutdown()
+
+    sb = iso.supervisor._get_supervisor().spawn("spin-kill", cpu_ms=10)
+    try:
+        sb.exec("while True:\n    pass")
+        with pytest.raises(iso.CPUExceeded):
+            sb.recv(timeout=1)
+        assert sb.termination_reason == "cpu_exceeded"
+        assert (not sb._thread.is_alive()) or sb.quarantine_reason is not None
+    finally:
+        sb.close()
+
+
+def test_watchdog_kills_large_rss_allocation_without_guest_cooperation(monkeypatch):
+    def fake_rb(self):
+        def gen():
+            time.sleep(0.05)
+            while True:
+                yield {"name": "rss-kill", "cpu_ms": 0, "rss_bytes": 64 * 1024 * 1024}
+                time.sleep(0.01)
+
+        return gen()
+
+    monkeypatch.setattr(BPFManager, "open_ring_buffer", fake_rb)
+    monkeypatch.setattr(BPFManager, "_run", lambda *a, **k: True)
+    iso.shutdown()
+
+    sb = iso.supervisor._get_supervisor().spawn("rss-kill", mem_bytes=1024 * 1024)
+    try:
+        sb.exec("blob = bytearray(16 * 1024 * 1024)\nwhile True:\n    pass")
+        with pytest.raises(iso.MemoryExceeded):
+            sb.recv(timeout=1)
+        assert sb.termination_reason == "memory_exceeded"
+        assert (not sb._thread.is_alive()) or sb.quarantine_reason is not None
+    finally:
+        sb.close()

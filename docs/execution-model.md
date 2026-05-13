@@ -5,6 +5,9 @@ It is versioned in `pyisolate.runtime.protocol` as `MINIMAL_CELL_ABI` and is
 frozen to seven operation names.
 
 ## Minimal cell ABI v1
+The public API names the isolation backend explicitly: `backend="subinterpreter"` is the execution-cell mode, `backend="process"` is the process-boundary mode, and `backend="microvm"` is the microVM-boundary mode. These modes change the containment boundary, not the seven cell operations below.
+
+## Allowed operations
 
 1. **`exec(source)`**
    Execute source text inside the cell runtime.

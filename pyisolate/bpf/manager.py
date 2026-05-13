@@ -12,6 +12,8 @@ import subprocess
 from pathlib import Path
 from typing import Literal
 
+from ..policy.model import from_compiled_policy, to_bpf_map_entries
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,7 +28,7 @@ class BPFManager:
 
     def __init__(self):
         self.loaded = False
-        self.policy_maps: dict[str, str] = {}
+        self.policy_maps: dict[str, object] = {}
         self._src = Path(__file__).with_name("dummy.bpf.c")
         self._obj = Path(__file__).with_name("dummy.bpf.o")
         self._skel = Path(__file__).with_name("dummy.skel.h")
@@ -35,7 +37,7 @@ class BPFManager:
         self._filter_obj = Path(__file__).with_name("syscall_filter.bpf.o")
         self._guard_src = Path(__file__).with_name("resource_guard.bpf.c")
         self._guard_obj = Path(__file__).with_name("resource_guard.bpf.o")
-        self._skel_cache = self._SKEL_CACHE
+        self._skel_cache: dict[Path, str] = {}
 
     # internal helper
     def _run(self, cmd: list[str], *, raise_on_error: bool = False) -> bool:
@@ -201,15 +203,17 @@ class BPFManager:
             raise RuntimeError(f"Invalid JSON in policy file {policy_path}") from exc
         if not isinstance(data, dict):
             raise RuntimeError("Policy data must be a JSON object")
-        # Replace the active policy entirely to drop removed entries
-        self.policy_maps = data
-        for key, val in data.items():
-            encoded_val = (
-                json.dumps(val, separators=(",", ":"))
-                if isinstance(val, (dict, list))
-                else str(val)
-            )
-            logger.info("updating map %s -> %s", key, encoded_val)
+        try:
+            runtime_policy = from_compiled_policy(data)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Invalid policy data in {policy_path}: {exc}") from exc
+
+        # Replace the active policy entirely to drop removed entries. Store the
+        # canonical structure, not the source JSON shape, so the userspace and BPF
+        # paths have one representation.
+        self.policy_maps = runtime_policy.to_dict()
+        for map_name, key, value in to_bpf_map_entries(runtime_policy):
+            logger.info("updating map %s[%s] -> %s", map_name, key, value)
             try:
                 self._run(
                     [
@@ -217,17 +221,19 @@ class BPFManager:
                         "map",
                         "update",
                         "pinned",
-                        f"/sys/fs/bpf/{key}",
+                        f"/sys/fs/bpf/{map_name}",
                         "key",
-                        "0",
+                        key,
                         "value",
-                        encoded_val,
+                        value,
                         "any",
                     ],
                     raise_on_error=True,
                 )
             except RuntimeError as exc:
-                raise RuntimeError(f"BPF map update failed for {key}: {exc}") from exc
+                raise RuntimeError(
+                    f"BPF map update failed for {map_name}[{key}]: {exc}"
+                ) from exc
 
     def open_ring_buffer(self):
         """Return an iterator over resource guard events."""
