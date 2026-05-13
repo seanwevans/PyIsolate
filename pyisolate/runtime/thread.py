@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import ctypes
+import fnmatch
 import io
 import logging
 import os
@@ -45,6 +46,7 @@ from .protocol import (
 )
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
+from ..policy.model import from_sandbox_policy
 
 _thread_local = threading.local()
 
@@ -130,6 +132,18 @@ def deserialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str
     }
 
 
+def _fs_rule_matches(pattern: str, path: Path) -> bool:
+    path_text = str(path)
+    if pattern.endswith("/**"):
+        root = Path(pattern[:-3]).resolve(strict=False)
+        return path == root or path.is_relative_to(root)
+    if any(char in pattern for char in "*?["):
+        return fnmatch.fnmatch(path_text, pattern)
+    return path == Path(pattern).resolve(strict=False) or path.is_relative_to(
+        Path(pattern).resolve(strict=False)
+    )
+
+
 def _blocked_open(file, *args, **kwargs):
     """Restrict file access based on the current thread's policy."""
 
@@ -140,12 +154,16 @@ def _blocked_open(file, *args, **kwargs):
         path = Path(file).resolve(strict=False)
 
         fs_cap = getattr(_thread_local, "fs_capability", None)
-        allowed = getattr(_thread_local, "fs", None)
+        runtime_policy = getattr(_thread_local, "runtime_policy", None)
         if fs_cap is not None:
             if not fs_cap.allows(path):
                 raise errors.PolicyError("file access blocked")
-        elif allowed is not None:
-            if not any(path.is_relative_to(a) for a in allowed):
+        elif runtime_policy is not None:
+            if any(_fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs):
+                raise errors.PolicyError("file access blocked")
+            if not any(
+                _fs_rule_matches(rule.path, path) for rule in runtime_policy.allow_fs
+            ):
                 raise errors.PolicyError("file access blocked")
         elif getattr(_thread_local, "active", False):
             raise errors.PolicyError("file access blocked")
@@ -167,19 +185,22 @@ def _blocked_open(file, *args, **kwargs):
 
 def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
     net_cap = getattr(_thread_local, "net_capability", None)
-    allowed = getattr(_thread_local, "tcp", None)
+    runtime_policy = getattr(_thread_local, "runtime_policy", None)
     if isinstance(address, tuple):
         host, port, *_ = address
     else:
         host, port = address
+    destination = f"{host}:{port}"
     if net_cap is not None:
         if not net_cap.allows(str(host), int(port)):
-            raise errors.PolicyError(f"connect blocked: {host}:{port}")
-    elif allowed is not None:
-        if f"{host}:{port}" not in allowed:
-            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+            raise errors.PolicyError(f"connect blocked: {destination}")
+    elif runtime_policy is not None:
+        if any(rule.destination == destination for rule in runtime_policy.deny_tcp):
+            raise errors.PolicyError(f"connect blocked: {destination}")
+        if not any(rule.destination == destination for rule in runtime_policy.allow_tcp):
+            raise errors.PolicyError(f"connect blocked: {destination}")
     else:
-        raise errors.PolicyError(f"connect blocked: {host}:{port}")
+        raise errors.PolicyError(f"connect blocked: {destination}")
     sandbox = getattr(_thread_local, "sandbox", None)
     if sandbox is not None:
         sandbox._network_ops += 1
@@ -391,8 +412,9 @@ class SandboxThread(threading.Thread):
     @staticmethod
     def _merge_allowed_imports(policy, allowed_imports: Optional[Iterable[str]]):
         imports: set[str] = set()
-        if policy is not None and getattr(policy, "imports", None):
-            imports.update(policy.imports)
+        runtime_policy = from_sandbox_policy(policy) if policy is not None else None
+        if runtime_policy is not None and runtime_policy.imports:
+            imports.update(runtime_policy.imports)
 
         allowed_imports_provided = allowed_imports is not None
         if allowed_imports_provided:
@@ -418,6 +440,7 @@ class SandboxThread(threading.Thread):
         capabilities: Optional[dict[str, Any]] = None,
     ) -> None:
         self.policy = policy
+        self.runtime_policy = from_sandbox_policy(policy) if policy is not None else None
         self.cpu_quota_ms = cpu_ms
         self.mem_quota_bytes = mem_bytes
         self.wall_time_ms = wall_time_ms
@@ -780,22 +803,7 @@ class SandboxThread(threading.Thread):
                 if isinstance(payload, str):
                     payload = ExecRequest(source=payload)
 
-                allowed_tcp = None
-                allowed_fs = None
-                if self.policy is not None:
-                    tcp_policy = getattr(self.policy, "tcp", None)
-                    if tcp_policy is not None:
-                        allowed_tcp = set(tcp_policy)
-                    if getattr(self.policy, "fs", None):
-                        allowed_fs = [
-                            Path(p).resolve(strict=False) for p in self.policy.fs
-                        ]
-                if allowed_tcp is None:
-                    if hasattr(_thread_local, "tcp"):
-                        delattr(_thread_local, "tcp")
-                else:
-                    _thread_local.tcp = allowed_tcp
-                _thread_local.fs = allowed_fs
+                _thread_local.runtime_policy = self.runtime_policy
                 _thread_local.fs_capability = self._capabilities.get("filesystem")
                 _thread_local.net_capability = self._capabilities.get("network")
                 _thread_local.subprocess_capability = self._capabilities.get(
