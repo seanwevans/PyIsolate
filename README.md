@@ -200,13 +200,17 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
 
 A cell is intentionally limited to seven operations: execute source, call a dotted function, import allowed modules, post messages, stream logs, emit metrics, and request broker actions.
 
+The API makes the isolation choice explicit: `backend="subinterpreter"` means an execution cell, `backend="process"` means a separate OS process boundary, and `backend="microvm"` means a process behind a microVM boundary. The cell contract stays the same across modes, but the security boundary does not: sub-interpreters are not treated as a hard boundary.
+
 See [docs/execution-model.md](docs/execution-model.md). We keep this model small on purpose: production systems are safer when they refuse features outside a single contract.
 
 ---
 
 ## Security model
 
-* **Execution cell** – each guest runs in its own sub‑interpreter, hosted by one sandbox thread.
+* **Execution cell** – `backend="subinterpreter"`; each guest runs in its own sub‑interpreter, hosted by one sandbox thread.
+* **Process boundary** – `backend="process"`; each guest is intended to run in its own OS process with kernel policy applied outside the Python runtime.
+* **MicroVM boundary** – `backend="microvm"`; each guest is intended to run inside a process launched behind a microVM boundary for stronger blast-radius isolation.
 * **Security boundary (authoritative)** – enforcement lives at the kernel/process layer (cgroups + eBPF/LSM), not at the Python sub‑interpreter boundary.
 * **Kernel boundary** – every sandbox thread enters its own cgroup; CO‑RE eBPF programs enforce FS/net/syscall policy.
 * **Broker** – sole path to privileged syscalls, sealed with AEAD and strict replay protection.
