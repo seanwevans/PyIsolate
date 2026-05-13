@@ -21,6 +21,7 @@ from .capabilities import ROOT, RootCapability
 from .errors import PolicyAuthError, TenantQuotaExceeded
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
+from .policy import resolve_policy
 from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
 from .telemetry import DenialEvent
@@ -295,6 +296,8 @@ class Supervisor:
         if pattern.fullmatch(name) is None:
             raise ValueError("Sandbox name contains invalid characters")
         self._cleanup()
+
+        policy = resolve_policy(policy)
 
         if policy is not None and getattr(policy, "imports", None):
             imports = set(policy.imports)

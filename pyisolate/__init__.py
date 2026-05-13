@@ -88,7 +88,7 @@ except (
         raise ModuleNotFoundError("cryptography is required for migration support")
 
 
-from .policy import refresh_remote  # noqa: F401
+from .policy import refresh_remote, resolve_policy  # noqa: F401
 from .sdk import Pipeline, sandbox  # noqa: F401
 from .subset import OwnershipError, RestrictedExec  # noqa: F401
 from .nogil import no_gil_readiness_report, warn_if_unsafe_native_extensions  # noqa: F401
@@ -160,6 +160,7 @@ __all__ = [
     "restore",
     "migrate",
     "refresh_remote",
+    "resolve_policy",
     "setup_structured_logging",
     "DenialEvent",
     "no_gil_readiness_report",
