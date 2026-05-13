@@ -20,7 +20,9 @@ def test_module_import_is_lazy(monkeypatch):
         calls.append("watchdog")
 
     monkeypatch.setattr(BPFManager, "load", fake_load)
-    monkeypatch.setattr("pyisolate.watchdog.ResourceWatchdog.start", fake_watchdog_start)
+    monkeypatch.setattr(
+        "pyisolate.watchdog.ResourceWatchdog.start", fake_watchdog_start
+    )
 
     sup_mod = iso.supervisor
     sup_mod._supervisor = None
@@ -132,6 +134,27 @@ def test_spawn_valid_name_regex(name):
         assert sb._thread.name == name
     finally:
         sb.close()
+
+
+def test_spawn_backend_is_explicit_subinterpreter():
+    sb = iso.spawn("backend-sub", backend="subinterpreter")
+    try:
+        assert sb.backend == "subinterpreter"
+        assert iso.SUPPORTED_BACKENDS == ("subinterpreter", "process", "microvm")
+        assert iso.IMPLEMENTED_BACKENDS == ("subinterpreter",)
+    finally:
+        sb.close()
+
+
+@pytest.mark.parametrize("backend", ["process", "microvm"])
+def test_spawn_explicit_boundary_backends_fail_closed(backend):
+    with pytest.raises(NotImplementedError, match=backend):
+        iso.spawn(f"backend-{backend}", backend=backend)
+
+
+def test_spawn_rejects_unknown_backend():
+    with pytest.raises(ValueError, match="backend must be one of"):
+        iso.spawn("backend-bad", backend="thread")
 
 
 @pytest.mark.parametrize("name", ["bad name", "name!", "foo/bar"])
@@ -259,7 +282,9 @@ def test_spawn_start_failure_rolls_back_tenant_usage_and_ledger(tmp_path, monkey
         sup_replay.shutdown()
 
 
-def test_spawn_registry_failure_rolls_back_tenant_usage_and_ledger(tmp_path, monkeypatch):
+def test_spawn_registry_failure_rolls_back_tenant_usage_and_ledger(
+    tmp_path, monkeypatch
+):
     ledger = tmp_path / "quota.log"
     monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
 

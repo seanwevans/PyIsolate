@@ -8,13 +8,15 @@ import pyisolate as psi
 
 ### Canonical cell execution model
 
-PyIsolate supports exactly seven cell operations: `exec source`, `call dotted function`, `import module`, `post messages`, `stream logs`, `emit metrics`, and `request broker actions`.
+PyIsolate supports exactly seven cell operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.
+
+Isolation mode is explicit in the public API. Use `backend="subinterpreter"` for the execution-cell backend, `backend="process"` for one sandbox per OS process, and `backend="microvm"` for a process placed behind a microVM boundary. The cell contract is the same in every mode, but only the process and microVM modes are intended to represent hard blast-radius boundaries.
 
 The canonical contract lives in [docs/execution-model.md](docs/execution-model.md). Keep this surface small; production systems win by refusing extra features.
 
 | Call | Description |
 |------|-------------|
-| `psi.spawn(name:str, policy:str|dict=None, allowed_imports:list[str]|None=None) → Sandbox` | Create sandbox thread, attach eBPF, return handle with module whitelist. |
+| `psi.spawn(name:str, policy:str|dict=None, allowed_imports:list[str]|None=None, backend="subinterpreter") → Sandbox` | Create a sandbox with an explicit backend. `"subinterpreter"` is an execution cell; `"process"` and `"microvm"` are explicit hard-boundary modes and fail closed until their native launchers are available. |
 | `psi.Supervisor(warm_pool:int=0, rollout_mode:str="dev")` | Build an isolated supervisor with explicit rollout posture (`dev`, `hardened`, `compatibility`). |
 | `sandbox.close(timeout=0.2)` | Graceful stop → SIGTERM; force‑kill after timeout. |
 | `with psi.spawn(name, policy)` | Context manager form; sandbox closes on exit. |
@@ -23,7 +25,7 @@ The canonical contract lives in [docs/execution-model.md](docs/execution-model.m
 ## 2  Executing code
 
 ```python
-sb = psi.spawn("guest42", policy="defaults", numa_node=0)
+sb = psi.spawn("guest42", policy="defaults", numa_node=0, backend="subinterpreter")
 sb.exec("from math import sqrt; post(sqrt(2))")
 result = sb.recv(timeout=0.1)      # 1.4142135623
 ```
@@ -31,9 +33,12 @@ result = sb.recv(timeout=0.1)      # 1.4142135623
 | Method | Semantics |
 |--------|-----------|
 | `exec(src)` | Run source in guest. Exceptions are posted to the outbox and must be retrieved with `recv()`. |
-| `call(func, *args, **kw)` | Import‑free RPC: call dotted `func` inside guest. |
+| `call(func, *args, **kw)` | Call dotted `func` inside guest using policy-controlled module resolution. |
 | `recv(timeout=None)` | Blocking receive from guest channel. |
 | `post(obj)` *(guest side)* | Send picklable object to supervisor. |
+| `log(level, message, **fields)` *(guest side)* | Emit a structured log event. |
+| `metric(name, value, tags=None)` *(guest side)* | Emit a metric datapoint. |
+| `request(capability, action, payload=None)` *(guest side)* | Ask the broker to perform a privileged action through an explicit capability. |
 | `enable_tracing()` | Start recording guest operations. |
 | `get_syscall_log()` | Return recorded operations. |
 | `profile()` | Snapshot of current CPU and memory usage. |
@@ -63,7 +68,7 @@ policy.refresh("/tmp/policy.yml", token="secret")
 ## 4  High-level helpers
 
 ```python
-@psi.sandbox(policy="ml-inference", timeout="30s")
+@psi.sandbox(policy="ml-inference", timeout="30s", backend="subinterpreter")
 def run_model(data):
     ...
 
