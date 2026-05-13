@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import sys
 import sysconfig
 from pathlib import Path
@@ -56,31 +57,64 @@ def kernel_feature_flags() -> dict[str, dict[str, Any]]:
     return {
         "ebpf_lsm": {
             "available": "bpf" in lsm,
-            "reason": "Kernel LSM list does not include bpf" if "bpf" not in lsm else "ok",
+            "reason": (
+                "Kernel LSM list does not include bpf" if "bpf" not in lsm else "ok"
+            ),
         },
         "bpffs": {
             "available": os.path.ismount("/sys/fs/bpf"),
-            "reason": "/sys/fs/bpf is not mounted" if not os.path.ismount("/sys/fs/bpf") else "ok",
+            "reason": (
+                "/sys/fs/bpf is not mounted"
+                if not os.path.ismount("/sys/fs/bpf")
+                else "ok"
+            ),
         },
         "cgroup_v2": {
             "available": Path("/sys/fs/cgroup/cgroup.controllers").exists(),
-            "reason": "cgroup v2 controllers file missing"
-            if not Path("/sys/fs/cgroup/cgroup.controllers").exists()
-            else "ok",
+            "reason": (
+                "cgroup v2 controllers file missing"
+                if not Path("/sys/fs/cgroup/cgroup.controllers").exists()
+                else "ok"
+            ),
         },
         "io_uring": {
-            "available": hasattr(os, "SYS_io_uring_setup") or platform.system() == "Linux",
-            "reason": "non-Linux kernels are unsupported for io_uring"
-            if platform.system() != "Linux"
-            else "ok",
+            "available": hasattr(os, "SYS_io_uring_setup")
+            or platform.system() == "Linux",
+            "reason": (
+                "non-Linux kernels are unsupported for io_uring"
+                if platform.system() != "Linux"
+                else "ok"
+            ),
         },
         "landlock": {
             "available": Path("/sys/kernel/security/landlock").exists(),
-            "reason": "Landlock securityfs entry not detected"
-            if not Path("/sys/kernel/security/landlock").exists()
-            else "ok",
+            "reason": (
+                "Landlock securityfs entry not detected"
+                if not Path("/sys/kernel/security/landlock").exists()
+                else "ok"
+            ),
         },
     }
+
+
+def bpf_toolchain_flags() -> dict[str, dict[str, Any]]:
+    """Report whether the userspace BPF build/load tools are available."""
+
+    commands = {
+        "clang": "clang",
+        "bpftool": "bpftool",
+        "llvm_objdump": "llvm-objdump",
+    }
+    flags: dict[str, dict[str, Any]] = {}
+    for name, command in commands.items():
+        path = shutil.which(command)
+        flags[name] = {
+            "available": path is not None,
+            "command": command,
+            "path": path,
+            "reason": "ok" if path is not None else f"{command} not found on PATH",
+        }
+    return flags
 
 
 def hardening_feature_flags() -> dict[str, dict[str, Any]]:
@@ -90,16 +124,23 @@ def hardening_feature_flags() -> dict[str, dict[str, Any]]:
     return {
         "no_gil_runtime": {
             "available": bool(provenance["py_gil_disabled"]),
-            "reason": "Python was not built with --disable-gil"
-            if not provenance["py_gil_disabled"]
-            else "ok",
+            "reason": (
+                "Python was not built with --disable-gil"
+                if not provenance["py_gil_disabled"]
+                else "ok"
+            ),
         },
         "deterministic_wheels": {
             "available": platform.system() == "Linux"
             and platform.machine() in {"x86_64", "aarch64"},
-            "reason": "Deterministic wheel policy only defined for Linux x86_64/aarch64"
-            if not (platform.system() == "Linux" and platform.machine() in {"x86_64", "aarch64"})
-            else "ok",
+            "reason": (
+                "Deterministic wheel policy only defined for Linux x86_64/aarch64"
+                if not (
+                    platform.system() == "Linux"
+                    and platform.machine() in {"x86_64", "aarch64"}
+                )
+                else "ok"
+            ),
         },
     }
 
@@ -116,6 +157,7 @@ def installation_report() -> dict[str, Any]:
             "machine": platform.machine(),
             "features": kernel_feature_flags(),
         },
+        "bpf": {"toolchain": bpf_toolchain_flags()},
         "hardening": hardening_feature_flags(),
     }
 

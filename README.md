@@ -1,25 +1,31 @@
 # PyIsolate
 <img width="256" alt="a sandbox of sandboxes!" src="https://github.com/user-attachments/assets/e5851893-ee13-4466-981e-55d6d08c01db" />
 
-**A Light‑weight, eBPF‑hardened sub‑interpreter sandbox for a no-GIL CPython**
+**Current state: prototype.** PyIsolate is a light-weight sub-interpreter sandbox prototype. Kernel eBPF enforcement and CPython no-GIL/free-threaded support are experimental roadmap work, not release guarantees.
 
-## Features
+## Current release status
 
-* **True parallelism** — built on CPython 3.13 with the `--disable-gil` build.
-* **Kernel‑enforced security** — eBPF‑LSM & cgroup hooks gate filesystem, network, and high‑risk syscalls.
-* **Deterministic quotas** — per‑interpreter arenas cap RAM; perf‑event BPF guards CPU & bandwidth.
-* **Kernel‑level accounting** — `resource_guard.bpf.c` tracks CPU time and RSS per sandbox via a ring buffer.
+PyIsolate `0.0.x` is a prototype for API, policy, broker, observability, and test-matrix development. Do **not** treat this release as a hardened security boundary. The in-repo BPF loader compiles proof-of-concept programs and the default development mode can continue when kernel/BPF tooling is missing. Hardened mode is intentionally fail-closed behind `pyisolate-doctor --mode hardened`.
+
+## Features and roadmap
+
+* **Sub-interpreter sandbox API** — available for prototype development and conformance testing.
+* **Import allow-listing and user-space quotas** — available as prototype guardrails; not a complete adversarial security boundary.
+* **No-GIL/free-threaded CPython support** — experimental roadmap target for CPython 3.13+ `--disable-gil` builds.
+* **Kernel enforcement** — experimental roadmap target; eBPF-LSM, cgroup, and verifier-backed policy enforcement are not guaranteed by the current release.
+* **Deterministic quotas** — roadmap: per-interpreter arenas plus perf-event BPF guards for CPU and bandwidth.
+* **Kernel-level accounting** — experimental: `resource_guard.bpf.c` is a proof-of-concept ring-buffer source.
 * **io_uring async I/O** — broker uses Linux io_uring for non-blocking operations.
 * **Token‑gated policy reload** — update YAML policies in micro‑seconds with authentication.
 * **Authenticated broker** — X25519 (optionally Kyber‑768) + ChaCha20‑Poly1305 secure control channel with replay counters.
 * **Hot‑reload policy** — update YAML policies in micro‑seconds without restarting guests.
-* **eBPF‑verified contracts** — runtime assertions compiled into BPF for extra safety.
-* **Observability** — Prometheus metrics & eBPF perf‑events for every sandbox.
+* **eBPF‑verified contracts** — roadmap: runtime assertions compiled into BPF for extra safety.
+* **Observability** — Prometheus metrics are available; eBPF perf-event coverage is experimental.
 * **Capability imports** — restrict module access per sandbox via `allowed_imports`.
 * **Restricted subset** — optional interpreter with move-only ownership semantics.
 * **Stack canaries & CFI** — sub‑interpreter compiled with `-fstack-protector-strong` and `-fsanitize=cfi`.
 * **NUMA‑aware scheduling** — bind sandboxes to the CPUs of a chosen node on multi‑socket hosts.
-* **Remote policy enforcement** — fetch and apply YAML over HTTP.
+* **Remote policy refresh** — fetch and apply YAML over HTTP to prototype policy maps.
 * **Encrypted checkpointing** — save sandbox state with ChaCha20‑Poly1305.
 * **Migration** — transfer checkpoints to a peer host.
 
@@ -35,7 +41,8 @@ python -m pip install -e .[dev]  # install package for development and tooling
 # python -m pip install -e .[dev,pqcrypto]
 pytest -q          # run the test‑suite
 python examples/echo.py
-pyisolate-doctor  # capture provenance + kernel/hardening feature report
+pyisolate-doctor                 # capture provenance + feature report
+pyisolate-doctor --mode hardened # fail closed on unsupported no-GIL/kernel/BPF config
 ```
 
 ### CI test matrix
@@ -60,7 +67,7 @@ pytest -q tests/test_matrix_hardening.py
 
 PyIsolate includes a `pyisolate-doctor` command for installation diagnostics and
 release provenance tracking (Python build hash, no-GIL status, kernel features,
-and deterministic-wheel policy flags). See [docs/packaging-reproducibility.md](docs/packaging-reproducibility.md).
+BPF toolchain availability, and deterministic-wheel policy flags). In `--mode hardened`, unsupported Python, kernel, or BPF configurations are reported as hard failures with a non-zero exit code. See [docs/packaging-reproducibility.md](docs/packaging-reproducibility.md).
 
 ### Structured logging
 
@@ -82,16 +89,16 @@ import pyisolate as iso
 # default: fast local iteration
 dev = iso.Supervisor(rollout_mode="dev")
 
-# strict production posture (fail closed if BPF toolchain/load fails)
+# experimental fail-closed gate; requires pyisolate-doctor --mode hardened to pass
 hardened = iso.Supervisor(rollout_mode="hardened")
 
-# looser ecosystem validation (baseline BPF only, skips stricter filters)
+# compatibility testing only; it deliberately skips stricter filters and is not enforcement
 compat = iso.Supervisor(rollout_mode="compatibility")
 ```
 
-* `dev`: lightweight, low-friction development mode.
-* `hardened`: real enforcement; any eBPF compile/load failure raises.
-* `compatibility`: reduced enforcement to maximize third-party compatibility.
+* `dev`: lightweight, low-friction development mode; may run without kernel enforcement.
+* `hardened`: experimental fail-closed mode; `pyisolate-doctor --mode hardened` must pass and any eBPF compile/load failure raises.
+* `compatibility`: compatibility testing only; reduced checks must not be presented as enforced isolation.
 
 ### Hello World
 
@@ -103,14 +110,15 @@ from math import sqrt
 post(sqrt(2))
 """
 
-with iso.spawn("demo", policy="stdlib.readonly") as sandbox:
+with iso.spawn("demo", allowed_imports=["math"]) as sandbox:
     sandbox.exec(code)
     print("Result:", sandbox.recv())   # 1.4142135623730951
 ```
 
 
 Higher‑level helpers can automatically sandbox functions and build simple
-pipelines:
+pipelines. Policy names in these examples are labels for prototype routing until
+the hardened gate passes; do not rely on them for kernel enforcement:
 
 ```python
 @iso.sandbox(policy="ml-inference", timeout="30s")
@@ -137,9 +145,9 @@ For CPython 3.13 `--disable-gil` deployments, review the extension and package c
 
 ### Host conformance suite
 
-Run the host conformance suite to measure whether the current machine satisfies
-PyIsolate guarantees (Python build, kernel capabilities, BPF readiness, cgroup
-behavior, policy enforcement, and timeout/kill behavior):
+Run the host conformance suite to measure how close the current machine is to
+PyIsolate roadmap guarantees (Python build, kernel capabilities, BPF readiness,
+cgroup behavior, policy enforcement, and timeout/kill behavior):
 
 ```bash
 python -m pyisolate.conformance
@@ -179,7 +187,7 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
 
 ```
  ┌──────── Supervisor (root) ───────────┐
- │  • eBPF loader & maps                │
+ │  • experimental eBPF loader & maps   │
  │  • Broker (AEAD, counters)           │
  │  • Policy hot‑reloader               │
  │  • Metrics exporter (Prometheus)     │
@@ -191,7 +199,7 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
  │   ↑         ↑              ↑         │
  │   │channel  │              │         │
  └───┴─────────┴──────────────┴─────────┘
-       eBPF cgroups & LSM hooks per thread
+       roadmap: eBPF cgroups & LSM hooks per thread
 ```
 
 ---
@@ -207,11 +215,12 @@ See [docs/execution-model.md](docs/execution-model.md). We keep this model small
 ## Security model
 
 * **Execution cell** – each guest runs in its own sub‑interpreter, hosted by one sandbox thread.
-* **Security boundary (authoritative)** – enforcement lives at the kernel/process layer (cgroups + eBPF/LSM), not at the Python sub‑interpreter boundary.
-* **Kernel boundary** – every sandbox thread enters its own cgroup; CO‑RE eBPF programs enforce FS/net/syscall policy.
+* **Current security boundary** – this prototype must not be used as the sole adversarial security boundary. Python sub-interpreters are not a hard isolation boundary.
+* **Roadmap security boundary** – hardened releases are expected to enforce at the kernel/process layer (cgroups + eBPF/LSM), not at the Python sub-interpreter boundary.
+* **Kernel boundary** – experimental BPF/cgroup work exists in-tree, but current releases may fail closed or stay in development mode rather than guaranteeing FS/net/syscall policy enforcement.
 * **Broker** – sole path to privileged syscalls, sealed with AEAD and strict replay protection.
 * **Fallback hardening** – for stronger blast‑radius isolation (or kernels with reduced features), run one sandbox per process and place that process inside a container or microVM.
-* **Verified eBPF modules** – bytecode is disassembled with `llvm-objdump -d` and must succeed `bpftool prog load` so the kernel verifier approves it before any sandbox runs.
+* **Verified eBPF modules** – roadmap/hardened-mode requirement: bytecode is disassembled with `llvm-objdump -d` and must succeed `bpftool prog load` so the kernel verifier approves it before any sandbox runs.
 
 See **SECURITY.md** for a full threat‑model walkthrough.
 
@@ -236,6 +245,8 @@ A `Dockerfile` and experimental operator are included. See [docs/kubernetes.md](
 
 ## Roadmap
 
+* [ ] Harden kernel-backed FS/net/syscall policy enforcement
+* [ ] Support and test CPython 3.13+ no-GIL/free-threaded deployments
 * [ ] Land Landlock fallback for unprivileged kernels
 * [x] Add Kyber‑768 / Dilithium PQ hybrids
 * [ ] WASM build target for browser sandboxes
