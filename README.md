@@ -144,10 +144,15 @@ behavior, policy enforcement, and timeout/kill behavior):
 ```bash
 python -m pyisolate.conformance
 python -m pyisolate.conformance --json
+python -m pyisolate.conformance --grade
+pyisolate-doctor --grade
 ```
 
-Use this in CI or admission checks to replace hand-wavy security claims with a
-repeatable pass/fail report.
+The `--grade` output replaces a vague secure/insecure claim with an 8-point
+score over the guarantees that are actually active on the host: free-threading,
+eBPF-LSM, cgroup v2, Landlock fallback, no-GIL extension safety, broker crypto,
+quota enforcement, and crash isolation. Use it in CI or admission checks to
+attach evidence to each guarantee rather than relying on a single pass/fail bit.
 
 ### Policy editor
 
