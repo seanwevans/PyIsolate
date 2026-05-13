@@ -20,7 +20,10 @@ from .capabilities import (  # noqa: F401
 
 try:
     from .checkpoint import checkpoint, restore
-except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover - optional dependency
+except (
+    ModuleNotFoundError,
+    ImportError,
+) as exc:  # pragma: no cover - optional dependency
     # Trap only dependency-related import failures; let unrelated import-time
     # bugs in optional modules propagate so they remain visible to developers.
     if (
@@ -58,7 +61,10 @@ from .logging import setup_structured_logging  # noqa: F401
 
 try:
     from .migration import migrate
-except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover - optional dependency
+except (
+    ModuleNotFoundError,
+    ImportError,
+) as exc:  # pragma: no cover - optional dependency
     # Trap only dependency-related import failures; let unrelated import-time
     # bugs in optional modules propagate so they remain visible to developers.
     if (
@@ -78,6 +84,10 @@ from .policy import refresh_remote  # noqa: F401
 from .sdk import Pipeline, sandbox  # noqa: F401
 from .subset import OwnershipError, RestrictedExec  # noqa: F401
 from .supervisor import (
+    BackendMode,
+    DEFAULT_BACKEND,
+    IMPLEMENTED_BACKENDS,
+    SUPPORTED_BACKENDS,
     Sandbox,
     Supervisor,
     list_active,
@@ -89,6 +99,10 @@ from .supervisor import (
 
 __all__ = [
     "spawn",
+    "BackendMode",
+    "DEFAULT_BACKEND",
+    "SUPPORTED_BACKENDS",
+    "IMPLEMENTED_BACKENDS",
     "list_active",
     "Sandbox",
     "Supervisor",

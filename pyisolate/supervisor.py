@@ -13,7 +13,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from . import cgroup, recovery
 from .capabilities import ROOT, RootCapability
@@ -29,6 +29,32 @@ logger = logging.getLogger(__name__)
 # Allowed sandbox name pattern: alphanumerics, hyphen, underscore
 DEFAULT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 NAME_PATTERN = DEFAULT_NAME_PATTERN
+
+BackendMode = Literal["subinterpreter", "process", "microvm"]
+DEFAULT_BACKEND: BackendMode = "subinterpreter"
+SUPPORTED_BACKENDS: tuple[BackendMode, ...] = (
+    "subinterpreter",
+    "process",
+    "microvm",
+)
+IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = ("subinterpreter",)
+
+
+def _normalize_backend(backend: str) -> BackendMode:
+    if backend not in SUPPORTED_BACKENDS:
+        options = ", ".join(repr(item) for item in SUPPORTED_BACKENDS)
+        raise ValueError(f"backend must be one of: {options}")
+    return backend  # type: ignore[return-value]
+
+
+def _require_implemented_backend(backend: BackendMode) -> None:
+    if backend in IMPLEMENTED_BACKENDS:
+        return
+    raise NotImplementedError(
+        f"backend={backend!r} is an explicit isolation mode, but this build only "
+        "implements backend='subinterpreter'. Use an external process or microVM "
+        "launcher until the native backend is available."
+    )
 
 
 class Sandbox:
@@ -108,6 +134,11 @@ class Sandbox:
                 self.close()
             except Exception:
                 pass
+
+    @property
+    def backend(self) -> BackendMode:
+        """Return the isolation backend used by this sandbox handle."""
+        return getattr(self._thread, "_backend", DEFAULT_BACKEND)
 
     @property
     def stats(self):
@@ -210,9 +241,18 @@ class Supervisor:
         capabilities: Optional[dict[str, object]] = None,
         tenant: Optional[str] = None,
         tenant_quota: Optional[int] = None,
+        backend: BackendMode = DEFAULT_BACKEND,
     ) -> Sandbox:
-        """Create and start a sandbox thread."""
+        """Create and start a sandbox in the requested isolation backend.
+
+        ``backend="subinterpreter"`` is the execution-cell backend and is not
+        a hard security boundary by itself. ``backend="process"`` and
+        ``backend="microvm"`` are explicit boundary modes; they are reserved
+        API choices and fail closed until native launchers are available.
+        """
         global NAME_PATTERN
+        backend = _normalize_backend(backend)
+        _require_implemented_backend(backend)
         if not isinstance(name, str) or not name:
             raise ValueError("Sandbox name must be non-empty string")
         if len(name) > 64:
@@ -268,6 +308,7 @@ class Supervisor:
                     )
                     thread._on_violation = self._alerts.notify
                     thread._tracer = self._tracer
+                    thread._backend = backend
                 else:
                     thread = SandboxThread(
                         name=name,
@@ -276,6 +317,7 @@ class Supervisor:
                         tracer=self._tracer,
                         cgroup_path=cg_path,
                     )
+                    thread._backend = backend
                     thread.start()
                 thread._temp_dir = temp_dir
                 self._sandboxes[name] = thread
@@ -321,7 +363,9 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
-    def _authorize_control(self, token: str | RootCapability, op: str) -> ControlRequest:
+    def _authorize_control(
+        self, token: str | RootCapability, op: str
+    ) -> ControlRequest:
         """Validate an authenticated control-plane operation request."""
 
         if token is ROOT:
@@ -444,6 +488,10 @@ def _get_supervisor() -> Supervisor:
 
 # Public API
 def spawn(*args, **kwargs):
+    if "backend" in kwargs:
+        backend = _normalize_backend(kwargs["backend"])
+        _require_implemented_backend(backend)
+        kwargs["backend"] = backend
     return _get_supervisor().spawn(*args, **kwargs)
 
 
