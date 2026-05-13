@@ -25,7 +25,7 @@ import time
 import tracemalloc
 import types
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
@@ -49,6 +49,7 @@ from .protocol import (
 )
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
+from ..telemetry import DenialEvent
 from ..policy.model import from_sandbox_policy
 
 _thread_local = threading.local()
@@ -65,6 +66,48 @@ _CAPABILITY_MARKER = "__pyisolate_capability__"
 # falling back to unrestricted Python imports.
 DEFAULT_ALLOWED_IMPORTS: frozenset[str] = frozenset()
 _BLOCKED_MODULES = {"ctypes", "multiprocessing"}
+
+
+def _active_sandbox() -> "SandboxThread | None":
+    return getattr(_thread_local, "sandbox", None)
+
+
+def _deny(
+    capability: str,
+    attempted_action: str,
+    policy_rule: str,
+    message: str,
+    *,
+    kernel_decision: str = "not_evaluated",
+    broker_decision: str = "deny",
+) -> errors.PolicyError:
+    sandbox = _active_sandbox()
+    cell = sandbox.name if sandbox is not None else "<unknown>"
+    event = DenialEvent(
+        cell=cell,
+        capability=capability,
+        attempted_action=attempted_action,
+        policy_rule=policy_rule,
+        kernel_decision=kernel_decision,
+        broker_decision=broker_decision,
+    )
+    if sandbox is not None:
+        sandbox._record_denial(event)
+    return errors.PolicyError(message, denial_event=event)
+
+
+def _format_roots(roots: Iterable[Path]) -> str:
+    return ",".join(str(root) for root in roots)
+
+
+def _subprocess_command_name(args: object) -> str | None:
+    if isinstance(args, str):
+        return args.split(maxsplit=1)[0] if args else ""
+    if isinstance(args, (list, tuple)):
+        if not args:
+            return None
+        return str(args[0])
+    return str(args)
 
 
 def _serialize_capability(capability: Any) -> Any:
@@ -168,6 +211,20 @@ def _blocked_open(file, *args, **kwargs):
         runtime_policy = getattr(_thread_local, "runtime_policy", None)
         if fs_cap is not None:
             if not fs_cap.allows(path):
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    f"capability:filesystem roots={_format_roots(fs_cap.roots)}",
+                    "file access blocked",
+                )
+        elif allowed is not None:
+            if not any(path.is_relative_to(a) for a in allowed):
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    f"allow_fs:{_format_roots(allowed)}",
+                    "file access blocked",
+                )
                 raise errors.PolicyError("file access blocked")
         elif runtime_policy is not None:
             if any(_fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs):
@@ -177,7 +234,12 @@ def _blocked_open(file, *args, **kwargs):
             ):
                 raise errors.PolicyError("file access blocked")
         elif getattr(_thread_local, "active", False):
-            raise errors.PolicyError("file access blocked")
+            raise _deny(
+                "filesystem",
+                f"open:{path}",
+                "deny-by-default",
+                "file access blocked",
+            )
 
     sandbox = getattr(_thread_local, "sandbox", None)
     if sandbox is not None:
@@ -204,7 +266,27 @@ def _check_network_destination(address: Iterable[str]) -> None:
     destination = f"{host}:{port}"
     if net_cap is not None:
         if not net_cap.allows(str(host), int(port)):
-            raise errors.PolicyError(f"connect blocked: {destination}")
+            raise _deny(
+                "network",
+                f"connect:{host}:{port}",
+                f"capability:network destinations={','.join(sorted(net_cap.destinations))}",
+                f"connect blocked: {host}:{port}",
+            )
+    elif allowed is not None:
+        if f"{host}:{port}" not in allowed:
+            raise _deny(
+                "network",
+                f"connect:{host}:{port}",
+                f"allow_tcp:{','.join(sorted(allowed))}",
+                f"connect blocked: {host}:{port}",
+            )
+    else:
+        raise _deny(
+            "network",
+            f"connect:{host}:{port}",
+            "deny-by-default",
+            f"connect blocked: {host}:{port}",
+        )            
     elif runtime_policy is not None:
         if any(rule.destination == destination for rule in runtime_policy.deny_tcp):
             raise errors.PolicyError(f"connect blocked: {destination}")
@@ -255,15 +337,43 @@ def _deny_side_effect_api(api_name: str):
 
 def _blocked_subprocess_run(*args, **kwargs):
     cap = getattr(_thread_local, "subprocess_capability", None)
+    attempted = args[0] if args else kwargs.get("args")
+    command_name = _subprocess_command_name(attempted)
+    action = (
+        f"subprocess.run:{command_name}" if command_name else "subprocess.run:<empty>"
+    )
     if cap is None:
-        raise errors.PolicyError("subprocess access blocked")
+        raise _deny(
+            "subprocess", action, "deny-by-default", "subprocess access blocked"
+        )
+    if isinstance(attempted, str) and not cap.allow_shell:
+        raise _deny(
+            "subprocess",
+            action,
+            "capability:subprocess shell=false",
+            "shell string commands are not permitted",
+        )
+    if command_name is None:
+        raise ValueError("empty command")
+    if command_name not in cap.allowed_commands:
+        raise _deny(
+            "subprocess",
+            action,
+            f"capability:subprocess allowed_commands={','.join(sorted(cap.allowed_commands))}",
+            f"subprocess blocked: {command_name}",
+        )
     return cap.run(*args, **kwargs)
 
 
 def _guarded_urandom(n: int) -> bytes:
     cap = getattr(_thread_local, "random_capability", None)
     if cap is None:
-        raise errors.PolicyError("randomness access blocked")
+        raise _deny(
+            "random",
+            f"random.bytes:{n}",
+            "deny-by-default",
+            "randomness access blocked",
+        )
     return cap.bytes(n)
 
 
@@ -464,7 +574,12 @@ def _make_importer(allowed: Iterable[str]):
     def _import(name, globals=None, locals=None, fromlist=(), level=0):
         base = name.split(".")[0]
         if base not in allowed_set:
-            raise errors.PolicyError(f"import of {name!r} is not permitted")
+            raise _deny(
+                "import",
+                f"import:{name}",
+                f"allow_import:{','.join(sorted(allowed_set))}",
+                f"import of {name!r} is not permitted",
+            )
         module = builtins.__import__(name, globals, locals, fromlist, level)
         return _wrap_module(name, module)
 
@@ -511,6 +626,7 @@ class Stats:
     errors: int
     operations: int
     cost: float
+    denials: list[DenialEvent] = field(default_factory=list)
 
 
 class SandboxThread(threading.Thread):
@@ -600,6 +716,7 @@ class SandboxThread(threading.Thread):
         self._network_ops = 0
         self._output_bytes = 0
         self._child_work = 0
+        self._denial_events: list[DenialEvent] = []
 
     def __init__(
         self,
@@ -764,6 +881,16 @@ class SandboxThread(threading.Thread):
             raise errors.WallTimeExceeded()
         return self._trace_guard
 
+    def _record_denial(self, event: DenialEvent) -> None:
+        self._denial_events.append(event)
+        self._logger.warning(
+            "operation denied", extra={"denial_event": event.to_dict()}
+        )
+
+    def get_denial_events(self) -> list[dict[str, str]]:
+        """Return structured denial telemetry for this sandbox."""
+        return [event.to_dict() for event in self._denial_events]
+
     def enable_tracing(self) -> None:
         """Start recording guest operations."""
         self._trace_enabled = True
@@ -926,6 +1053,7 @@ class SandboxThread(threading.Thread):
             errors=self._errors,
             operations=self._ops,
             cost=cost,
+            denials=list(self._denial_events),
         )
 
     # internal thread run loop

@@ -93,3 +93,25 @@ not match the expected value are rejected to prevent replay.
 - HKDF provides key separation between channels.
 - Empty associated data is used by default but can be extended in future
   revisions.
+
+## Denial telemetry
+
+Every denied operation is emitted as a structured `DenialEvent` before the
+sandbox receives the corresponding `PolicyError`.  The event shape is stable and
+JSON-serializable:
+
+```python
+{
+    "cell": "<sandbox name>",
+    "capability": "<filesystem|network|subprocess|random|import|...>",
+    "attempted_action": "<operation plus target>",
+    "policy_rule": "<rule or deny-by-default that produced the denial>",
+    "kernel_decision": "<allow|deny|not_evaluated|unavailable>",
+    "broker_decision": "<allow|deny|not_evaluated|unavailable>",
+}
+```
+
+Sandbox handles expose `get_denial_events()` for inspection, and
+`PolicyError.denial_event` carries the event that caused the raised error.
+Prometheus export includes aggregate denial counters plus decision-dimensional
+samples so denied behavior can be segmented without scraping exception strings.

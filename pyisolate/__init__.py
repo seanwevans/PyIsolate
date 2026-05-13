@@ -58,6 +58,7 @@ from .errors import (
     WallTimeExceeded,
 )
 from .logging import setup_structured_logging  # noqa: F401
+from .telemetry import DenialEvent  # noqa: F401
 
 try:
     from .migration import migrate
@@ -146,6 +147,7 @@ __all__ = [
     "migrate",
     "refresh_remote",
     "setup_structured_logging",
+    "DenialEvent",
     "no_gil_readiness_report",
     "warn_if_unsafe_native_extensions",
     "bpf",

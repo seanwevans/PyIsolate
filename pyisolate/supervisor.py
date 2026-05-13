@@ -22,6 +22,7 @@ from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
+from .telemetry import DenialEvent
 from .watchdog import ResourceWatchdog
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,10 @@ class Sandbox:
 
     def get_syscall_log(self) -> list[str]:
         return self._thread.get_syscall_log()
+
+    def get_denial_events(self) -> list[dict[str, str]]:
+        """Return structured denial telemetry emitted by this sandbox."""
+        return self._thread.get_denial_events()
 
     def profile(self):
         return self._thread.profile()
@@ -401,8 +406,16 @@ class Supervisor:
             handle = CapabilityHandle(kind="root", subject=op)
         else:
             if self._policy_token is None or token != self._policy_token:
-                logger.warning("control operation rejected: %s invalid token", op)
-                raise PolicyAuthError("invalid policy token")
+                logger.warning("control operation rejected: invalid token for %s", op)
+                event = DenialEvent(
+                    cell="supervisor",
+                    capability="control",
+                    attempted_action=op,
+                    policy_rule="policy-token",
+                    kernel_decision="not_evaluated",
+                    broker_decision="deny",
+                )
+                raise PolicyAuthError("invalid policy token", denial_event=event)
             handle = CapabilityHandle(kind="policy-token", subject=op)
 
         return ControlRequest(op=op, capability=handle, payload={})
