@@ -198,7 +198,7 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
 
 ## Canonical execution model
 
-A cell is intentionally limited to seven operations: execute source, call a dotted function, import allowed modules, post messages, stream logs, emit metrics, and request broker actions.
+A cell is intentionally limited to seven operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.
 
 See [docs/execution-model.md](docs/execution-model.md). We keep this model small on purpose: production systems are safer when they refuse features outside a single contract.
 

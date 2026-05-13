@@ -39,8 +39,11 @@ from ..capabilities import (
 )
 from .protocol import (
     AttachCgroupRequest,
+    BrokerRequest,
     CallRequest,
     ExecRequest,
+    LogEvent,
+    MetricEvent,
     StopRequest,
 )
 from ..numa import bind_current_thread
@@ -231,6 +234,7 @@ def _make_sandbox_thread_class(sandbox: "SandboxThread"):
 def _wrap_module(name: str, module):
     base = name.split(".")[0]
     if base == "time":
+
         def _require_clock() -> ClockCapability:
             cap = getattr(_thread_local, "clock_capability", None)
             return cap
@@ -501,9 +505,11 @@ class SandboxThread(threading.Thread):
             "policy": self.policy,
             "cpu_ms": self.cpu_quota_ms,
             "mem_bytes": self.mem_quota_bytes,
-            "allowed_imports": sorted(self.allowed_imports)
-            if self.allowed_imports is not None
-            else None,
+            "allowed_imports": (
+                sorted(self.allowed_imports)
+                if self.allowed_imports is not None
+                else None
+            ),
             "numa_node": self.numa_node,
             "capabilities": serialize_capabilities(self._capabilities),
             "wall_time_ms": self.wall_time_ms,
@@ -524,9 +530,11 @@ class SandboxThread(threading.Thread):
             "network_ops_max": self.network_ops_max,
             "output_bytes_max": self.output_bytes_max,
             "child_work_max": self.child_work_max,
-            "allowed_imports": sorted(self.allowed_imports)
-            if self.allowed_imports is not None
-            else None,
+            "allowed_imports": (
+                sorted(self.allowed_imports)
+                if self.allowed_imports is not None
+                else None
+            ),
             "numa_node": self.numa_node,
             "capabilities": serialize_capabilities(self._capabilities),
         }
@@ -556,10 +564,37 @@ class SandboxThread(threading.Thread):
         return len(repr(item).encode("utf-8"))
 
     def _post(self, item: Any) -> None:
+        self._emit(item)
+
+    def _emit(self, item: Any) -> None:
         self._output_bytes += self._estimate_output_size(item)
-        if self.output_bytes_max is not None and self._output_bytes > self.output_bytes_max:
+        if (
+            self.output_bytes_max is not None
+            and self._output_bytes > self.output_bytes_max
+        ):
             raise errors.OutputExceeded()
         self._outbox.put(item)
+
+    def _log(self, level: str, message: str, **fields: Any) -> None:
+        self._emit(LogEvent(level=level, message=message, fields=fields))
+
+    def _metric(
+        self, name: str, value: int | float, tags: Optional[dict[str, str]] = None
+    ) -> None:
+        self._emit(MetricEvent(name=name, value=value, tags=tags or {}))
+
+    def _request(
+        self, capability: str, action: str, payload: Optional[dict[str, Any]] = None
+    ) -> None:
+        if capability not in self._capabilities:
+            raise errors.PolicyError(f"capability request blocked: {capability}")
+        self._emit(
+            BrokerRequest(
+                capability=capability,
+                action=action,
+                payload=payload or {},
+            )
+        )
 
     def _check_open_files_quota(self) -> None:
         if self.open_files_max is not None and self._open_files >= self.open_files_max:
@@ -747,7 +782,13 @@ class SandboxThread(threading.Thread):
             self._cpu_time = 0.0
             self._start_time = None
 
-            local_vars = {"post": self._post, "caps": self._capabilities}
+            local_vars = {
+                "post": self._post,
+                "log": self._log,
+                "metric": self._metric,
+                "request": self._request,
+                "caps": self._capabilities,
+            }
 
             if self.numa_node is not None:
                 bind_current_thread(self.numa_node)
