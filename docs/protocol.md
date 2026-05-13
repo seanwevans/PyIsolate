@@ -8,18 +8,36 @@ as separate systems.
 
 Crossings are intentionally minimal and explicit.
 
+## Minimal cell ABI
+
+`pyisolate.runtime.protocol.MINIMAL_CELL_ABI` pins the public cell surface at
+version 1. The only cell operations are:
+
+- `exec` -> `ExecRequest(source)`
+- `call` -> `CallRequest(target, args, kwargs)`
+- `post` -> guest message send
+- `recv` -> host receive from the cell channel
+- `log` -> `LogEvent(level, message, fields)`
+- `metric` -> `MetricEvent(name, value, tags)`
+- `request` -> `BrokerRequest(capability, action, payload)`
+
+Everything else must go through broker capabilities. New filesystem, network,
+secret, subprocess, or other privileged behavior should not add new cell ABI
+verbs; it should add or refine a broker capability and use `request`.
+
 ## Plane crossings
 
 Only structured messages are allowed across the queue boundary.
-`pyisolate.runtime.protocol` defines the request vocabulary:
+`pyisolate.runtime.protocol` defines the trusted/internal request vocabulary:
 
 - `ExecRequest(source)`
 - `CallRequest(target, args, kwargs)`
-- `AttachCgroupRequest(old_path)`
-- `StopRequest()`
-- `ControlRequest(op, capability, payload)`
+- `AttachCgroupRequest(old_path)` (internal supervisor plumbing)
+- `StopRequest()` (internal lifecycle sentinel)
+- `ControlRequest(op, capability, payload)` (authenticated supervisor control)
 
-This replaces ambient tuple/string payloads with typed requests.
+This replaces ambient tuple/string payloads with typed requests while keeping the
+public cell ABI frozen.
 
 ## Capability handles
 
@@ -75,3 +93,25 @@ not match the expected value are rejected to prevent replay.
 - HKDF provides key separation between channels.
 - Empty associated data is used by default but can be extended in future
   revisions.
+
+## Denial telemetry
+
+Every denied operation is emitted as a structured `DenialEvent` before the
+sandbox receives the corresponding `PolicyError`.  The event shape is stable and
+JSON-serializable:
+
+```python
+{
+    "cell": "<sandbox name>",
+    "capability": "<filesystem|network|subprocess|random|import|...>",
+    "attempted_action": "<operation plus target>",
+    "policy_rule": "<rule or deny-by-default that produced the denial>",
+    "kernel_decision": "<allow|deny|not_evaluated|unavailable>",
+    "broker_decision": "<allow|deny|not_evaluated|unavailable>",
+}
+```
+
+Sandbox handles expose `get_denial_events()` for inspection, and
+`PolicyError.denial_event` carries the event that caused the raised error.
+Prometheus export includes aggregate denial counters plus decision-dimensional
+samples so denied behavior can be segmented without scraping exception strings.

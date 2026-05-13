@@ -139,3 +139,52 @@ def test_network_and_entropy_capabilities() -> None:
     finally:
         sup.shutdown(ROOT)
         srv.close()
+
+
+def test_first_class_path_capabilities_split_read_and_write(tmp_path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source = input_dir / "data.txt"
+    source.write_text("payload")
+
+    sup = iso.Supervisor()
+    sb = sup.spawn(
+        "object-path-caps",
+        policy=iso.policy.Policy().grant(
+            iso.ReadPath(input_dir),
+            iso.WritePath(output_dir),
+            iso.Import("pathlib"),
+        ),
+    )
+    try:
+        sb.exec(f"post(open({str(source)!r}).read())")
+        assert sb.recv(timeout=1) == "payload"
+
+        target = output_dir / "result.txt"
+        sb.exec(f"open({str(target)!r}, 'w').write('done'); post('ok')")
+        assert sb.recv(timeout=1) == "ok"
+        assert target.read_text() == "done"
+
+        sb.exec(f"open({str(source)!r}, 'w').write('blocked')")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sup.shutdown(ROOT)
+
+
+def test_first_class_tcp_import_and_cpu_budget() -> None:
+    p = iso.policy.Policy().grant(
+        iso.ConnectTCP("api.example.com", 443), iso.Import("math"), iso.CpuBudget(25)
+    )
+    assert p.tcp == ["api.example.com:443"]
+    assert p.imports == ["math"]
+
+    sb = iso.spawn("object-import-cpu", policy=p)
+    try:
+        assert sb._thread.cpu_quota_ms == 25
+        sb.exec("import math; post(math.sqrt(9))")
+        assert sb.recv(timeout=1) == 3.0
+    finally:
+        sb.close()

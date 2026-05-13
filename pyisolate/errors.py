@@ -1,6 +1,10 @@
 """Exception hierarchy for PyIsolate."""
 
+from __future__ import annotations
+
 import builtins as _builtins
+
+from .telemetry import DenialEvent
 
 
 class SandboxError(Exception):
@@ -9,6 +13,10 @@ class SandboxError(Exception):
 
 class PolicyError(SandboxError):
     """Raised when a policy violation occurs."""
+
+    def __init__(self, message: str = "", *, denial_event: DenialEvent | None = None):
+        super().__init__(message)
+        self.denial_event = denial_event
 
 
 class PolicyAuthError(PolicyError):

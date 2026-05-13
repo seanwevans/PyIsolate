@@ -96,9 +96,9 @@ hardened = iso.Supervisor(rollout_mode="hardened")
 compat = iso.Supervisor(rollout_mode="compatibility")
 ```
 
-* `dev`: lightweight, low-friction development mode; may run without kernel enforcement.
-* `hardened`: experimental fail-closed mode; `pyisolate-doctor --mode hardened` must pass and any eBPF compile/load failure raises.
-* `compatibility`: compatibility testing only; reduced checks must not be presented as enforced isolation.
+* `dev`: lightweight, low-friction development mode. BPF/cgroup setup failures are reported through per-sandbox `quota_enforcement` status and logs, but sandbox creation continues so local development remains unblocked. CPU/RSS quota tests should be treated as best-effort unless the status reports the relevant controller as enforced.
+* `hardened`: production fail-closed mode. BPF compile/load failures and cgroup controller failures raise during supervisor start or sandbox spawn; CPU/RSS quotas must be enforced by cgroups/eBPF and watchdog breach events terminate or quarantine the sandbox. Python `tracemalloc` values are exposed only as debugging telemetry.
+* `compatibility`: ecosystem validation mode. Baseline BPF loading is attempted while stricter filters/guards may be skipped; cgroup quota status is still surfaced, and missing controllers degrade to explicit status/logs rather than silent `None`. Use this mode to find package compatibility issues, not as the authoritative security boundary.
 
 ### Hello World
 
@@ -152,10 +152,15 @@ cgroup behavior, policy enforcement, and timeout/kill behavior):
 ```bash
 python -m pyisolate.conformance
 python -m pyisolate.conformance --json
+python -m pyisolate.conformance --grade
+pyisolate-doctor --grade
 ```
 
-Use this in CI or admission checks to replace hand-wavy security claims with a
-repeatable pass/fail report.
+The `--grade` output replaces a vague secure/insecure claim with an 8-point
+score over the guarantees that are actually active on the host: free-threading,
+eBPF-LSM, cgroup v2, Landlock fallback, no-GIL extension safety, broker crypto,
+quota enforcement, and crash isolation. Use it in CI or admission checks to
+attach evidence to each guarantee rather than relying on a single pass/fail bit.
 
 ### Policy editor
 
@@ -206,7 +211,9 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
 
 ## Canonical execution model
 
-A cell is intentionally limited to seven operations: execute source, call a dotted function, import allowed modules, post messages, stream logs, emit metrics, and request broker actions.
+A cell is intentionally limited to seven operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.
+
+The API makes the isolation choice explicit: `backend="subinterpreter"` means an execution cell, `backend="process"` means a separate OS process boundary, and `backend="microvm"` means a process behind a microVM boundary. The cell contract stays the same across modes, but the security boundary does not: sub-interpreters are not treated as a hard boundary.
 
 See [docs/execution-model.md](docs/execution-model.md). We keep this model small on purpose: production systems are safer when they refuse features outside a single contract.
 
@@ -214,10 +221,11 @@ See [docs/execution-model.md](docs/execution-model.md). We keep this model small
 
 ## Security model
 
-* **Execution cell** – each guest runs in its own sub‑interpreter, hosted by one sandbox thread.
-* **Current security boundary** – this prototype must not be used as the sole adversarial security boundary. Python sub-interpreters are not a hard isolation boundary.
-* **Roadmap security boundary** – hardened releases are expected to enforce at the kernel/process layer (cgroups + eBPF/LSM), not at the Python sub-interpreter boundary.
-* **Kernel boundary** – experimental BPF/cgroup work exists in-tree, but current releases may fail closed or stay in development mode rather than guaranteeing FS/net/syscall policy enforcement.
+* **Execution cell** – `backend="subinterpreter"`; each guest runs in its own sub‑interpreter, hosted by one sandbox thread.
+* **Process boundary** – `backend="process"`; each guest is intended to run in its own OS process with kernel policy applied outside the Python runtime.
+* **MicroVM boundary** – `backend="microvm"`; each guest is intended to run inside a process launched behind a microVM boundary for stronger blast-radius isolation.
+* **Security boundary (authoritative)** – enforcement lives at the kernel/process layer (cgroups + eBPF/LSM), not at the Python sub‑interpreter boundary.
+* **Kernel boundary** – every sandbox thread enters its own cgroup; CO‑RE eBPF programs enforce FS/net/syscall policy.
 * **Broker** – sole path to privileged syscalls, sealed with AEAD and strict replay protection.
 * **Fallback hardening** – for stronger blast‑radius isolation (or kernels with reduced features), run one sandbox per process and place that process inside a container or microVM.
 * **Verified eBPF modules** – roadmap/hardened-mode requirement: bytecode is disassembled with `llvm-objdump -d` and must succeed `bpftool prog load` so the kernel verifier approves it before any sandbox runs.
@@ -270,3 +278,28 @@ MIT – see `LICENSE`.
 ## Acknowledgements
 
 Inspired by PyO3, Tetragon and libsodium.
+
+## No-GIL readiness is a release axis
+
+PyIsolate distinguishes **parallel cells** from **scheduled compartments**. A
+host may claim parallel-cell semantics only when the interpreter is a
+`--disable-gil` build, the process GIL is not enabled, and loaded native
+extensions have explicit no-GIL safety declarations. Otherwise PyIsolate treats
+work as scheduled compartments: isolated and policy-controlled, but not a hard
+parallel execution guarantee.
+
+Use the doctor subcommands to make this visible in CI and fleet diagnostics:
+
+```bash
+pyisolate doctor gil
+pyisolate doctor gil --json
+pyisolate doctor extensions
+pyisolate doctor extensions --json
+```
+
+The legacy `pyisolate-doctor` command still prints the full provenance report,
+including the `no_gil.axis.mode` field. On free-threaded builds, PyIsolate emits
+a `RuntimeWarning` when native extensions are already imported but not declared
+safe through `PYISOLATE_NOGIL_SAFE_MODULES`. Only set that environment variable
+after auditing upstream support for subinterpreters and CPython no-GIL/free
+threading.
