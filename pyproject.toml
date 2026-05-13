@@ -42,6 +42,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 markers = [
     "adversarial: adversarial input and exploit-style behavior",
+    "hostile: hostile workload corpus cases that must be rejected safely",
     "runaway_cpu: CPU quota and runaway loop enforcement",
     "memory_exhaustion: memory pressure and exhaustion scenarios",
     "import_escape: module import escape attempts",

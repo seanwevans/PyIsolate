@@ -8,6 +8,7 @@ requires eBPF enforcement which is not implemented here.
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 import os
 import re
@@ -133,7 +134,11 @@ class Supervisor:
         bpf_mod = importlib.import_module("pyisolate.bpf.manager")
         self._bpf = bpf_mod.BPFManager()
         self._rollout_mode = rollout_mode
-        self._bpf.load(mode=rollout_mode)
+        load_signature = inspect.signature(self._bpf.load)
+        if "mode" in load_signature.parameters:
+            self._bpf.load(mode=rollout_mode)
+        else:
+            self._bpf.load()
         self._recover_state()
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
@@ -321,7 +326,9 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
-    def _authorize_control(self, token: str | RootCapability, op: str) -> ControlRequest:
+    def _authorize_control(
+        self, token: str | RootCapability, op: str
+    ) -> ControlRequest:
         """Validate an authenticated control-plane operation request."""
 
         if token is ROOT:

@@ -53,6 +53,51 @@ _ORIG_SOCKET_CONNECT = socket.socket.connect
 _ORIG_THREAD_START = threading.Thread.start
 _CAPABILITY_MARKER = "__pyisolate_capability__"
 
+# Modules that hand guest code raw process, native ABI, or unsafe
+# deserialization primitives are denied even when a broad/default importer is
+# installed. They require dedicated brokered capabilities before they can be
+# made safe for hostile workloads.
+_DENIED_IMPORT_ROOTS = {
+    "_cffi_backend",
+    "_ctypes",
+    "_testcapi",
+    "_testinternalcapi",
+    "cffi",
+    "ctypes",
+    "faulthandler",
+    "marshal",
+    "mmap",
+    "multiprocessing",
+    "pickle",
+}
+
+_DANGEROUS_OS_CALLS = (
+    "execl",
+    "execle",
+    "execlp",
+    "execlpe",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "fork",
+    "forkpty",
+    "kill",
+    "killpg",
+    "popen",
+    "posix_spawn",
+    "posix_spawnp",
+    "spawnl",
+    "spawnle",
+    "spawnlp",
+    "spawnlpe",
+    "spawnv",
+    "spawnve",
+    "spawnvp",
+    "spawnvpe",
+    "system",
+)
+
 
 def _serialize_capability(capability: Any) -> Any:
     if isinstance(capability, FilesystemCapability):
@@ -130,25 +175,30 @@ def deserialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str
     }
 
 
-def _blocked_open(file, *args, **kwargs):
-    """Restrict file access based on the current thread's policy."""
-
+def _check_fs_access(file) -> None:
     if isinstance(file, os.PathLike):
         file = os.fspath(file)
 
-    if isinstance(file, (str, bytes)):
-        path = Path(file).resolve(strict=False)
+    if not isinstance(file, (str, bytes)):
+        return
 
-        fs_cap = getattr(_thread_local, "fs_capability", None)
-        allowed = getattr(_thread_local, "fs", None)
-        if fs_cap is not None:
-            if not fs_cap.allows(path):
-                raise errors.PolicyError("file access blocked")
-        elif allowed is not None:
-            if not any(path.is_relative_to(a) for a in allowed):
-                raise errors.PolicyError("file access blocked")
-        elif getattr(_thread_local, "active", False):
+    path = Path(file).resolve(strict=False)
+    fs_cap = getattr(_thread_local, "fs_capability", None)
+    allowed = getattr(_thread_local, "fs", None)
+    if fs_cap is not None:
+        if not fs_cap.allows(path):
             raise errors.PolicyError("file access blocked")
+    elif allowed is not None:
+        if not any(path.is_relative_to(a) for a in allowed):
+            raise errors.PolicyError("file access blocked")
+    elif getattr(_thread_local, "active", False):
+        raise errors.PolicyError("file access blocked")
+
+
+def _blocked_open(file, *args, **kwargs):
+    """Restrict file access based on the current thread's policy."""
+
+    _check_fs_access(file)
 
     sandbox = getattr(_thread_local, "sandbox", None)
     if sandbox is not None:
@@ -198,6 +248,17 @@ def _blocked_subprocess_run(*args, **kwargs):
     return cap.run(*args, **kwargs)
 
 
+def _blocked_process_primitive(*args, **kwargs):
+    raise errors.PolicyError("process primitive blocked")
+
+
+def _guarded_os_open(path, flags, mode=0o777, *, dir_fd=None):
+    if dir_fd is not None:
+        raise errors.PolicyError("dir_fd file access blocked")
+    _check_fs_access(path)
+    return os.open(path, flags, mode)
+
+
 def _guarded_urandom(n: int) -> bytes:
     cap = getattr(_thread_local, "random_capability", None)
     if cap is None:
@@ -231,6 +292,7 @@ def _make_sandbox_thread_class(sandbox: "SandboxThread"):
 def _wrap_module(name: str, module):
     base = name.split(".")[0]
     if base == "time":
+
         def _require_clock() -> ClockCapability:
             cap = getattr(_thread_local, "clock_capability", None)
             return cap
@@ -271,7 +333,27 @@ def _wrap_module(name: str, module):
         class GuardedSocket(socket.socket):
             connect = _guarded_connect
 
+        def _guarded_create_connection(
+            address,
+            timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+            source_address=None,
+            *,
+            all_errors=False,
+        ):
+            sock = GuardedSocket(socket.AF_INET, socket.SOCK_STREAM)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address is not None:
+                sock.bind(source_address)
+            try:
+                sock.connect(address)
+            except Exception:
+                sock.close()
+                raise
+            return sock
+
         mod.socket = GuardedSocket
+        mod.create_connection = _guarded_create_connection
         return mod
     if base == "subprocess":
         mod = types.ModuleType("subprocess", module.__doc__)
@@ -281,7 +363,11 @@ def _wrap_module(name: str, module):
     if base == "os":
         mod = types.ModuleType("os", module.__doc__)
         mod.__dict__.update({k: getattr(os, k) for k in dir(os)})
+        mod.open = _guarded_os_open
         mod.urandom = _guarded_urandom
+        for attr in _DANGEROUS_OS_CALLS:
+            if hasattr(mod, attr):
+                setattr(mod, attr, _blocked_process_primitive)
         return mod
     if base == "secrets":
         mod = types.ModuleType("secrets", module.__doc__)
@@ -323,7 +409,20 @@ def _wrap_module(name: str, module):
     return module
 
 
+def _import_root(name: str) -> str:
+    return name.split(".", 1)[0]
+
+
+def _check_import_allowed(name: str, allowed_set: Optional[set[str]]) -> None:
+    base = _import_root(name)
+    if base in _DENIED_IMPORT_ROOTS:
+        raise errors.PolicyError(f"import of {name!r} is denied by sandbox policy")
+    if allowed_set is not None and base not in allowed_set:
+        raise errors.PolicyError(f"import of {name!r} is not permitted")
+
+
 def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
+    _check_import_allowed(name, None)
     module = builtins.__import__(name, globals, locals, fromlist, level)
     return _wrap_module(name, module)
 
@@ -331,12 +430,10 @@ def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
 def _make_importer(allowed: Optional[Iterable[str]]):
     if allowed is None:
         return _sandbox_import
-    allowed_set = {name.split(".")[0] for name in allowed}
+    allowed_set = {_import_root(name) for name in allowed}
 
     def _import(name, globals=None, locals=None, fromlist=(), level=0):
-        base = name.split(".")[0]
-        if base not in allowed_set:
-            raise errors.PolicyError(f"import of {name!r} is not permitted")
+        _check_import_allowed(name, allowed_set)
         module = builtins.__import__(name, globals, locals, fromlist, level)
         return _wrap_module(name, module)
 
@@ -501,9 +598,11 @@ class SandboxThread(threading.Thread):
             "policy": self.policy,
             "cpu_ms": self.cpu_quota_ms,
             "mem_bytes": self.mem_quota_bytes,
-            "allowed_imports": sorted(self.allowed_imports)
-            if self.allowed_imports is not None
-            else None,
+            "allowed_imports": (
+                sorted(self.allowed_imports)
+                if self.allowed_imports is not None
+                else None
+            ),
             "numa_node": self.numa_node,
             "capabilities": serialize_capabilities(self._capabilities),
             "wall_time_ms": self.wall_time_ms,
@@ -524,9 +623,11 @@ class SandboxThread(threading.Thread):
             "network_ops_max": self.network_ops_max,
             "output_bytes_max": self.output_bytes_max,
             "child_work_max": self.child_work_max,
-            "allowed_imports": sorted(self.allowed_imports)
-            if self.allowed_imports is not None
-            else None,
+            "allowed_imports": (
+                sorted(self.allowed_imports)
+                if self.allowed_imports is not None
+                else None
+            ),
             "numa_node": self.numa_node,
             "capabilities": serialize_capabilities(self._capabilities),
         }
@@ -557,7 +658,10 @@ class SandboxThread(threading.Thread):
 
     def _post(self, item: Any) -> None:
         self._output_bytes += self._estimate_output_size(item)
-        if self.output_bytes_max is not None and self._output_bytes > self.output_bytes_max:
+        if (
+            self.output_bytes_max is not None
+            and self._output_bytes > self.output_bytes_max
+        ):
             raise errors.OutputExceeded()
         self._outbox.put(item)
 
