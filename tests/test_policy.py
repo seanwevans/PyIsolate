@@ -170,7 +170,9 @@ def test_validation_bad_section_type(tmp_path):
         ("version: 0.1\nsandboxes: []\n", "sandboxes"),
     ],
 )
-def test_refresh_validation_fails_before_compile_or_reload(monkeypatch, tmp_path, doc, msg):
+def test_refresh_validation_fails_before_compile_or_reload(
+    monkeypatch, tmp_path, doc, msg
+):
     policy = load_policy(no_yaml=True)
     import pyisolate as iso
 
@@ -264,11 +266,7 @@ def test_refresh_dry_run_compiles_without_reload(monkeypatch, tmp_path):
     iso.set_policy_token("tok")
     path = tmp_path / "p.yml"
     path.write_text(
-        "version: 1\n"
-        "sandboxes:\n"
-        "  sb:\n"
-        "    fs:\n"
-        '      - allow: "/tmp"\n'
+        "version: 1\n" "sandboxes:\n" "  sb:\n" "    fs:\n" '      - allow: "/tmp"\n'
     )
 
     compiled = policy.refresh(str(path), token="tok", dry_run=True)
@@ -305,7 +303,10 @@ def test_compile_policy_supports_inheritance_and_defaults(tmp_path):
     assert [r.path for r in child.fs] == ["/srv/base", "/srv/child"]
     assert [r.addr for r in child.tcp] == ["10.0.0.0/8"]
     assert child.imports == ["math", "json"]
-    assert compiled.deny_log == ["sandbox=base net=10.0.0.0/8", "sandbox=child net=10.0.0.0/8"]
+    assert compiled.deny_log == [
+        "sandbox=base net=10.0.0.0/8",
+        "sandbox=child net=10.0.0.0/8",
+    ]
 
 
 def test_refresh_logs_explicit_deny_rules(tmp_path, caplog, monkeypatch):
@@ -317,11 +318,7 @@ def test_refresh_logs_explicit_deny_rules(tmp_path, caplog, monkeypatch):
     )
     iso.set_policy_token("tok")
     path = tmp_path / "deny.yml"
-    path.write_text(
-        "version: 0.1\n"
-        "net:\n"
-        '  - deny: "10.0.0.0/8"\n'
-    )
+    path.write_text("version: 0.1\n" "net:\n" '  - deny: "10.0.0.0/8"\n')
     with caplog.at_level("WARNING"):
         policy.refresh(str(path), token="tok")
     assert "policy deny rule active" in caplog.text
@@ -374,3 +371,46 @@ def test_reload_policy_rejects_non_canonical_root(monkeypatch, tmp_path, caplog)
         with pytest.raises(iso.PolicyAuthError):
             iso.reload_policy(str(path), token=fake)
     assert "invalid token" in caplog.text
+
+
+def test_resolve_unknown_policy_fails_closed():
+    import pyisolate.policy as policy
+
+    with pytest.raises(policy.PolicyCompilerError, match="unknown policy"):
+        policy.resolve_policy("does-not-exist")
+
+
+def test_named_policy_applies_runtime_restrictions(tmp_path):
+    import pyisolate as iso
+
+    allowed = tmp_path / "allowed.txt"
+    allowed.write_text("ok")
+
+    sb = iso.spawn("named-policy", policy="stdlib.readonly")
+    try:
+        sb.exec("import math; post(math.sqrt(25))")
+        assert sb.recv(timeout=1) == 5.0
+
+        sb.exec("import random")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+
+        sb.exec(f"post(open({str(allowed)!r}).read())")
+        assert sb.recv(timeout=1) == "ok"
+
+        sb.exec("post(open('/etc/hosts').read())")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+
+        sb.exec(
+            "import socket\n"
+            "s = socket.socket()\n"
+            "try:\n"
+            "    s.connect(('127.0.0.1', 9))\n"
+            "finally:\n"
+            "    s.close()\n"
+        )
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()

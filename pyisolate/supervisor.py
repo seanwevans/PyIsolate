@@ -20,6 +20,7 @@ from .capabilities import ROOT, RootCapability
 from .errors import PolicyAuthError, TenantQuotaExceeded
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
+from .policy import resolve_policy
 from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
 from .watchdog import ResourceWatchdog
@@ -222,6 +223,8 @@ class Supervisor:
             raise ValueError("Sandbox name contains invalid characters")
         self._cleanup()
 
+        policy = resolve_policy(policy)
+
         if policy is not None and getattr(policy, "imports", None):
             imports = set(policy.imports)
             if allowed_imports is not None:
@@ -321,14 +324,16 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
-    def _authorize_control(self, token: str | RootCapability, op: str) -> ControlRequest:
+    def _authorize_control(
+        self, token: str | RootCapability, op: str
+    ) -> ControlRequest:
         """Validate an authenticated control-plane operation request."""
 
         if token is ROOT:
             handle = CapabilityHandle(kind="root", subject=op)
         else:
             if self._policy_token is None or token != self._policy_token:
-                logger.warning("control operation rejected: %s", op)
+                logger.warning("control operation rejected: %s (invalid token)", op)
                 raise PolicyAuthError("invalid policy token")
             handle = CapabilityHandle(kind="policy-token", subject=op)
 
