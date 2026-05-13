@@ -20,7 +20,10 @@ from .capabilities import (  # noqa: F401
 
 try:
     from .checkpoint import checkpoint, restore
-except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover - optional dependency
+except (
+    ModuleNotFoundError,
+    ImportError,
+) as exc:  # pragma: no cover - optional dependency
     # Trap only dependency-related import failures; let unrelated import-time
     # bugs in optional modules propagate so they remain visible to developers.
     if (
@@ -55,10 +58,14 @@ from .errors import (
     WallTimeExceeded,
 )
 from .logging import setup_structured_logging  # noqa: F401
+from .telemetry import DenialEvent  # noqa: F401
 
 try:
     from .migration import migrate
-except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover - optional dependency
+except (
+    ModuleNotFoundError,
+    ImportError,
+) as exc:  # pragma: no cover - optional dependency
     # Trap only dependency-related import failures; let unrelated import-time
     # bugs in optional modules propagate so they remain visible to developers.
     if (
@@ -131,5 +138,6 @@ __all__ = [
     "migrate",
     "refresh_remote",
     "setup_structured_logging",
+    "DenialEvent",
     "bpf",
 ]

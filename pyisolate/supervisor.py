@@ -22,6 +22,7 @@ from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
+from .telemetry import DenialEvent
 from .watchdog import ResourceWatchdog
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,10 @@ class Sandbox:
     def get_syscall_log(self) -> list[str]:
         return self._thread.get_syscall_log()
 
+    def get_denial_events(self) -> list[dict[str, str]]:
+        """Return structured denial telemetry emitted by this sandbox."""
+        return self._thread.get_denial_events()
+
     def profile(self):
         return self._thread.profile()
 
@@ -133,7 +138,12 @@ class Supervisor:
         bpf_mod = importlib.import_module("pyisolate.bpf.manager")
         self._bpf = bpf_mod.BPFManager()
         self._rollout_mode = rollout_mode
-        self._bpf.load(mode=rollout_mode)
+        try:
+            self._bpf.load(mode=rollout_mode)
+        except TypeError as exc:
+            if "mode" not in str(exc):
+                raise
+            self._bpf.load()
         self._recover_state()
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
@@ -321,15 +331,25 @@ class Supervisor:
         with self._lock:
             return [t for t in self._sandboxes.values() if t.is_alive()]
 
-    def _authorize_control(self, token: str | RootCapability, op: str) -> ControlRequest:
+    def _authorize_control(
+        self, token: str | RootCapability, op: str
+    ) -> ControlRequest:
         """Validate an authenticated control-plane operation request."""
 
         if token is ROOT:
             handle = CapabilityHandle(kind="root", subject=op)
         else:
             if self._policy_token is None or token != self._policy_token:
-                logger.warning("control operation rejected: %s", op)
-                raise PolicyAuthError("invalid policy token")
+                logger.warning("control operation rejected: invalid token for %s", op)
+                event = DenialEvent(
+                    cell="supervisor",
+                    capability="control",
+                    attempted_action=op,
+                    policy_rule="policy-token",
+                    kernel_decision="not_evaluated",
+                    broker_decision="deny",
+                )
+                raise PolicyAuthError("invalid policy token", denial_event=event)
             handle = CapabilityHandle(kind="policy-token", subject=op)
 
         return ControlRequest(op=op, capability=handle, payload={})
