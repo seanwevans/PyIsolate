@@ -133,7 +133,14 @@ class Supervisor:
         bpf_mod = importlib.import_module("pyisolate.bpf.manager")
         self._bpf = bpf_mod.BPFManager()
         self._rollout_mode = rollout_mode
-        self._bpf.load(mode=rollout_mode)
+        try:
+            self._bpf.load(mode=rollout_mode)
+        except TypeError as exc:
+            if "unexpected keyword argument 'mode'" not in str(exc):
+                raise
+            # Backward-compatible path for tests or integrations that provide a
+            # legacy BPFManager.load(strict=...) shim.
+            self._bpf.load(strict=rollout_mode == "hardened")
         self._recover_state()
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):

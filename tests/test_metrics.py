@@ -28,10 +28,16 @@ class _StubBPFManager:
 
 bpf_stub = types.ModuleType("pyisolate.bpf.manager")
 bpf_stub.BPFManager = _StubBPFManager  # type: ignore[attr-defined]
+_original_bpf_manager = sys.modules.get("pyisolate.bpf.manager")
 sys.modules["pyisolate.bpf.manager"] = bpf_stub
 
 import pyisolate as iso
 from pyisolate.observability.metrics import MetricsExporter
+
+if _original_bpf_manager is None:
+    sys.modules.pop("pyisolate.bpf.manager", None)
+else:
+    sys.modules["pyisolate.bpf.manager"] = _original_bpf_manager
 
 
 def test_export_contains_metrics():

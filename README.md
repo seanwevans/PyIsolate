@@ -79,19 +79,19 @@ Choose a supervisor rollout profile based on where you are deploying:
 ```python
 import pyisolate as iso
 
-# default: fast local iteration
-dev = iso.Supervisor(rollout_mode="dev")
-
-# strict production posture (fail closed if BPF toolchain/load fails)
+# production default: fail closed if the BPF toolchain, verifier, load, or attach fails
 hardened = iso.Supervisor(rollout_mode="hardened")
 
-# looser ecosystem validation (baseline BPF only, skips stricter filters)
+# explicitly acknowledge weaker enforcement for local iteration
+dev = iso.Supervisor(rollout_mode="dev")
+
+# explicitly acknowledge reduced enforcement for ecosystem validation
 compat = iso.Supervisor(rollout_mode="compatibility")
 ```
 
-* `dev`: lightweight, low-friction development mode.
-* `hardened`: real enforcement; any eBPF compile/load failure raises.
-* `compatibility`: reduced enforcement to maximize third-party compatibility.
+* `hardened`: documented production default with kernel LSM/cgroup enforcement; any eBPF compile/load/attach failure raises.
+* `dev`: caller-acknowledged local development mode; tooling failures are logged and kernel enforcement can be absent.
+* `compatibility`: caller-acknowledged reduced enforcement to maximize third-party compatibility; strict filters are skipped.
 
 ### Hello World
 
