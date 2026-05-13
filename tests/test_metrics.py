@@ -6,8 +6,37 @@ sys.path.insert(0, str(ROOT))
 
 import types
 
+
+class _StubBPFManager:
+    def __init__(self):
+        self.loaded = False
+        self.policy_maps = {}
+
+    def load(self, strict: bool = False) -> None:  # pragma: no cover - stub
+        self.loaded = False
+
+    def hot_reload(self, policy_path: str) -> None:  # pragma: no cover - stub
+        raise RuntimeError("BPF disabled")
+
+    def _run(self, *_, **__):  # pragma: no cover - stub
+        return True
+
+    def open_ring_buffer(self):  # pragma: no cover - stub
+        return iter(())
+
+
+bpf_stub = types.ModuleType("pyisolate.bpf.manager")
+bpf_stub.BPFManager = _StubBPFManager  # type: ignore[attr-defined]
+_original_bpf_manager = sys.modules.get("pyisolate.bpf.manager")
+sys.modules["pyisolate.bpf.manager"] = bpf_stub
+
 import pyisolate as iso
 from pyisolate.observability.metrics import MetricsExporter
+
+if _original_bpf_manager is None:
+    sys.modules.pop("pyisolate.bpf.manager", None)
+else:
+    sys.modules["pyisolate.bpf.manager"] = _original_bpf_manager
 
 
 def test_export_contains_metrics():

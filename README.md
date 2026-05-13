@@ -86,19 +86,19 @@ Choose a supervisor rollout profile based on where you are deploying:
 ```python
 import pyisolate as iso
 
-# default: fast local iteration
-dev = iso.Supervisor(rollout_mode="dev")
-
-# experimental fail-closed gate; requires pyisolate-doctor --mode hardened to pass
+# production default: fail closed if the BPF toolchain, verifier, load, or attach fails
 hardened = iso.Supervisor(rollout_mode="hardened")
 
-# compatibility testing only; it deliberately skips stricter filters and is not enforcement
+# explicitly acknowledge weaker enforcement for local iteration
+dev = iso.Supervisor(rollout_mode="dev")
+
+# explicitly acknowledge reduced enforcement for ecosystem validation
 compat = iso.Supervisor(rollout_mode="compatibility")
 ```
 
-* `dev`: lightweight, low-friction development mode. BPF/cgroup setup failures are reported through per-sandbox `quota_enforcement` status and logs, but sandbox creation continues so local development remains unblocked. CPU/RSS quota tests should be treated as best-effort unless the status reports the relevant controller as enforced.
-* `hardened`: production fail-closed mode. BPF compile/load failures and cgroup controller failures raise during supervisor start or sandbox spawn; CPU/RSS quotas must be enforced by cgroups/eBPF and watchdog breach events terminate or quarantine the sandbox. Python `tracemalloc` values are exposed only as debugging telemetry.
-* `compatibility`: ecosystem validation mode. Baseline BPF loading is attempted while stricter filters/guards may be skipped; cgroup quota status is still surfaced, and missing controllers degrade to explicit status/logs rather than silent `None`. Use this mode to find package compatibility issues, not as the authoritative security boundary.
+* `hardened`: documented production default with kernel LSM/cgroup enforcement; any eBPF compile/load/attach failure raises.
+* `dev`: caller-acknowledged local development mode; tooling failures are logged and kernel enforcement can be absent.
+* `compatibility`: caller-acknowledged reduced enforcement to maximize third-party compatibility; strict filters are skipped.
 
 ### Hello World
 

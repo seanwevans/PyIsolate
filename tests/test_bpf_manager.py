@@ -85,20 +85,37 @@ def test_load_runs_toolchain(monkeypatch):
     assert ["llvm-objdump", "-d", str(mgr._obj)] in calls
     assert ["llvm-objdump", "-d", str(mgr._filter_obj)] in calls
     assert ["llvm-objdump", "-d", str(mgr._guard_obj)] in calls
-    assert ["bpftool", "prog", "load", str(mgr._obj), "/sys/fs/bpf/dummy"] in calls
+    assert ["bpftool", "prog", "load", str(mgr._obj), str(mgr._dummy_pin)] in calls
     assert [
         "bpftool",
         "prog",
-        "load",
+        "loadall",
         str(mgr._filter_obj),
-        "/sys/fs/bpf/syscall_filter",
+        str(mgr._filter_pin_dir),
+        "type",
+        "lsm",
+        "pinmaps",
+        str(mgr._bpffs_root),
+        "autoattach",
     ] in calls
     assert [
         "bpftool",
         "prog",
-        "load",
+        "loadall",
         str(mgr._guard_obj),
-        "/sys/fs/bpf/resource_guard",
+        str(mgr._guard_pin_dir),
+        "pinmaps",
+        str(mgr._bpffs_root),
+        "autoattach",
+    ] in calls
+    assert [
+        "bpftool",
+        "cgroup",
+        "attach",
+        "/sys/fs/cgroup",
+        "egress",
+        "pinned",
+        str(mgr._guard_pin_dir / "account_cgroup_egress"),
     ] in calls
     assert mgr.loaded
 
@@ -242,7 +259,7 @@ def test_load_compatibility_skips_strict_programs(monkeypatch):
         "prog",
         "load",
         str(mgr._obj),
-        "/sys/fs/bpf/dummy",
+        str(mgr._dummy_pin),
     ] in calls
     assert ["llvm-objdump", "-d", str(mgr._filter_obj)] not in calls
     assert ["llvm-objdump", "-d", str(mgr._guard_obj)] not in calls

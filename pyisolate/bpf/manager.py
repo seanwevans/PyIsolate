@@ -33,11 +33,16 @@ class BPFManager:
         self._obj = Path(__file__).with_name("dummy.bpf.o")
         self._skel = Path(__file__).with_name("dummy.skel.h")
         self.skeleton = ""
+        self._compiled_skeleton = False
         self._filter_src = Path(__file__).with_name("syscall_filter.bpf.c")
         self._filter_obj = Path(__file__).with_name("syscall_filter.bpf.o")
         self._guard_src = Path(__file__).with_name("resource_guard.bpf.c")
         self._guard_obj = Path(__file__).with_name("resource_guard.bpf.o")
-        self._skel_cache: dict[Path, str] = {}
+        self._bpffs_root = Path("/sys/fs/bpf/pyisolate")
+        self._dummy_pin = Path("/sys/fs/bpf/dummy")
+        self._filter_pin_dir = self._bpffs_root / "syscall_filter"
+        self._guard_pin_dir = self._bpffs_root / "resource_guard"
+        self._skel_cache = self._SKEL_CACHE
 
     # internal helper
     def _run(self, cmd: list[str], *, raise_on_error: bool = False) -> bool:
@@ -81,9 +86,12 @@ class BPFManager:
         Rollout modes:
 
         * ``dev``: low-friction mode; tolerate missing tooling and keep running.
-        * ``hardened``: strict mode; any failure raises a ``RuntimeError``.
-        * ``compatibility``: looser enforcement for ecosystem testing. Loads the
-          baseline program but skips stricter filter/guard attachments.
+          Use only for local development because BPF enforcement can be absent.
+        * ``hardened``: production default; any failure raises a ``RuntimeError``
+          and leaves the manager unloaded so callers fail closed.
+        * ``compatibility``: caller-acknowledged reduced enforcement for ecosystem
+          testing. Loads the baseline program but skips stricter filter/guard
+          attachments.
 
         The legacy ``strict`` argument is still honored. When provided it
         overrides ``mode``.
@@ -127,7 +135,9 @@ class BPFManager:
         ]
         ok = True
         compile_cmd = dummy_compile
-        if self._src not in self._skel_cache:
+        if self._src not in self._skel_cache or (
+            self._skel_cache.get(self._src) == "" and not self._compiled_skeleton
+        ):
             ok &= self._run(compile_cmd, raise_on_error=strict_mode)
             skel_cmd = [
                 "sh",
@@ -140,11 +150,13 @@ class BPFManager:
                     self._skel_cache[self._src] = self._skel.read_text()
                 except OSError:
                     self._skel_cache[self._src] = ""
-            else:
-                # Cache a placeholder so repeated loads in tool-less test
-                # environments do not repeat compile/skeleton steps.
+            elif ok:
+                # Cache a placeholder when the build path was exercised but no
+                # skeleton was emitted (for example under a mocked bpftool).
                 self._skel_cache.setdefault(self._src, "")
             self.skeleton = self._skel_cache.get(self._src, "")
+            if ok:
+                self._compiled_skeleton = True
         else:
             self.skeleton = self._skel_cache[self._src]
 
@@ -152,7 +164,7 @@ class BPFManager:
             ["llvm-objdump", "-d", str(self._obj)], raise_on_error=strict_mode
         )
         ok &= self._run(
-            ["bpftool", "prog", "load", str(self._obj), "/sys/fs/bpf/dummy"],
+            ["bpftool", "prog", "load", str(self._obj), str(self._dummy_pin)],
             raise_on_error=strict_mode,
         )
         if mode != "compatibility":
@@ -170,9 +182,14 @@ class BPFManager:
                 [
                     "bpftool",
                     "prog",
-                    "load",
+                    "loadall",
                     str(self._filter_obj),
-                    "/sys/fs/bpf/syscall_filter",
+                    str(self._filter_pin_dir),
+                    "type",
+                    "lsm",
+                    "pinmaps",
+                    str(self._bpffs_root),
+                    "autoattach",
                 ],
                 raise_on_error=strict_mode,
             )
@@ -180,15 +197,44 @@ class BPFManager:
                 [
                     "bpftool",
                     "prog",
-                    "load",
+                    "loadall",
                     str(self._guard_obj),
-                    "/sys/fs/bpf/resource_guard",
+                    str(self._guard_pin_dir),
+                    "pinmaps",
+                    str(self._bpffs_root),
+                    "autoattach",
                 ],
                 raise_on_error=strict_mode,
             )
+            ok &= self._attach_loaded_programs(raise_on_error=strict_mode)
         self.loaded = ok
         if strict_mode and not ok:
             raise RuntimeError("BPF load failed; see logs for details")
+
+    def _attach_loaded_programs(self, *, raise_on_error: bool = False) -> bool:
+        """Attach programs that cannot rely solely on pinned objects.
+
+        ``bpftool prog loadall ... autoattach`` creates BPF links for LSM and
+        tracepoint programs on modern kernels.  The explicit cgroup-skb attach is
+        retained for kernels/tools that require a concrete cgroup attach point.
+        """
+
+        ok = True
+        cgroup_root = Path("/sys/fs/cgroup")
+        egress_prog = self._guard_pin_dir / "account_cgroup_egress"
+        ok &= self._run(
+            [
+                "bpftool",
+                "cgroup",
+                "attach",
+                str(cgroup_root),
+                "egress",
+                "pinned",
+                str(egress_prog),
+            ],
+            raise_on_error=raise_on_error,
+        )
+        return ok
 
     def hot_reload(self, policy_path: str) -> None:
         """Refresh maps based on a policy JSON file."""

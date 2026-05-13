@@ -184,6 +184,11 @@ class Supervisor:
         try:
             self._bpf.load(mode=rollout_mode)
         except TypeError as exc:
+            if "unexpected keyword argument 'mode'" not in str(exc):
+                raise
+            # Backward-compatible path for tests or integrations that provide a
+            # legacy BPFManager.load(strict=...) shim.
+            self._bpf.load(strict=rollout_mode == "hardened")
             # Test and compatibility shims may still expose the legacy
             # load(strict=False) signature.  Real BPFManager validates rollout
             # modes itself.
