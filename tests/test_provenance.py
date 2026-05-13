@@ -26,6 +26,23 @@ def test_doctor_cli_output(capsys):
     assert "features" in payload["kernel"]
 
 
+def test_doctor_cli_grade_output(monkeypatch, capsys):
+    from pyisolate.doctor import ConformanceSuite
+
+    monkeypatch.setattr(
+        ConformanceSuite,
+        "grade",
+        lambda self: type(
+            "FakeGrade",
+            (),
+            {"to_json": lambda _self: json.dumps({"score": 5, "max_score": 8})},
+        )(),
+    )
+
+    main(["--grade"])
+    captured = capsys.readouterr()
+
+    assert json.loads(captured.out) == {"score": 5, "max_score": 8}
 def test_installation_report_exposes_no_gil_axis():
     report = installation_report()
     assert report["no_gil"]["axis"]["mode"] in {

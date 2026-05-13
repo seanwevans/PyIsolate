@@ -6,6 +6,7 @@ import argparse
 import json
 from typing import Any
 
+from .conformance import ConformanceSuite
 from .nogil import imported_native_extensions, no_gil_readiness_report
 from .provenance import installation_report_json
 
@@ -42,6 +43,14 @@ def main(argv: list[str] | None = None) -> None:
         prog="pyisolate-doctor",
         description="Print PyIsolate build provenance and kernel/no-GIL feature flags.",
     )
+    parser.add_argument(
+        "--grade",
+        action="store_true",
+        help="emit a scored report of active PyIsolate guarantees",
+    )
+    args = parser.parse_args(argv)
+    if args.grade:
+        print(ConformanceSuite().grade().to_json())
     subparsers = parser.add_subparsers(dest="command")
 
     gil_parser = subparsers.add_parser(
