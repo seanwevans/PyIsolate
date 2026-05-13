@@ -328,7 +328,7 @@ class Supervisor:
             handle = CapabilityHandle(kind="root", subject=op)
         else:
             if self._policy_token is None or token != self._policy_token:
-                logger.warning("control operation rejected: %s", op)
+                logger.warning("control operation rejected: %s: invalid token", op)
                 raise PolicyAuthError("invalid policy token")
             handle = CapabilityHandle(kind="policy-token", subject=op)
 

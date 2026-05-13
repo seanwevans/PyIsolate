@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
+from ..capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
+
 try:
     import yaml  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - fallback already tested
@@ -40,6 +42,8 @@ class SandboxPolicy:
     fs: List[FSRule]
     tcp: List[TCPRule]
     imports: List[str]
+    capabilities: List[object]
+    cpu_ms: int | None = None
 
 
 @dataclass
@@ -98,13 +102,18 @@ def _compile_fs(rules: List[dict], sb_name: str) -> List[FSRule]:
         if not isinstance(rule, dict) or len(rule) != 1:
             raise PolicyCompilerError(f"invalid fs rule in '{sb_name}': {rule}")
         action, path = next(iter(rule.items()))
-        if action not in ("allow", "deny"):
+        if action not in ("allow", "deny", "read", "write"):
             raise PolicyCompilerError(f"invalid fs action '{action}' in '{sb_name}'")
-        if path in seen and seen[path] != action:
+        existing = seen.get(path)
+        if (
+            existing is not None
+            and {existing, action} != {"read", "write"}
+            and existing != action
+        ):
             raise PolicyCompilerError(
                 f"conflicting fs rules for '{path}' in '{sb_name}'"
             )
-        seen[path] = action
+        seen[path] = "allow" if {existing, action} == {"read", "write"} else action
         compiled.append(FSRule(action=action, path=path))
     return compiled
 
@@ -203,10 +212,12 @@ def _resolve_sandbox(
         child_imports = _norm_rule_list(
             cfg.get("imports", []), field_name="imports", sb_name=current
         )
+        cpu_ms = cfg.get("cpu_ms", parent_cfg.get("cpu_ms", defaults.get("cpu_ms")))
         out = {
             "fs": _merge_unique(base["fs"], child_fs),
             "net": _merge_unique(base["net"], child_net),
             "imports": _merge_unique(base["imports"], child_imports),
+            "cpu_ms": cpu_ms,
         }
         resolving.remove(current)
         resolved[current] = out
@@ -269,8 +280,37 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
                 )
             imports.append(module)
 
+        cpu_ms = resolved_cfg.get("cpu_ms")
+        if cpu_ms is not None:
+            if not isinstance(cpu_ms, int) or cpu_ms <= 0:
+                raise PolicyCompilerError(
+                    f"cpu_ms in '{name}' must be a positive integer"
+                )
+
+        capabilities: list[object] = []
+        for rule in fs_compiled:
+            if rule.action == "allow":
+                capabilities.extend([ReadPath(rule.path), WritePath(rule.path)])
+            elif rule.action == "read":
+                capabilities.append(ReadPath(rule.path))
+            elif rule.action == "write":
+                capabilities.append(WritePath(rule.path))
+        for rule in tcp_compiled:
+            if rule.action == "connect":
+                try:
+                    capabilities.append(ConnectTCP.from_address(rule.addr))
+                except ValueError:
+                    pass
+        capabilities.extend(Import(module) for module in imports)
+        if cpu_ms is not None:
+            capabilities.append(CpuBudget(cpu_ms))
+
         compiled_boxes[name] = SandboxPolicy(
-            fs=fs_compiled, tcp=tcp_compiled, imports=imports
+            fs=fs_compiled,
+            tcp=tcp_compiled,
+            imports=imports,
+            capabilities=capabilities,
+            cpu_ms=cpu_ms,
         )
         deny_log.extend(
             [f"sandbox={name} fs={r.path}" for r in fs_compiled if r.action == "deny"]

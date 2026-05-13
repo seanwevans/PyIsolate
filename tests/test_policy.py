@@ -374,3 +374,57 @@ def test_reload_policy_rejects_non_canonical_root(monkeypatch, tmp_path, caplog)
         with pytest.raises(iso.PolicyAuthError):
             iso.reload_policy(str(path), token=fake)
     assert "invalid token" in caplog.text
+
+
+def test_compile_policy_emits_first_class_capabilities(tmp_path):
+    import pyisolate.policy as policy
+    from pyisolate.capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
+
+    doc = (
+        "version: 1.0\n"
+        "sandboxes:\n"
+        "  sb:\n"
+        "    fs:\n"
+        '      - read: "/tmp/input"\n'
+        '      - write: "/tmp/output"\n'
+        "    net:\n"
+        '      - connect: "api.example.com:443"\n'
+        "    imports: [math]\n"
+        "    cpu_ms: 50\n"
+    )
+    f = tmp_path / "p.yml"
+    f.write_text(doc)
+
+    compiled = policy.compile_policy(str(f))
+    caps = compiled.sandboxes["sb"].capabilities
+    assert any(isinstance(cap, ReadPath) and str(cap.path) == "/tmp/input" for cap in caps)
+    assert any(isinstance(cap, WritePath) and str(cap.path) == "/tmp/output" for cap in caps)
+    assert any(isinstance(cap, ConnectTCP) and cap.address == "api.example.com:443" for cap in caps)
+    assert any(isinstance(cap, Import) and cap.module == "math" for cap in caps)
+    assert any(isinstance(cap, CpuBudget) and cap.ms == 50 for cap in caps)
+    assert compiled.sandboxes["sb"].cpu_ms == 50
+
+
+def test_policy_objects_serialize_to_yaml_shape():
+    import pyisolate as iso
+    from pyisolate import policy
+
+    p = policy.Policy().grant(
+        iso.ReadPath("/tmp/input"),
+        iso.WritePath("/tmp/output"),
+        iso.ConnectTCP("api.example.com", 443),
+        iso.Import("math"),
+        iso.CpuBudget(50),
+    )
+
+    assert p.to_dict("job") == {
+        "version": "1.0",
+        "sandboxes": {
+            "job": {
+                "fs": [{"read": "/tmp/input"}, {"write": "/tmp/output"}],
+                "net": [{"connect": "api.example.com:443"}],
+                "imports": ["math"],
+                "cpu_ms": 50,
+            }
+        },
+    }
