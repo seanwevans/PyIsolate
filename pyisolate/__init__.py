@@ -6,16 +6,23 @@ This module exposes the high-level API described in API.md.
 from . import bpf  # noqa: F401
 from .capabilities import (  # noqa: F401
     ROOT,
+    Authority,
+    AuthoritySet,
+    ConnectTCP,
+    CpuBudget,
     IPCChannelCapability,
     Capability,
     ClockCapability,
     FilesystemCapability,
     NetworkCapability,
+    Import,
     RandomCapability,
+    ReadPath,
     RootCapability,
     SecretCapability,
     SubprocessCapability,
     Token,
+    WritePath,
 )
 
 try:
@@ -127,6 +134,13 @@ __all__ = [
     "RestrictedExec",
     "OwnershipError",
     "Capability",
+    "Authority",
+    "AuthoritySet",
+    "ReadPath",
+    "WritePath",
+    "ConnectTCP",
+    "Import",
+    "CpuBudget",
     "Token",
     "RootCapability",
     "ROOT",

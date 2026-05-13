@@ -49,14 +49,16 @@ result = sb.recv(timeout=0.1)      # 1.4142135623
 from pyisolate.policy import Policy
 
 cust = (Policy(mem="256MiB")
-        .allow_fs("/srv/data/*.parquet")
-        .allow_tcp("127.0.0.1:9200")
-        .allow_import("math"))
+        .grant(psi.ReadPath("/srv/input"),
+               psi.WritePath("/srv/output"),
+               psi.ConnectTCP("127.0.0.1", 9200),
+               psi.Import("math"),
+               psi.CpuBudget(50)))
 
-# Lists of accumulated permissions are available via `fs` and `tcp`:
-cust.fs  # ["/srv/data/*.parquet"]
-cust.tcp # ["127.0.0.1:9200"]
-
+# Legacy helpers remain available and are converted to the same authority model:
+cust.allow_fs("/srv/data/*.parquet")   # read + write path authority
+cust.allow_tcp("127.0.0.1:9200")
+cust.allow_import("json")
 
 sb = psi.spawn("etl", policy=cust)
 

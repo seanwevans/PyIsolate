@@ -31,12 +31,18 @@ from typing import Any, Callable, Iterable, Optional
 
 from .. import errors
 from ..capabilities import (
+    AuthoritySet,
     ClockCapability,
+    ConnectTCP,
+    CpuBudget,
+    Import,
     FilesystemCapability,
     NetworkCapability,
     RandomCapability,
+    ReadPath,
     SecretCapability,
     SubprocessCapability,
+    WritePath,
 )
 from .protocol import (
     AttachCgroupRequest,
@@ -111,6 +117,8 @@ def _subprocess_command_name(args: object) -> str | None:
 
 
 def _serialize_capability(capability: Any) -> Any:
+    if isinstance(capability, (list, tuple, set, frozenset)):
+        return [_serialize_capability(item) for item in capability]
     if isinstance(capability, FilesystemCapability):
         return {
             _CAPABILITY_MARKER: "filesystem",
@@ -134,6 +142,16 @@ def _serialize_capability(capability: Any) -> Any:
             "allowed_commands": sorted(capability.allowed_commands),
             "allow_shell": capability.allow_shell,
         }
+    if isinstance(capability, ReadPath):
+        return {_CAPABILITY_MARKER: "read_path", "path": str(capability.path)}
+    if isinstance(capability, WritePath):
+        return {_CAPABILITY_MARKER: "write_path", "path": str(capability.path)}
+    if isinstance(capability, ConnectTCP):
+        return {_CAPABILITY_MARKER: "connect_tcp", "host": capability.host, "port": capability.port}
+    if isinstance(capability, Import):
+        return {_CAPABILITY_MARKER: "import", "module": capability.module}
+    if isinstance(capability, CpuBudget):
+        return {_CAPABILITY_MARKER: "cpu_budget", "ms": capability.ms}
     if isinstance(capability, ClockCapability):
         return {_CAPABILITY_MARKER: "clock"}
     if isinstance(capability, RandomCapability):
@@ -142,6 +160,8 @@ def _serialize_capability(capability: Any) -> Any:
 
 
 def _deserialize_capability(capability: Any) -> Any:
+    if isinstance(capability, list):
+        return [_deserialize_capability(item) for item in capability]
     if not isinstance(capability, dict):
         return capability
     kind = capability.get(_CAPABILITY_MARKER)
@@ -161,6 +181,16 @@ def _deserialize_capability(capability: Any) -> Any:
         commands = capability.get("allowed_commands", [])
         allow_shell = bool(capability.get("allow_shell", False))
         return SubprocessCapability.from_commands(*commands, allow_shell=allow_shell)
+    if kind == "read_path":
+        return ReadPath(capability["path"])
+    if kind == "write_path":
+        return WritePath(capability["path"])
+    if kind == "connect_tcp":
+        return ConnectTCP(str(capability["host"]), int(capability["port"]))
+    if kind == "import":
+        return Import(str(capability["module"]))
+    if kind == "cpu_budget":
+        return CpuBudget(int(capability["ms"]))
     if kind == "clock":
         return ClockCapability()
     if kind == "random":
@@ -180,11 +210,37 @@ def serialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str, 
 def deserialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str, Any]:
     if not capabilities:
         return {}
+    if not isinstance(capabilities, dict):
+        return {"authority": capabilities}
     return {
         name: _deserialize_capability(capability)
         for name, capability in capabilities.items()
     }
 
+
+
+
+def _iter_authorities(policy, capabilities: Optional[dict[str, Any]]) -> list[object]:
+    authorities: list[object] = []
+    if policy is not None:
+        authorities.extend(getattr(policy, "capabilities", []) or [])
+        for path in getattr(policy, "fs", []) or []:
+            authorities.extend([ReadPath(path), WritePath(path)])
+        for addr in getattr(policy, "tcp", []) or []:
+            try:
+                authorities.append(ConnectTCP.from_address(addr))
+            except ValueError:
+                pass
+        for module in getattr(policy, "imports", []) or []:
+            authorities.append(Import(module))
+    if capabilities:
+        values = capabilities.values() if isinstance(capabilities, dict) else capabilities
+        for capability in values:
+            if isinstance(capability, (list, tuple, set, frozenset)):
+                authorities.extend(capability)
+            else:
+                authorities.append(capability)
+    return authorities
 
 def _fs_rule_matches(pattern: str, path: Path) -> bool:
     path_text = str(path)
@@ -207,7 +263,20 @@ def _blocked_open(file, *args, **kwargs):
     if isinstance(file, (str, bytes)):
         path = Path(file).resolve(strict=False)
 
+        mode = args[0] if args else kwargs.get("mode", "r")
+        text_mode = str(mode)
+        wants_write = any(flag in text_mode for flag in ("w", "a", "x", "+"))
+        authority = getattr(_thread_local, "authority", None)
         fs_cap = getattr(_thread_local, "fs_capability", None)
+        allowed = getattr(_thread_local, "fs", None)
+        if authority is not None:
+            if wants_write:
+                permitted = authority.allows_write(path)
+            else:
+                permitted = authority.allows_read(path)
+            if not permitted:
+                raise errors.PolicyError("file access blocked")
+        elif fs_cap is not None:
         runtime_policy = getattr(_thread_local, "runtime_policy", None)
         if fs_cap is not None:
             if not fs_cap.allows(path):
@@ -256,6 +325,9 @@ def _blocked_open(file, *args, **kwargs):
     return opened
 
 
+def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
+    authority = getattr(_thread_local, "authority", None)
+    
 def _check_network_destination(address: Iterable[str]) -> None:
     net_cap = getattr(_thread_local, "net_capability", None)
     runtime_policy = getattr(_thread_local, "runtime_policy", None)
@@ -263,6 +335,10 @@ def _check_network_destination(address: Iterable[str]) -> None:
         host, port, *_ = address
     else:
         host, port = address
+    if authority is not None:
+        if not authority.allows_tcp(str(host), int(port)):
+            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+    elif net_cap is not None:
     destination = f"{host}:{port}"
     if net_cap is not None:
         if not net_cap.allows(str(host), int(port)):
@@ -635,6 +711,10 @@ class SandboxThread(threading.Thread):
     @staticmethod
     def _merge_allowed_imports(policy, allowed_imports: Optional[Iterable[str]]):
         imports: set[str] = set()
+        if policy is not None and getattr(policy, "imports", None):
+            imports.update(policy.imports)
+        if policy is not None:
+            imports.update(AuthoritySet.from_authorities(getattr(policy, "capabilities", []) or []).imports)
         runtime_policy = from_sandbox_policy(policy) if policy is not None else None
         if runtime_policy is not None and runtime_policy.imports:
             imports.update(runtime_policy.imports)
@@ -664,8 +744,9 @@ class SandboxThread(threading.Thread):
         enforcement_status: Any = None,
     ) -> None:
         self.policy = policy
-        self.runtime_policy = from_sandbox_policy(policy) if policy is not None else None
-        self.cpu_quota_ms = cpu_ms
+        self._authority = AuthoritySet.from_authorities(_iter_authorities(policy, capabilities))
+        self.cpu_quota_ms = cpu_ms if cpu_ms is not None else self._authority.cpu_ms
+        self.runtime_policy = from_sandbox_policy(policy) if policy is not None else None        
         self.mem_quota_bytes = mem_bytes
         self.wall_time_ms = wall_time_ms
         self.open_files_max = open_files_max
@@ -1117,6 +1198,27 @@ class SandboxThread(threading.Thread):
                 if isinstance(payload, str):
                     payload = ExecRequest(source=payload)
 
+                allowed_tcp = None
+                allowed_fs = None
+                if self.policy is not None:
+                    tcp_policy = getattr(self.policy, "tcp", None)
+                    if tcp_policy is not None:
+                        allowed_tcp = set(tcp_policy)
+                    if getattr(self.policy, "fs", None):
+                        allowed_fs = [
+                            Path(p).resolve(strict=False) for p in self.policy.fs
+                        ]
+                if allowed_tcp is None:
+                    if hasattr(_thread_local, "tcp"):
+                        delattr(_thread_local, "tcp")
+                else:
+                    _thread_local.tcp = allowed_tcp
+                _thread_local.fs = allowed_fs
+                _thread_local.authority = (
+                    self._authority
+                    if _iter_authorities(self.policy, self._capabilities)
+                    else None
+                )
                 _thread_local.runtime_policy = self.runtime_policy
                 _thread_local.fs_capability = self._capabilities.get("filesystem")
                 _thread_local.net_capability = self._capabilities.get("network")
