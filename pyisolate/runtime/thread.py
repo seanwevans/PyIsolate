@@ -65,6 +65,7 @@ _ORIG_SOCKET_CONNECT = socket.socket.connect
 _ORIG_SOCKET_CONNECT_EX = socket.socket.connect_ex
 _ORIG_SOCKET_SENDTO = socket.socket.sendto
 _ORIG_THREAD_START = threading.Thread.start
+_ORIG_OS_OPEN = os.open
 _CAPABILITY_MARKER = "__pyisolate_capability__"
 # No modules are imported by default. Examples and tests must name every
 # module they need via Policy.allow_import(...) or allowed_imports=[...].
@@ -222,6 +223,133 @@ def deserialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str
     }
 
 
+def _open_flags_from_mode(mode: object) -> int:
+    """Translate Python open() modes to os.open() flags for brokered opens."""
+    text = str(mode or "r")
+    if "w" in text:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    elif "a" in text:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    elif "x" in text:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    else:
+        flags = os.O_RDONLY
+    if "+" in text:
+        flags &= ~(os.O_RDONLY | os.O_WRONLY)
+        flags |= os.O_RDWR
+    return flags
+
+
+def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _safe_brokered_open(
+    file,
+    mode="r",
+    buffering=-1,
+    encoding=None,
+    errors=None,
+    newline=None,
+    closefd=True,
+    opener=None,
+    *,
+    allowed_roots: Iterable[Path],
+):
+    """Open *file* through a descriptor-relative sandbox broker.
+
+    On platforms with ``dir_fd`` support, parent directories are traversed from
+    an allowed root by file descriptor and every traversed component is opened
+    with ``O_NOFOLLOW`` where available.  The final component is opened with
+    ``os.open(..., dir_fd=parent_fd)`` and ``O_NOFOLLOW`` where available, then
+    re-checked with ``fstat`` against a descriptor-relative ``stat`` of the same
+    path.
+
+    Compatibility fallback is intentionally explicit: if the platform lacks the
+    required descriptor-relative primitives, access falls back to the previous
+    resolved-path check before calling the original ``open``.  That fallback
+    preserves portability but cannot provide the same symlink race protection.
+    """
+    if opener is not None:
+        raise ValueError("custom openers are not supported in sandboxed open")
+    if not closefd:
+        raise ValueError("closefd=False is not supported in sandboxed open")
+
+    policy_errors = sys.modules[__package__.rsplit(".", 1)[0] + ".errors"]
+    roots = tuple(Path(root).resolve(strict=False) for root in allowed_roots)
+    raw_path = Path(os.fsdecode(file) if isinstance(file, bytes) else os.fspath(file))
+    lexical_path = Path(os.path.abspath(raw_path))
+    root = next(
+        (
+            candidate
+            for candidate in roots
+            if lexical_path == candidate or lexical_path.is_relative_to(candidate)
+        ),
+        None,
+    )
+    if root is None:
+        raise policy_errors.PolicyError("file access blocked")
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow
+    have_dir_fd = _ORIG_OS_OPEN in getattr(
+        os, "supports_dir_fd", set()
+    ) and os.stat in getattr(os, "supports_dir_fd", set())
+    have_follow = os.stat in getattr(os, "supports_follow_symlinks", set())
+    if nofollow and have_dir_fd and have_follow:
+        root_fd = os.open(root, dir_flags)
+        current_fd = root_fd
+        fds = [root_fd]
+        fd = -1
+        try:
+            rel_parts = lexical_path.relative_to(root).parts
+            for part in rel_parts[:-1]:
+                if part in ("", ".", ".."):
+                    raise policy_errors.PolicyError("file access blocked")
+                next_fd = os.open(part, dir_flags, dir_fd=current_fd)
+                fds.append(next_fd)
+                current_fd = next_fd
+            final = rel_parts[-1] if rel_parts else "."
+            flags = _open_flags_from_mode(mode) | nofollow
+            fd = os.open(final, flags, 0o666, dir_fd=current_fd)
+            opened_stat = os.fstat(fd)
+            checked_stat = os.stat(final, dir_fd=current_fd, follow_symlinks=False)
+            if not _same_file(opened_stat, checked_stat):
+                os.close(fd)
+                fd = -1
+                raise policy_errors.PolicyError("file access blocked")
+            return _ORIG_OPEN(
+                fd, mode, buffering, encoding, errors, newline, closefd=True
+            )
+        except OSError as exc:
+            if fd >= 0:
+                os.close(fd)
+            raise policy_errors.PolicyError("file access blocked") from exc
+        finally:
+            for descriptor in reversed(fds):
+                os.close(descriptor)
+
+    resolved = raw_path.resolve(strict=False)
+    if not any(
+        resolved == candidate or resolved.is_relative_to(candidate)
+        for candidate in roots
+    ):
+        raise policy_errors.PolicyError("file access blocked")
+    opened = _ORIG_OPEN(
+        file, mode, buffering, encoding, errors, newline, closefd=closefd
+    )
+    try:
+        final_stat = os.fstat(opened.fileno())
+        resolved_stat = os.stat(resolved)
+        if not _same_file(final_stat, resolved_stat):
+            opened.close()
+            raise policy_errors.PolicyError("file access blocked")
+    except Exception:
+        opened.close()
+        raise
+    return opened
+
+
 def _iter_authorities(policy, capabilities: Optional[dict[str, Any]]) -> list[object]:
     authorities: list[object] = []
     if policy is not None:
@@ -267,17 +395,26 @@ def _blocked_open(file, *args, **kwargs):
     if isinstance(file, os.PathLike):
         file = os.fspath(file)
 
-    if isinstance(file, (str, bytes)):
-        path = Path(file).resolve(strict=False)
+    mode = args[0] if args else kwargs.get("mode", "r")
+    text_mode = str(mode)
+    wants_write = any(flag in text_mode for flag in ("w", "a", "x", "+"))
+    safe_roots: tuple[Path, ...] | None = None
 
-        mode = args[0] if args else kwargs.get("mode", "r")
-        text_mode = str(mode)
-        wants_write = any(flag in text_mode for flag in ("w", "a", "x", "+"))
+    if isinstance(file, (str, bytes)):
+        display_path = Path(os.fsdecode(file) if isinstance(file, bytes) else file)
+        lexical_path = Path(os.path.abspath(display_path))
+        path = display_path.resolve(strict=False)
+
         authority = getattr(_thread_local, "authority", None)
         fs_cap = getattr(_thread_local, "fs_capability", None)
         allowed = getattr(_thread_local, "fs", None)
         runtime_policy = getattr(_thread_local, "runtime_policy", None)
         if fs_cap is not None:
+            safe_roots = fs_cap.roots
+            if not any(
+                lexical_path == root or lexical_path.is_relative_to(root)
+                for root in fs_cap.roots
+            ):
             if not fs_cap.allows(path):
                 raise _deny(
                     "filesystem",
@@ -286,7 +423,10 @@ def _blocked_open(file, *args, **kwargs):
                     "file access blocked",
                 )
         elif allowed is not None:
-            if not any(path.is_relative_to(a) for a in allowed):
+            safe_roots = tuple(allowed)
+            if not any(
+                lexical_path == a or lexical_path.is_relative_to(a) for a in allowed
+            ):
                 raise _deny(
                     "filesystem",
                     f"open:{path}",
@@ -294,6 +434,24 @@ def _blocked_open(file, *args, **kwargs):
                     "file access blocked",
                 )
         elif authority is not None:
+            candidate_roots = (
+                authority.write_paths if wants_write else authority.read_paths
+            )
+            if candidate_roots:
+                safe_roots = tuple(candidate_roots)
+                permitted = any(
+                    lexical_path == root or lexical_path.is_relative_to(root)
+                    for root in candidate_roots
+                )
+                if not permitted:
+                    raise _deny(
+                        "filesystem",
+                        f"open:{path}",
+                        f"authority:{'write' if wants_write else 'read'} roots={_format_roots(candidate_roots)}",
+                        "file access blocked",
+                    )
+            else:
+                raise errors.PolicyError("file access blocked")
             if wants_write:
                 permitted = authority.allows_write(path)
             else:
@@ -335,7 +493,14 @@ def _blocked_open(file, *args, **kwargs):
     sandbox = getattr(_thread_local, "sandbox", None)
     if sandbox is not None:
         sandbox._check_open_files_quota()
-    opened = _ORIG_OPEN(file, *args, **kwargs)
+    if safe_roots is not None and isinstance(file, (str, bytes)):
+        mode_arg = args[0] if args else kwargs.pop("mode", "r")
+        rest = args[1:] if args else ()
+        opened = _safe_brokered_open(
+            file, mode_arg, *rest, allowed_roots=safe_roots, **kwargs
+        )
+    else:
+        opened = _ORIG_OPEN(file, *args, **kwargs)
     if sandbox is None:
         return opened
     sandbox._open_files += 1
