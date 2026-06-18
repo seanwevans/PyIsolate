@@ -337,86 +337,20 @@ def _select_sandbox_policy(compiled, selector: str | None = None):
     )
 
 
-def _runtime_policy_from_sandbox(sandbox_policy: SandboxPolicy) -> Policy:
-    runtime = Policy()
-    for rule in sandbox_policy.fs:
-        if rule.action == "allow":
-            runtime.allow_fs(rule.path)
-    for rule in sandbox_policy.tcp:
-        if rule.action == "connect":
-            runtime.allow_tcp(rule.addr)
-    for module in sandbox_policy.imports:
-        runtime.allow_import(module)
-    return runtime
+def _runtime_policy_from_sandbox(sandbox_policy: SandboxPolicy) -> RuntimePolicy:
+    return from_sandbox_policy(sandbox_policy)
 
 
-def _runtime_policy_from_dict(data: dict) -> Policy:
-    if "sandboxes" in data:
-        sandboxes = data.get("sandboxes")
-        if not isinstance(sandboxes, dict):
-            raise PolicyCompilerError("missing or invalid 'sandboxes' section")
-        selector = "default" if "default" in sandboxes else None
-        if selector is None and len(sandboxes) == 1:
-            selector = next(iter(sandboxes))
-        if selector is None:
-            available = ", ".join(sorted(str(k) for k in sandboxes))
-            raise PolicyCompilerError(
-                "policy mapping contains multiple sandboxes; "
-                f"select one of: {available}"
-            )
-        selected = sandboxes[selector]
-        if not isinstance(selected, dict):
-            raise PolicyCompilerError(f"sandbox '{selector}' must be a mapping")
-        merged = dict(data.get("defaults") or {})
-        merged.update(selected)
-        data = merged
-
-    runtime = Policy()
-    fs_rules = data.get("fs", []) or []
-    if not isinstance(fs_rules, list):
-        raise PolicyCompilerError("'fs' must be a list")
-    for rule in fs_rules:
-        if isinstance(rule, str):
-            runtime.allow_fs(rule)
-        elif isinstance(rule, dict) and len(rule) == 1:
-            action, path = next(iter(rule.items()))
-            if action == "allow" and isinstance(path, str):
-                runtime.allow_fs(path)
-            elif action not in {"allow", "deny"}:
-                raise PolicyCompilerError(f"invalid fs action '{action}'")
-        else:
-            raise PolicyCompilerError(f"invalid fs rule: {rule!r}")
-
-    net_rules = data.get("net", data.get("tcp", [])) or []
-    if not isinstance(net_rules, list):
-        raise PolicyCompilerError("'net' must be a list")
-    for rule in net_rules:
-        if isinstance(rule, str):
-            runtime.allow_tcp(rule)
-        elif isinstance(rule, dict) and len(rule) == 1:
-            action, addr = next(iter(rule.items()))
-            if action == "connect":
-                addresses = addr if isinstance(addr, list) else [addr]
-                for address in addresses:
-                    if not isinstance(address, str):
-                        raise PolicyCompilerError(
-                            f"net addresses must be strings: {address!r}"
-                        )
-                    runtime.allow_tcp(address)
-            elif action != "deny":
-                raise PolicyCompilerError(f"invalid net action '{action}'")
-        else:
-            raise PolicyCompilerError(f"invalid net rule: {rule!r}")
-
-    imports = data.get("imports", []) or []
-    if not isinstance(imports, list):
-        raise PolicyCompilerError("'imports' must be a list")
-    for module in imports:
-        if not isinstance(module, str):
-            raise PolicyCompilerError(f"import rules must be strings: {module!r}")
-        runtime.allow_import(module)
-    return runtime
-
+def _runtime_policy_from_dict(data: dict) -> RuntimePolicy:
+    policy_set = from_yaml_dict(data)
+    if "default" in policy_set.sandboxes:
+        return policy_set.sandbox("default")
+    if len(policy_set.sandboxes) == 1:
+        return next(iter(policy_set.sandboxes.values()))
+    available = ", ".join(sorted(policy_set.sandboxes))
+    raise PolicyCompilerError(
+        "policy mapping contains multiple sandboxes; " f"select one of: {available}"
+    )
 
 def _resolve_policy_path(name: str) -> Path:
     candidate = Path(name)

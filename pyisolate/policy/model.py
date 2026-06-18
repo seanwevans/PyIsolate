@@ -54,6 +54,7 @@ class RuntimePolicy:
     allow_tcp: tuple[NetworkRule, ...] = ()
     deny_tcp: tuple[NetworkRule, ...] = ()
     imports: tuple[str, ...] = ()
+    cpu_ms: int | None = None
 
     @property
     def fs(self) -> list[str]:
@@ -72,13 +73,16 @@ class RuntimePolicy:
         return tuple(rule.destination for rule in self.allow_tcp)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "allow_fs": [asdict(rule) for rule in self.allow_fs],
             "deny_fs": [asdict(rule) for rule in self.deny_fs],
             "allow_tcp": [asdict(rule) for rule in self.allow_tcp],
             "deny_tcp": [asdict(rule) for rule in self.deny_tcp],
             "imports": list(self.imports),
         }
+        if self.cpu_ms is not None:
+            data["cpu_ms"] = self.cpu_ms
+        return data
 
 
 @dataclass(frozen=True)
@@ -143,10 +147,10 @@ def from_sandbox_policy(policy: Any) -> RuntimePolicy:
             allow_fs.append(FilesystemRule("allow", item))
             continue
         rule = _coerce_compiled_fs(item)
-        if rule.action == "allow":
-            allow_fs.append(rule)
-        else:
+        if rule.action == "deny":
             deny_fs.append(rule)
+        else:
+            allow_fs.append(FilesystemRule("allow", rule.path))
 
     tcp_rules = getattr(policy, "tcp", None) or []
     for item in tcp_rules:
@@ -166,6 +170,7 @@ def from_sandbox_policy(policy: Any) -> RuntimePolicy:
         allow_tcp=tuple(allow_tcp),
         deny_tcp=tuple(deny_tcp),
         imports=imports,
+        cpu_ms=getattr(policy, "cpu_ms", None),
     )
 
 
@@ -208,6 +213,7 @@ def from_compiled_policy(compiled: Any) -> RuntimePolicySet:
                 allow_tcp=tuple(NetworkRule(**rule) for rule in policy.get("allow_tcp", [])),
                 deny_tcp=tuple(NetworkRule(**rule) for rule in policy.get("deny_tcp", [])),
                 imports=tuple(str(module) for module in policy.get("imports", [])),
+                cpu_ms=policy.get("cpu_ms"),
             )
         else:
             sandboxes[str(name)] = from_sandbox_policy(policy)
