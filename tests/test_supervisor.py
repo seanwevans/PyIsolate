@@ -60,6 +60,25 @@ def test_reload_policy_delegates(tmp_path, monkeypatch):
     assert called["path"] == str(p)
 
 
+def test_reload_policy_preserves_auth_and_accepts_yaml(tmp_path, monkeypatch):
+    called = {}
+
+    def fake_hot_reload(self, path):
+        called["path"] = path
+
+    monkeypatch.setattr(BPFManager, "hot_reload", fake_hot_reload)
+    p = tmp_path / "p.yml"
+    p.write_text('version: 1.0\nfs:\n  - allow: "/tmp"\nnet: []\nimports: []\n')
+    iso.set_policy_token("tok")
+
+    with pytest.raises(iso.PolicyAuthError):
+        iso.reload_policy(str(p), token="bad")
+    assert called == {}
+
+    iso.reload_policy(str(p), token="tok")
+    assert called["path"] == str(p)
+
+
 def test_shutdown_joins_threads():
     sup = iso.Supervisor()
     sb = sup.spawn("sd")
