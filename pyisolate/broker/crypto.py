@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover - library optional
 
 CTR_LIMIT = 0xFFFFFFFFFFFFFFFFFFFF  # 2^96 - 1
 DEFAULT_MAX_FRAME_LEN = 1 << 20  # 1 MiB
+MIN_FRAME_LEN = 12 + 16  # nonce + ChaCha20-Poly1305 tag
 
 
 def kyber_keypair() -> tuple[bytes, bytes]:
@@ -67,6 +68,10 @@ class CryptoBroker:
         max_frame_len: int = DEFAULT_MAX_FRAME_LEN,
     ):
         self._lock = Lock()
+        if type(max_frame_len) is not int:
+            raise ValueError("max_frame_len must be an integer")
+        if max_frame_len < MIN_FRAME_LEN:
+            raise ValueError("max_frame_len must be at least 28 bytes")
         self._max_frame_len = max_frame_len
         self.rotate(private_key, peer_key, pq_secret=pq_secret)
 
