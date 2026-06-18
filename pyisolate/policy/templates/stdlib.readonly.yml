@@ -1,0 +1,11 @@
+# Standard-library-only sandbox template.
+version: 1.0
+imports:
+  - math
+  - json
+  - pathlib
+  - statistics
+  - socket
+fs:
+  - allow: "/tmp"
+net: []

@@ -1,0 +1,9 @@
+# Web scraper workload
+version: 0.1
+fs:
+  - allow: "/tmp/**"
+net:
+  - connect: "0.0.0.0:80"
+  - connect: "0.0.0.0:443"
+mem: 256MiB
+cpu: 1000ms

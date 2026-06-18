@@ -5,6 +5,7 @@ import socket
 import tempfile
 import urllib.request
 import logging
+from importlib import resources
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.error import URLError
@@ -306,10 +307,10 @@ def refresh_remote(
         os.unlink(tmp_path)
 
 
-def _policy_root() -> Path:
-    """Return the repository-level directory that stores named policy YAML files."""
+def _policy_root():
+    """Return the package-managed directory that stores named policy templates."""
 
-    return Path(__file__).resolve().parents[2] / "policy"
+    return resources.files(__package__) / "templates"
 
 
 NAMED_POLICIES: dict[str, str] = {

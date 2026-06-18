@@ -1,0 +1,8 @@
+# Machine Learning workload
+version: 0.1
+fs:
+  - allow: "/srv/data/**"
+net:
+  - connect: "0.0.0.0:443"
+mem: 4096MiB
+cpu: 10000ms

@@ -1,0 +1,6 @@
+# Filesystem-focused template with no imports or outbound network by default.
+version: 1.0
+fs:
+  - allow: "/tmp"
+net: []
+imports: []
