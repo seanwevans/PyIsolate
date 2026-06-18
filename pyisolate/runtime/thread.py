@@ -421,6 +421,16 @@ def _blocked_open(file, *args, **kwargs):
         fs_cap = getattr(_thread_local, "fs_capability", None)
         allowed = getattr(_thread_local, "fs", None)
         runtime_policy = getattr(_thread_local, "runtime_policy", None)
+        if runtime_policy is not None and any(
+            _fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs
+        ):
+            raise _deny(
+                "filesystem",
+                f"open:{path}",
+                "runtime_policy:deny_fs",
+                "file access blocked",
+            )
+
         if fs_cap is not None:
             safe_roots = fs_cap.roots
             if not any(
@@ -465,15 +475,6 @@ def _blocked_open(file, *args, **kwargs):
                     "file access blocked",
                 )
         elif runtime_policy is not None:
-            if any(
-                _fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs
-            ):
-                raise _deny(
-                    "filesystem",
-                    f"open:{path}",
-                    "runtime_policy:deny_fs",
-                    "file access blocked",
-                )
             matching_allow_rules = [
                 rule
                 for rule in runtime_policy.allow_fs
