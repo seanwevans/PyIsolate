@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Literal
 
+from ..policy.compiler import PolicyCompilerError, compile_policy
 from ..policy.model import from_compiled_policy, to_bpf_map_entries
 
 logger = logging.getLogger(__name__)
@@ -236,23 +237,66 @@ class BPFManager:
         )
         return ok
 
-    def hot_reload(self, policy_path: str) -> None:
-        """Refresh maps based on a policy JSON file."""
-        if not self.loaded:
-            raise RuntimeError("BPF not loaded")
+    def _load_runtime_policy_yaml(self, path: Path):
         try:
-            with open(policy_path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except FileNotFoundError as exc:
-            raise RuntimeError(f"Policy file not found: {policy_path}") from exc
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Invalid JSON in policy file {policy_path}") from exc
+            return from_compiled_policy(compile_policy(path))
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Invalid policy data in {path}: {exc}") from exc
+
+    def _load_runtime_policy_json(self, path: Path):
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
         if not isinstance(data, dict):
             raise RuntimeError("Policy data must be a JSON object")
         try:
-            runtime_policy = from_compiled_policy(data)
+            return from_compiled_policy(data)
         except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Invalid policy data in {path}: {exc}") from exc
+
+    def hot_reload(self, policy_path: str) -> None:
+        """Refresh maps based on a policy file.
+
+        ``.yml``/``.yaml`` files are treated as authoring templates and compiled
+        through the policy compiler.  ``.json`` files keep the existing canonical
+        runtime-policy path.  Unknown suffixes try YAML first so users get DSL
+        validation errors before falling back to JSON parsing.
+        """
+        if not self.loaded:
+            raise RuntimeError("BPF not loaded")
+
+        path = Path(policy_path)
+        suffix = path.suffix.lower()
+
+        try:
+            if suffix in {".yml", ".yaml"}:
+                runtime_policy = self._load_runtime_policy_yaml(path)
+            elif suffix == ".json":
+                runtime_policy = self._load_runtime_policy_json(path)
+            else:
+                try:
+                    runtime_policy = self._load_runtime_policy_yaml(path)
+                except (OSError, RuntimeError) as yaml_exc:
+                    try:
+                        runtime_policy = self._load_runtime_policy_json(path)
+                    except (RuntimeError, json.JSONDecodeError) as json_exc:
+                        raise RuntimeError(
+                            f"Invalid policy file {policy_path}: YAML error: {yaml_exc}; "
+                            f"JSON error: {json_exc}"
+                        ) from json_exc
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Policy file not found: {policy_path}") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Invalid JSON in policy file {policy_path}: {exc}"
+            ) from exc
+        except (PolicyCompilerError, TypeError, ValueError) as exc:
             raise RuntimeError(f"Invalid policy data in {policy_path}: {exc}") from exc
+        except OSError as exc:
+            raise RuntimeError(
+                f"Unable to read policy file {policy_path}: {exc}"
+            ) from exc
 
         # Replace the active policy entirely to drop removed entries. Store the
         # canonical structure, not the source JSON shape, so the userspace and BPF
