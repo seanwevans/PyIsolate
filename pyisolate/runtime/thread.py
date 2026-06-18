@@ -953,7 +953,9 @@ class SandboxThread(threading.Thread):
                     getattr(policy, "capabilities", []) or []
                 ).imports
             )
-        runtime_policy = from_sandbox_policy(policy) if policy is not None else None
+        runtime_policy = (
+            from_sandbox_policy(policy) if isinstance(policy, RuntimePolicy) else None
+        )
         if runtime_policy is not None and runtime_policy.imports:
             imports.update(runtime_policy.imports)
 
@@ -985,9 +987,18 @@ class SandboxThread(threading.Thread):
         self._authority = AuthoritySet.from_authorities(
             _iter_authorities(policy, capabilities)
         )
-        self.cpu_quota_ms = cpu_ms if cpu_ms is not None else self._authority.cpu_ms
         self.runtime_policy = (
-            from_sandbox_policy(policy) if policy is not None else None
+            from_sandbox_policy(policy) if isinstance(policy, RuntimePolicy) else None
+        )
+        policy_cpu_ms = (
+            self.runtime_policy.cpu_ms if self.runtime_policy is not None else None
+        )
+        self.cpu_quota_ms = (
+            cpu_ms
+            if cpu_ms is not None
+            else self._authority.cpu_ms
+            if self._authority.cpu_ms is not None
+            else policy_cpu_ms
         )
         self.mem_quota_bytes = mem_bytes
         self.wall_time_ms = wall_time_ms

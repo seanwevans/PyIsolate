@@ -589,3 +589,86 @@ def test_canonical_yaml_policy_drives_sandbox_and_bpf_maps(tmp_path, monkeypatch
         "127.0.0.1:9",
         "any",
     ] in calls
+
+
+def test_resolve_policy_path_preserves_deny_and_cpu_ms(tmp_path):
+    import pyisolate.policy as policy
+
+    allowed = tmp_path / "allowed"
+    denied = tmp_path / "allowed" / "secret.txt"
+    policy_path = tmp_path / "policy.yml"
+    policy_path.write_text(
+        "version: 1.0\n"
+        "sandboxes:\n"
+        "  default:\n"
+        "    fs:\n"
+        f'      - allow: "{allowed}/**"\n'
+        f'      - deny: "{denied}"\n'
+        "    cpu_ms: 25\n"
+    )
+
+    resolved = policy.resolve_policy(str(policy_path))
+
+    assert resolved.cpu_ms == 25
+    assert [rule.path for rule in resolved.allow_fs] == [f"{allowed}/**"]
+    assert [rule.path for rule in resolved.deny_fs] == [str(denied)]
+
+
+def test_resolve_policy_dict_preserves_deny_and_cpu_ms(tmp_path):
+    import pyisolate.policy as policy
+
+    allowed = tmp_path / "allowed"
+    denied = tmp_path / "allowed" / "secret.txt"
+    resolved = policy.resolve_policy(
+        {
+            "version": "1.0",
+            "sandboxes": {
+                "default": {
+                    "fs": [
+                        {"allow": f"{allowed}/**"},
+                        {"deny": str(denied)},
+                    ],
+                    "cpu_ms": 30,
+                }
+            },
+        }
+    )
+
+    assert resolved.cpu_ms == 30
+    assert [rule.path for rule in resolved.allow_fs] == [f"{allowed}/**"]
+    assert [rule.path for rule in resolved.deny_fs] == [str(denied)]
+
+
+def test_resolve_policy_path_deny_rule_remains_effective(tmp_path):
+    import pytest
+    import pyisolate as iso
+    import pyisolate.policy as policy
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    denied = allowed / "secret.txt"
+    denied.write_text("secret")
+    policy_path = tmp_path / "policy.yml"
+    policy_path.write_text(
+        "version: 1.0\n"
+        "sandboxes:\n"
+        "  default:\n"
+        "    imports:\n"
+        "      - pathlib\n"
+        "    fs:\n"
+        f'      - allow: "{allowed}/**"\n'
+        f'      - deny: "{denied}"\n'
+        "    cpu_ms: 25\n"
+    )
+
+    sb = iso.spawn("resolved-deny", policy=policy.resolve_policy(str(policy_path)))
+    try:
+        sb.exec(
+            "import pathlib\n"
+            f"post(pathlib.Path({str(denied)!r}).read_text())\n"
+        )
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        assert sb._thread.cpu_quota_ms == 25
+    finally:
+        sb.close()
