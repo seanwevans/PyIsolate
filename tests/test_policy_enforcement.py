@@ -173,3 +173,71 @@ def test_policy_blocks_side_effect_import_escape_surfaces(name, source, imports)
             sb.recv(timeout=1)
     finally:
         sb.close()
+
+
+def test_fs_policy_blocks_symlink_escape_reads(tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    link = allowed_dir / "escape.txt"
+    link.symlink_to(outside)
+
+    p = policy.Policy().allow_fs(str(allowed_dir))
+    sb = iso.spawn("pifs-symlink-read", policy=p)
+    try:
+        sb.exec(f"post(open({str(link)!r}).read())")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
+def test_fs_policy_blocks_symlink_escape_writes(tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("unchanged")
+    link = allowed_dir / "escape.txt"
+    link.symlink_to(outside)
+
+    p = policy.Policy().allow_fs(str(allowed_dir))
+    sb = iso.spawn("pifs-symlink-write", policy=p)
+    try:
+        sb.exec(f"open({str(link)!r}, 'w').write('changed')")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+    assert outside.read_text() == "unchanged"
+
+
+def test_safe_brokered_open_blocks_final_component_replacement_race(
+    tmp_path, monkeypatch
+):
+    import pyisolate.runtime.thread as thread_mod
+
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    target = allowed_dir / "target.txt"
+    target.write_text("safe")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+
+    original_os_open = thread_mod.os.open
+    replaced = False
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal replaced
+        if path == "target.txt" and dir_fd is not None and not replaced:
+            replaced = True
+            target.unlink()
+            target.symlink_to(outside)
+        return original_os_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(thread_mod.os, "open", racing_open)
+
+    with pytest.raises(iso.PolicyError):
+        thread_mod._safe_brokered_open(target, "r", allowed_roots=(allowed_dir,))
+    assert replaced
