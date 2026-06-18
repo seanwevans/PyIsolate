@@ -13,6 +13,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["pyisolate", "pyisolate.*"]
 
+[tool.setuptools.package-data]
+"pyisolate.bpf" = ["*.bpf.c"]
+
 [project.scripts]
 pyisolate = "pyisolate.cli:main"
 pyisolate-doctor = "pyisolate.doctor:main"
