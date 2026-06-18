@@ -269,6 +269,7 @@ def _blocked_open(file, *args, **kwargs):
         authority = getattr(_thread_local, "authority", None)
         fs_cap = getattr(_thread_local, "fs_capability", None)
         allowed = getattr(_thread_local, "fs", None)
+        runtime_policy = getattr(_thread_local, "runtime_policy", None)
         if authority is not None:
             if wants_write:
                 permitted = authority.allows_write(path)
@@ -277,8 +278,6 @@ def _blocked_open(file, *args, **kwargs):
             if not permitted:
                 raise errors.PolicyError("file access blocked")
         elif fs_cap is not None:
-        runtime_policy = getattr(_thread_local, "runtime_policy", None)
-        if fs_cap is not None:
             if not fs_cap.allows(path):
                 raise _deny(
                     "filesystem",
@@ -294,7 +293,6 @@ def _blocked_open(file, *args, **kwargs):
                     f"allow_fs:{_format_roots(allowed)}",
                     "file access blocked",
                 )
-                raise errors.PolicyError("file access blocked")
         elif runtime_policy is not None:
             if any(_fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs):
                 raise errors.PolicyError("file access blocked")
@@ -324,52 +322,47 @@ def _blocked_open(file, *args, **kwargs):
     weakref.finalize(opened, _release)
     return opened
 
-
-def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
-    authority = getattr(_thread_local, "authority", None)
-    
 def _check_network_destination(address: Iterable[str]) -> None:
+    authority = getattr(_thread_local, "authority", None)
     net_cap = getattr(_thread_local, "net_capability", None)
+    allowed = getattr(_thread_local, "tcp", None)
     runtime_policy = getattr(_thread_local, "runtime_policy", None)
     if isinstance(address, tuple):
         host, port, *_ = address
     else:
         host, port = address
+    destination = f"{host}:{port}"
     if authority is not None:
         if not authority.allows_tcp(str(host), int(port)):
-            raise errors.PolicyError(f"connect blocked: {host}:{port}")
+            raise errors.PolicyError(f"connect blocked: {destination}")
     elif net_cap is not None:
-    destination = f"{host}:{port}"
-    if net_cap is not None:
         if not net_cap.allows(str(host), int(port)):
             raise _deny(
                 "network",
-                f"connect:{host}:{port}",
+                f"connect:{destination}",
                 f"capability:network destinations={','.join(sorted(net_cap.destinations))}",
-                f"connect blocked: {host}:{port}",
+                f"connect blocked: {destination}",
             )
     elif allowed is not None:
-        if f"{host}:{port}" not in allowed:
+        if destination not in allowed:
             raise _deny(
                 "network",
-                f"connect:{host}:{port}",
+                f"connect:{destination}",
                 f"allow_tcp:{','.join(sorted(allowed))}",
-                f"connect blocked: {host}:{port}",
+                f"connect blocked: {destination}",
             )
-    else:
-        raise _deny(
-            "network",
-            f"connect:{host}:{port}",
-            "deny-by-default",
-            f"connect blocked: {host}:{port}",
-        )            
     elif runtime_policy is not None:
         if any(rule.destination == destination for rule in runtime_policy.deny_tcp):
             raise errors.PolicyError(f"connect blocked: {destination}")
         if not any(rule.destination == destination for rule in runtime_policy.allow_tcp):
             raise errors.PolicyError(f"connect blocked: {destination}")
-    else:
-        raise errors.PolicyError(f"connect blocked: {destination}")
+    elif getattr(_thread_local, "active", False):
+        raise _deny(
+            "network",
+            f"connect:{destination}",
+            "deny-by-default",
+            f"connect blocked: {destination}",
+        )
     sandbox = getattr(_thread_local, "sandbox", None)
     if sandbox is not None:
         sandbox._network_ops += 1
