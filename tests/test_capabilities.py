@@ -188,3 +188,34 @@ def test_first_class_tcp_import_and_cpu_budget() -> None:
         assert sb.recv(timeout=1) == 3.0
     finally:
         sb.close()
+
+
+def test_filesystem_capability_lexical_root_denial_records_policy_rule(
+    tmp_path,
+) -> None:
+    import pyisolate.runtime.thread as thread_mod
+
+    allowed = tmp_path / "allowed"
+    denied = tmp_path / "denied"
+    allowed.mkdir()
+    denied.mkdir()
+    target = denied / "no.txt"
+    target.write_text("no")
+
+    thread_mod._thread_local.fs_capability = FilesystemCapability.from_paths(
+        str(allowed)
+    )
+    try:
+        with pytest.raises(iso.PolicyError) as excinfo:
+            thread_mod._blocked_open(target)
+    finally:
+        del thread_mod._thread_local.fs_capability
+
+    denial = excinfo.value.denial_event
+    assert denial is not None
+    assert denial.capability == "filesystem"
+    assert denial.attempted_action == f"open:{target.resolve(strict=False)}"
+    assert (
+        denial.policy_rule
+        == f"capability:filesystem roots={allowed.resolve(strict=False)}"
+    )
