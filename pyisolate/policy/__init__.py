@@ -87,6 +87,7 @@ from .model import (  # noqa: F401
     from_yaml_dict,
     to_bpf_map_entries,
 )
+
 logger = logging.getLogger(__name__)
 
 
@@ -450,7 +451,7 @@ def resolve_policy(policy: str | Policy | SandboxPolicy | CompiledPolicy | dict 
     or a supported named policy, otherwise :class:`PolicyCompilerError` is raised.
     """
 
-    if policy is None or isinstance(policy, Policy):
+    if policy is None or isinstance(policy, (Policy, RuntimePolicy)):
         return policy
     if isinstance(policy, SandboxPolicy):
         return _runtime_policy_from_sandbox(policy)
