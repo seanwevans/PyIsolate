@@ -8,7 +8,6 @@ requires eBPF enforcement which is not implemented here.
 from __future__ import annotations
 
 import importlib
-import inspect
 import logging
 import os
 import re
@@ -186,15 +185,8 @@ class Supervisor:
         except TypeError as exc:
             if "unexpected keyword argument 'mode'" not in str(exc):
                 raise
-            # Backward-compatible path for tests or integrations that provide a
-            # legacy BPFManager.load(strict=...) shim.
+            # Backward-compatible path for legacy BPFManager.load(strict=...) shims.
             self._bpf.load(strict=rollout_mode == "hardened")
-            # Test and compatibility shims may still expose the legacy
-            # load(strict=False) signature.  Real BPFManager validates rollout
-            # modes itself.
-            if "mode" not in str(exc):
-                raise
-            self._bpf.load(strict=(rollout_mode == "hardened"))
         self._recover_state()
         self._warm_pool: list[SandboxThread] = []
         for i in range(warm_pool):
@@ -207,16 +199,6 @@ class Supervisor:
         self._tenant_usage: dict[str, int] = {}
         self._quota_ledger = os.environ.get("PYISOLATE_QUOTA_LEDGER")
         self._replay_quota_ledger()
-
-    def _load_bpf(self, rollout_mode: str) -> None:
-        """Load BPF manager while tolerating legacy test doubles."""
-
-        load = self._bpf.load
-        parameters = inspect.signature(load).parameters
-        if "mode" in parameters:
-            load(mode=rollout_mode)
-        else:
-            load()
 
     def _replay_quota_ledger(self) -> None:
         if not self._quota_ledger:
