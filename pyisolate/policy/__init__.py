@@ -187,22 +187,24 @@ class Policy:
 
         lines = ["version: 1.0", "sandboxes:", f"  {name}:"]
         sandbox = data["sandboxes"][name]  # type: ignore[index]
-        for rule in sandbox.get("fs", []):
-            key, value = next(iter(rule.items()))
-            lines.append("    fs:" if "    fs:" not in lines else "")
-            lines.append(f"      - {key}: {value!r}")
-        if sandbox.get("net"):
-            lines.append("    net:")
-            for rule in sandbox["net"]:
+
+        def append_rule_list(section: str, rules: object) -> None:
+            if not rules:
+                return
+            lines.append(f"    {section}:")
+            for rule in rules:  # type: ignore[union-attr]
                 key, value = next(iter(rule.items()))
                 lines.append(f"      - {key}: {value!r}")
+
+        append_rule_list("fs", sandbox.get("fs", []))
+        append_rule_list("net", sandbox.get("net", []))
         if sandbox.get("imports"):
             lines.append("    imports:")
             for module in sandbox["imports"]:
                 lines.append(f"      - {module}")
         if sandbox.get("cpu_ms") is not None:
             lines.append(f"    cpu_ms: {sandbox['cpu_ms']}")
-        return "\n".join(line for line in lines if line) + "\n"
+        return "\n".join(lines) + "\n"
 
 
 def _validate(data: object) -> None:
