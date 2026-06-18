@@ -28,6 +28,7 @@ dev = [
     "pytest",
     "pre-commit",
     "black",
+    "isort",
     "flake8",
     "pylint",
     "mypy",
@@ -53,3 +54,6 @@ markers = [
     "crash_injection: injected crash/fault-recovery scenarios",
     "cross_kernel: kernel-version compatibility scenarios",
 ]
+
+[tool.isort]
+profile = "black"
