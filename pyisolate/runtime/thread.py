@@ -56,7 +56,7 @@ from .protocol import (
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
 from ..telemetry import DenialEvent
-from ..policy.model import from_sandbox_policy
+from ..policy.model import RuntimePolicy, from_sandbox_policy
 
 _thread_local = threading.local()
 
@@ -354,6 +354,8 @@ def _iter_authorities(policy, capabilities: Optional[dict[str, Any]]) -> list[ob
     authorities: list[object] = []
     if policy is not None:
         authorities.extend(getattr(policy, "capabilities", []) or [])
+        if isinstance(policy, RuntimePolicy):
+            return authorities
         for path in getattr(policy, "fs", []) or []:
             authorities.extend([ReadPath(path), WritePath(path)])
         for addr in getattr(policy, "tcp", []) or []:
@@ -413,6 +415,7 @@ def _blocked_open(file, *args, **kwargs):
                 lexical_path == root or lexical_path.is_relative_to(root)
                 for root in fs_cap.roots
             ):
+            if not fs_cap.allows(path):
                 raise _deny(
                     "filesystem",
                     f"open:{path}",
@@ -449,15 +452,36 @@ def _blocked_open(file, *args, **kwargs):
                     )
             else:
                 raise errors.PolicyError("file access blocked")
+            if wants_write:
+                permitted = authority.allows_write(path)
+            else:
+                permitted = authority.allows_read(path)
+            if not permitted:
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    "authority:write_path" if wants_write else "authority:read_path",
+                    "file access blocked",
+                )
         elif runtime_policy is not None:
             if any(
                 _fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs
             ):
-                raise errors.PolicyError("file access blocked")
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    "runtime_policy:deny_fs",
+                    "file access blocked",
+                )
             if not any(
                 _fs_rule_matches(rule.path, path) for rule in runtime_policy.allow_fs
             ):
-                raise errors.PolicyError("file access blocked")
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    "runtime_policy:allow_fs",
+                    "file access blocked",
+                )
         elif getattr(_thread_local, "active", False):
             raise _deny(
                 "filesystem",
@@ -498,10 +522,7 @@ def _check_network_destination(address: Iterable[str]) -> None:
     else:
         host, port = address
     destination = f"{host}:{port}"
-    if authority is not None:
-        if not authority.allows_tcp(str(host), int(port)):
-            raise errors.PolicyError(f"connect blocked: {destination}")
-    elif net_cap is not None:
+    if net_cap is not None:
         if not net_cap.allows(str(host), int(port)):
             raise _deny(
                 "network",
@@ -517,13 +538,31 @@ def _check_network_destination(address: Iterable[str]) -> None:
                 f"allow_tcp:{','.join(sorted(allowed))}",
                 f"connect blocked: {destination}",
             )
+    elif authority is not None:
+        if not authority.allows_tcp(str(host), int(port)):
+            raise _deny(
+                "network",
+                f"connect:{destination}",
+                "authority:connect_tcp",
+                f"connect blocked: {destination}",
+            )
     elif runtime_policy is not None:
         if any(rule.destination == destination for rule in runtime_policy.deny_tcp):
-            raise errors.PolicyError(f"connect blocked: {destination}")
+            raise _deny(
+                "network",
+                f"connect:{destination}",
+                "runtime_policy:deny_tcp",
+                f"connect blocked: {destination}",
+            )
         if not any(
             rule.destination == destination for rule in runtime_policy.allow_tcp
         ):
-            raise errors.PolicyError(f"connect blocked: {destination}")
+            raise _deny(
+                "network",
+                f"connect:{destination}",
+                "runtime_policy:allow_tcp",
+                f"connect blocked: {destination}",
+            )
     elif getattr(_thread_local, "active", False):
         raise _deny(
             "network",
@@ -1010,6 +1049,9 @@ class SandboxThread(threading.Thread):
             enforcement_status=enforcement_status,
         )
         self._reset_runtime_state()
+        self._tenant: str | None = None
+        self._tenant_quota: int | None = None
+        self._tenant_quota_reserved = False
         # Dedup set spans sandbox lifetimes for this thread; message IDs are monotonic
         # and intentionally preserved across reset() to avoid stale replay collisions.
         self._next_attach_msg_id = 1
@@ -1371,9 +1413,11 @@ class SandboxThread(threading.Thread):
 
                 allowed_tcp = None
                 allowed_fs = None
-                if self.policy is not None:
+                if self.policy is not None and not isinstance(
+                    self.policy, RuntimePolicy
+                ):
                     tcp_policy = getattr(self.policy, "tcp", None)
-                    if tcp_policy is not None:
+                    if tcp_policy:
                         allowed_tcp = set(tcp_policy)
                     if getattr(self.policy, "fs", None):
                         allowed_fs = [

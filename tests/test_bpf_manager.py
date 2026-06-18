@@ -182,6 +182,49 @@ def test_hot_reload_handles_nested_policy(tmp_path, monkeypatch):
     ] in calls
 
 
+def test_hot_reload_accepts_yaml_template(monkeypatch):
+    monkeypatch.setattr(
+        BPFManager, "_run", lambda self, cmd, *, raise_on_error=False: True
+    )
+    mgr = BPFManager()
+    mgr.loaded = True
+
+    mgr.hot_reload(str(ROOT / "policy" / "readonly-fs.yml"))
+
+    assert mgr.policy_maps["sandboxes"]["default"]["allow_fs"] == [
+        {"action": "allow", "path": "/tmp"}
+    ]
+    assert mgr.policy_maps["sandboxes"]["default"]["allow_tcp"] == []
+
+
+def test_hot_reload_canonical_json_policy(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        BPFManager, "_run", lambda self, cmd, *, raise_on_error=False: True
+    )
+    mgr = BPFManager()
+    mgr.loaded = True
+    policy = tmp_path / "canonical.json"
+    expected = _canonical_policy(fs_path="/var/tmp/**", tcp_addr="127.0.0.1:443")
+    policy.write_text(json.dumps(expected))
+
+    mgr.hot_reload(str(policy))
+
+    assert mgr.policy_maps == expected
+
+
+def test_hot_reload_invalid_yaml_reports_runtime_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        BPFManager, "_run", lambda self, cmd, *, raise_on_error=False: True
+    )
+    mgr = BPFManager()
+    mgr.loaded = True
+    bad = tmp_path / "bad.yml"
+    bad.write_text("version: [not-a-supported-version\n")
+
+    with pytest.raises(RuntimeError, match="Invalid policy data"):
+        mgr.hot_reload(str(bad))
+
+
 def test_load_failure_logs_and_raises(monkeypatch, caplog):
     def fake_run(cmd, check, capture_output, text):
         if "bpftool" in cmd:
@@ -332,7 +375,9 @@ def test_load_lenient_missing_executable_keeps_unloaded(
     mgr.load(strict=False)
 
     assert mgr.loaded is False
-    assert any("command not found while running" in rec.getMessage() for rec in caplog.records)
+    assert any(
+        "command not found while running" in rec.getMessage() for rec in caplog.records
+    )
     assert any(missing_tool in rec.getMessage() for rec in caplog.records)
 
 

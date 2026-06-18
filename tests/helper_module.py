@@ -8,3 +8,10 @@ def stage_one(x):
 
 def stage_two(x):
     return x * 2
+
+
+def slow_identity(x):
+    import time
+
+    time.sleep(0.05)
+    return x

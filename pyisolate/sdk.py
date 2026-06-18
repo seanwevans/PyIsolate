@@ -2,10 +2,46 @@
 
 from __future__ import annotations
 
+import re
+import secrets
 from typing import Any, Callable
 
+from . import supervisor
 from .policy import Policy, resolve_policy
-from .supervisor import spawn
+
+_SANDBOX_NAME_MAX_LEN = 64
+_SANDBOX_NAME_SUFFIX_BYTES = 4
+_INVALID_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _sandbox_name_prefix(module: str, function: str, *parts: object) -> str:
+    """Return a debuggable sandbox-name prefix accepted by the supervisor."""
+    raw_parts = [module, *(str(part) for part in parts), function]
+    prefix = "-".join(part for part in raw_parts if part)
+    prefix = _INVALID_NAME_CHARS.sub("-", prefix).strip("-_")
+    prefix = re.sub(r"[-_]{2,}", "-", prefix)
+    return prefix or "sandbox"
+
+
+def _unique_sandbox_name(module: str, function: str, *parts: object) -> str:
+    """Build a unique supervisor-safe sandbox name no longer than 64 chars."""
+    suffix = secrets.token_hex(_SANDBOX_NAME_SUFFIX_BYTES)
+    separator = "-"
+    max_prefix_len = _SANDBOX_NAME_MAX_LEN - len(separator) - len(suffix)
+
+    prefix = _sandbox_name_prefix(module, function, *parts)
+    if len(prefix) > max_prefix_len:
+        # Keep the function/stage portion visible at the end of the prefix while
+        # retaining as much module context as fits before it.
+        prefix = prefix[-max_prefix_len:].lstrip("-_") or prefix[:max_prefix_len]
+
+    name = f"{prefix}{separator}{suffix}"
+    if supervisor.NAME_PATTERN.fullmatch(name) is None:
+        # The default supervisor pattern permits the sanitized alphabet above.
+        # If callers have installed a stricter pattern, fail with the same kind
+        # of validation error spawn() would raise, but before starting work.
+        raise ValueError("Sandbox name contains invalid characters")
+    return name
 
 
 def sandbox(
@@ -27,8 +63,8 @@ def sandbox(
 
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             resolved_policy = resolve_policy(policy)
-            sb = spawn(
-                func.__name__,
+            sb = supervisor.spawn(
+                _unique_sandbox_name(func.__module__, func.__name__),
                 policy=resolved_policy,
                 allowed_imports=[func.__module__],
             )
@@ -64,10 +100,13 @@ class Pipeline:
     def run(self, data: Any) -> Any:
         """Run data through all stages sequentially."""
         value = data
-        for dotted, policy in self._stages:
+        for index, (dotted, policy) in enumerate(self._stages):
             module, _, name = dotted.rpartition(".")
             resolved_policy = resolve_policy(policy)
             allowed = [module] if module else None
-            with spawn(name, policy=resolved_policy, allowed_imports=allowed) as sb:
+            sandbox_name = _unique_sandbox_name(module, name, f"stage-{index}")
+            with supervisor.spawn(
+                sandbox_name, policy=resolved_policy, allowed_imports=allowed
+            ) as sb:
                 value = sb.call(dotted, value)
         return value
