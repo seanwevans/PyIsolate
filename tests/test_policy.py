@@ -410,6 +410,12 @@ def test_named_policy_applies_runtime_restrictions(tmp_path):
             "finally:\n"
             "    s.close()\n"
         )
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
 def test_compile_policy_emits_first_class_capabilities(tmp_path):
     import pyisolate.policy as policy
     from pyisolate.capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
