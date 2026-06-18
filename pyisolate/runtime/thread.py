@@ -415,6 +415,12 @@ def _blocked_open(file, *args, **kwargs):
                 lexical_path == root or lexical_path.is_relative_to(root)
                 for root in fs_cap.roots
             ):
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    f"capability:filesystem roots={_format_roots(fs_cap.roots)}",
+                    "file access blocked",
+                )
             if not fs_cap.allows(path):
                 raise _deny(
                     "filesystem",
