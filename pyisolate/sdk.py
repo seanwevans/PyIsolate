@@ -16,26 +16,24 @@ def sandbox(
     Parameters
     ----------
     policy:
-        Name of the policy to apply to the sandbox.
+        Name of the policy (or Policy/dict) to apply to the sandbox.
     timeout:
         Seconds to wait for the sandboxed call to complete before raising
         :class:`pyisolate.errors.TimeoutError`.
-    backend:
-        Isolation backend: ``"subinterpreter"`` for an execution cell, or
-        explicit boundary modes ``"process"`` / ``"microvm"`` when available.
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        target = f"{func.__module__}.{func.__name__}"
+
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             resolved_policy = resolve_policy(policy)
-            sb = spawn(func.__name__, policy=resolved_policy)
+            sb = spawn(
+                func.__name__,
+                policy=resolved_policy,
+                allowed_imports=[func.__module__],
+            )
             try:
-                return sb.call(
-                    f"{func.__module__}.{func.__name__}",
-                    *args,
-                    timeout=timeout,
-                    **kwargs,
-                )
+                return sb.call(target, *args, timeout=timeout, **kwargs)
             finally:
                 sb.close()
 
@@ -60,15 +58,16 @@ class Pipeline:
             dotted = f"{stage.__module__}.{stage.__name__}"
         else:
             dotted = stage
-        self._stages.append((dotted, policy, backend))
+        self._stages.append((dotted, policy))
         return self
 
     def run(self, data: Any) -> Any:
         """Run data through all stages sequentially."""
         value = data
-        for dotted, policy, backend in self._stages:
-            name = dotted.rsplit(".", 1)[-1]
+        for dotted, policy in self._stages:
+            module, _, name = dotted.rpartition(".")
             resolved_policy = resolve_policy(policy)
-            with spawn(name, policy=resolved_policy) as sb:
+            allowed = [module] if module else None
+            with spawn(name, policy=resolved_policy, allowed_imports=allowed) as sb:
                 value = sb.call(dotted, value)
         return value
