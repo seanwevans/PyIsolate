@@ -16,6 +16,7 @@ include = ["pyisolate", "pyisolate.*"]
 
 [tool.setuptools.package-data]
 "pyisolate.policy.templates" = ["*.yml"]
+"pyisolate.bpf" = ["*.bpf.c"]
 
 [project.scripts]
 pyisolate = "pyisolate.cli:main"
