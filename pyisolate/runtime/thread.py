@@ -414,8 +414,7 @@ def _blocked_open(file, *args, **kwargs):
             if not any(
                 lexical_path == root or lexical_path.is_relative_to(root)
                 for root in fs_cap.roots
-            ):
-            if not fs_cap.allows(path):
+            ) or not fs_cap.allows(path):
                 raise _deny(
                     "filesystem",
                     f"open:{path}",
@@ -504,10 +503,26 @@ def _blocked_open(file, *args, **kwargs):
     if sandbox is None:
         return opened
     sandbox._open_files += 1
+    released = False
+    release_lock = threading.Lock()
 
     def _release():
-        sandbox._open_files = max(0, sandbox._open_files - 1)
+        nonlocal released
+        with release_lock:
+            if released:
+                return
+            released = True
+            sandbox._open_files = max(0, sandbox._open_files - 1)
 
+    original_close = opened.close
+
+    def _close_once(*close_args, **close_kwargs):
+        try:
+            return original_close(*close_args, **close_kwargs)
+        finally:
+            _release()
+
+    opened.close = _close_once
     weakref.finalize(opened, _release)
     return opened
 
