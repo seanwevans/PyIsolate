@@ -360,6 +360,42 @@ def test_runtime_policy_allow_fs_blocks_final_component_replacement_race(
     assert replaced
 
 
+def test_runtime_policy_deny_fs_preempts_filesystem_capability_allow(tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    allowed_file = allowed_dir / "allowed.txt"
+    allowed_file.write_text("ok")
+    denied_file = allowed_dir / "secret.txt"
+    denied_file.write_text("nope")
+    denied_path = denied_file.resolve(strict=False)
+
+    runtime_policy = policy.RuntimePolicy(
+        allow_fs=(policy.FilesystemRule("allow", str(allowed_dir)),),
+        deny_fs=(policy.FilesystemRule("deny", str(denied_file)),),
+    )
+
+    sb = iso.spawn(
+        "runtime-deny-preempts-fs-cap",
+        policy=runtime_policy,
+        capabilities={"filesystem": iso.FilesystemCapability.from_paths(allowed_dir)},
+    )
+    try:
+        sb.exec(f"post(open({str(allowed_file)!r}).read())")
+        assert sb.recv(timeout=1) == "ok"
+
+        sb.exec(f"open({str(denied_path)!r}).read()")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="runtime-deny-preempts-fs-cap",
+            capability="filesystem",
+            attempted_action=f"open:{denied_path}",
+            policy_rule="runtime_policy:deny_fs",
+        )
+    finally:
+        sb.close()
+
 def test_runtime_policy_filesystem_deny_rule_records_event(tmp_path):
     allowed_dir = tmp_path / "allowed"
     denied_dir = tmp_path / "denied"
