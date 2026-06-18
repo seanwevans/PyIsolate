@@ -468,6 +468,36 @@ def test_policy_objects_serialize_to_yaml_shape():
             }
         },
     }
+
+
+def test_policy_objects_serialize_to_yaml_without_pyyaml(monkeypatch):
+    import pyisolate as iso
+    from pyisolate import policy
+
+    p = policy.Policy().grant(
+        iso.ReadPath("/tmp/input"),
+        iso.WritePath("/tmp/output"),
+        iso.ConnectTCP("api.example.com", 443),
+        iso.Import("math"),
+        iso.CpuBudget(50),
+    )
+
+    monkeypatch.setattr(policy, "yaml", object())
+
+    assert p.to_yaml("job") == (
+        "version: 1.0\n"
+        "sandboxes:\n"
+        "  job:\n"
+        "    fs:\n"
+        "      - read: '/tmp/input'\n"
+        "      - write: '/tmp/output'\n"
+        "    net:\n"
+        "      - connect: 'api.example.com:443'\n"
+        "    imports:\n"
+        "      - math\n"
+        "    cpu_ms: 50\n"
+    )
+
 def test_canonical_yaml_policy_drives_sandbox_and_bpf_maps(tmp_path, monkeypatch):
     import pyisolate as iso
     import pyisolate.policy as policy
