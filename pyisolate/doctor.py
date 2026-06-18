@@ -96,7 +96,6 @@ def assert_hardened_supported(report: dict[str, Any] | None = None) -> None:
         raise RuntimeError(f"PyIsolate hardened mode is unsupported: {details}")
 from .conformance import ConformanceSuite
 from .nogil import imported_native_extensions, no_gil_readiness_report
-from .provenance import installation_report_json
 
 
 def _print_json(payload: object) -> None:
@@ -142,14 +141,6 @@ def main(argv: list[str] | None = None) -> None:
         default="dev",
         help="Validate requirements for the selected rollout mode.",
     )
-    args = parser.parse_args(argv)
-    report = doctor_report(mode=args.mode)
-    print(json.dumps(report, indent=2, sort_keys=True))
-    if args.mode == "hardened" and report["doctor"]["failures"]:
-        raise SystemExit(1)
-    args = parser.parse_args(argv)
-    if args.grade:
-        print(ConformanceSuite().grade().to_json())
     subparsers = parser.add_subparsers(dest="command")
 
     gil_parser = subparsers.add_parser(
@@ -169,6 +160,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     args = parser.parse_args(argv)
+
     if args.command == "gil":
         report = no_gil_readiness_report()
         if args.json:
@@ -176,6 +168,7 @@ def main(argv: list[str] | None = None) -> None:
         else:
             _print_gil_human(report)
         return
+
     if args.command == "extensions":
         extensions = imported_native_extensions()
         if args.json:
@@ -183,7 +176,15 @@ def main(argv: list[str] | None = None) -> None:
         else:
             _print_extensions_human(extensions)
         return
-    print(installation_report_json())
+
+    if args.grade:
+        print(ConformanceSuite().grade().to_json())
+        return
+
+    report = doctor_report(mode=args.mode)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if args.mode == "hardened" and report["doctor"]["failures"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
