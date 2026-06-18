@@ -1,0 +1,12 @@
+# Offline ML inference sandbox template.
+version: 1.0
+imports:
+  - math
+  - json
+  - statistics
+  - pathlib
+fs:
+  - allow: "/tmp"
+  - allow: "/srv/models"
+  - allow: "/srv/data"
+net: []

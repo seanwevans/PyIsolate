@@ -13,7 +13,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["pyisolate", "pyisolate.*"]
 
+
 [tool.setuptools.package-data]
+"pyisolate.policy.templates" = ["*.yml"]
 "pyisolate.bpf" = ["*.bpf.c"]
 
 [project.scripts]
