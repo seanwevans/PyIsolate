@@ -884,6 +884,9 @@ class SandboxThread(threading.Thread):
             enforcement_status=enforcement_status,
         )
         self._reset_runtime_state()
+        self._tenant: str | None = None
+        self._tenant_quota: int | None = None
+        self._tenant_quota_reserved = False
         # Dedup set spans sandbox lifetimes for this thread; message IDs are monotonic
         # and intentionally preserved across reset() to avoid stale replay collisions.
         self._next_attach_msg_id = 1
