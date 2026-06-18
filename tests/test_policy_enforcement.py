@@ -189,6 +189,10 @@ def test_fs_policy_blocks_symlink_escape_reads(tmp_path):
         sb.exec(f"post(open({str(link)!r}).read())")
         with pytest.raises(iso.PolicyError):
             sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
 def _assert_denial_event(events, *, cell, capability, attempted_action, policy_rule):
     assert events
     event = events[-1]
@@ -296,6 +300,66 @@ def test_safe_brokered_open_blocks_final_component_replacement_race(
     with pytest.raises(iso.PolicyError):
         thread_mod._safe_brokered_open(target, "r", allowed_roots=(allowed_dir,))
     assert replaced
+
+
+def test_runtime_policy_allow_fs_blocks_symlink_escape_reads(tmp_path):
+    allowed_dir = tmp_path / "runtime-allowed"
+    allowed_dir.mkdir()
+    outside = tmp_path / "runtime-outside.txt"
+    outside.write_text("secret")
+    link = allowed_dir / "escape.txt"
+    link.symlink_to(outside)
+
+    runtime_policy = policy.RuntimePolicy(
+        allow_fs=(policy.FilesystemRule("allow", str(allowed_dir)),),
+    )
+    sb = iso.spawn("runtime-fs-symlink-read", policy=runtime_policy)
+    try:
+        sb.exec(f"post(open({str(link)!r}).read())")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
+def test_runtime_policy_allow_fs_blocks_final_component_replacement_race(
+    tmp_path, monkeypatch
+):
+    import pyisolate.runtime.thread as thread_mod
+
+    allowed_dir = tmp_path / "runtime-allowed"
+    allowed_dir.mkdir()
+    target = allowed_dir / "target.txt"
+    target.write_text("safe")
+    outside = tmp_path / "runtime-outside.txt"
+    outside.write_text("secret")
+
+    original_os_open = thread_mod.os.open
+    replaced = False
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal replaced
+        if path == "target.txt" and dir_fd is not None and not replaced:
+            replaced = True
+            target.unlink()
+            target.symlink_to(outside)
+        return original_os_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(thread_mod.os, "open", racing_open)
+
+    runtime_policy = policy.RuntimePolicy(
+        allow_fs=(policy.FilesystemRule("allow", str(allowed_dir)),),
+    )
+    sb = iso.spawn("runtime-fs-symlink-swap", policy=runtime_policy)
+    try:
+        sb.exec(f"post(open({str(target)!r}).read())")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+    assert replaced
+
+
 def test_runtime_policy_filesystem_deny_rule_records_event(tmp_path):
     allowed_dir = tmp_path / "allowed"
     denied_dir = tmp_path / "denied"
