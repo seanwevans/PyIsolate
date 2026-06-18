@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import importlib
 import json
 import os
 import types
@@ -51,6 +52,8 @@ import pytest
 import pyisolate as iso
 import pyisolate.policy as policy
 from pyisolate.capabilities import FilesystemCapability
+
+checkpoint_mod = importlib.import_module("pyisolate.checkpoint")
 
 
 def _make_blob(payload, key):
@@ -170,6 +173,91 @@ def test_restore_rejects_malformed_payload(payload, message):
     key = os.urandom(32)
     blob = _make_blob(payload, key)
     with pytest.raises(ValueError, match=message):
+        iso.restore(blob, key)
+
+
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        ("cpu_ms", 0, "cpu_ms.*positive integer"),
+        ("cpu_ms", -1, "cpu_ms.*positive integer"),
+        ("cpu_ms", True, "cpu_ms.*positive integer"),
+        ("cpu_ms", "10", "cpu_ms.*positive integer"),
+        ("mem_bytes", 0, "mem_bytes.*positive integer"),
+        ("mem_bytes", 1.5, "mem_bytes.*positive integer"),
+        ("numa_node", -1, "numa_node.*non-negative integer"),
+        ("numa_node", False, "numa_node.*non-negative integer"),
+        ("numa_node", "0", "numa_node.*non-negative integer"),
+    ],
+)
+def test_restore_rejects_malformed_resource_fields_after_decrypt(
+    monkeypatch, field, value, message
+):
+    key = os.urandom(32)
+    payload = {"name": "bad-resource", field: value}
+    blob = _make_blob(payload, key)
+
+    def fail_spawn(*args, **kwargs):
+        raise AssertionError("spawn should not be called for invalid payloads")
+
+    monkeypatch.setattr(checkpoint_mod, "spawn", fail_spawn)
+    with pytest.raises(ValueError, match=f"invalid checkpoint payload: .*{message}"):
+        iso.restore(blob, key)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "math",
+        ["math", ""],
+        ["math", 1],
+        ["math", None],
+        {"0": "math"},
+    ],
+)
+def test_restore_rejects_malformed_allowed_imports_after_decrypt(monkeypatch, value):
+    key = os.urandom(32)
+    blob = _make_blob({"name": "bad-imports", "allowed_imports": value}, key)
+
+    def fail_spawn(*args, **kwargs):
+        raise AssertionError("spawn should not be called for invalid payloads")
+
+    monkeypatch.setattr(checkpoint_mod, "spawn", fail_spawn)
+    with pytest.raises(
+        ValueError,
+        match="invalid checkpoint payload: 'allowed_imports'.*list of non-empty strings",
+    ):
+        iso.restore(blob, key)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [],
+        ["filesystem"],
+        {"": {}},
+        {"filesystem": {}},
+        {"filesystem": {"__pyisolate_capability__": "read_path"}},
+        {
+            "filesystem": {
+                "__pyisolate_capability__": "secrets",
+                "values": {"api": "zz"},
+            }
+        },
+    ],
+)
+def test_restore_rejects_malformed_capabilities_after_decrypt(monkeypatch, value):
+    key = os.urandom(32)
+    blob = _make_blob({"name": "bad-caps", "capabilities": value}, key)
+
+    def fail_spawn(*args, **kwargs):
+        raise AssertionError("spawn should not be called for invalid payloads")
+
+    monkeypatch.setattr(checkpoint_mod, "spawn", fail_spawn)
+    with pytest.raises(
+        ValueError,
+        match="invalid checkpoint payload: 'capabilities'.*serialized capability mapping",
+    ):
         iso.restore(blob, key)
 
 

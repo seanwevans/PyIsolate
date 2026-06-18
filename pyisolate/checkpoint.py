@@ -11,6 +11,7 @@ import os
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
+from .runtime.thread import deserialize_capabilities
 from .supervisor import Sandbox, spawn
 
 _MAGIC = b"PYISOCP1"
@@ -35,6 +36,119 @@ def _decode_envelope(payload: bytes) -> bytes:
     if len(body) < _NONCE_LEN:
         raise ValueError("invalid checkpoint envelope length")
     return body
+
+
+def _require_optional_positive_int(state: dict, field: str) -> int | None:
+    value = state.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            f"invalid checkpoint payload: {field!r} must be None or a positive integer"
+        )
+    return value
+
+
+def _require_optional_numa_node(state: dict) -> int | None:
+    value = state.get("numa_node")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(
+            "invalid checkpoint payload: 'numa_node' must be None or a non-negative integer"
+        )
+    return value
+
+
+def _require_optional_allowed_imports(state: dict) -> list[str] | None:
+    value = state.get("allowed_imports")
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item for item in value
+    ):
+        raise ValueError(
+            "invalid checkpoint payload: 'allowed_imports' must be None or a list of non-empty strings"
+        )
+    return value
+
+
+def _is_str_list(value: object, *, allow_empty_items: bool = False) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, str) and (allow_empty_items or bool(item)) for item in value
+    )
+
+
+def _validate_serialized_capability(capability: object) -> None:
+    if isinstance(capability, list):
+        for item in capability:
+            _validate_serialized_capability(item)
+        return
+    if not isinstance(capability, dict):
+        raise ValueError("capability must be a serialized mapping")
+
+    kind = capability.get("__pyisolate_capability__")
+    if kind == "filesystem":
+        if not _is_str_list(capability.get("roots")):
+            raise ValueError("filesystem capability roots must be strings")
+    elif kind == "network":
+        if not _is_str_list(capability.get("destinations")):
+            raise ValueError("network capability destinations must be strings")
+    elif kind == "secrets":
+        values = capability.get("values")
+        if not isinstance(values, dict):
+            raise ValueError("secrets capability values must be a mapping")
+        for key, value in values.items():
+            if not isinstance(key, str) or not key or not isinstance(value, str):
+                raise ValueError("secrets capability values must be hex strings")
+            bytes.fromhex(value)
+    elif kind == "subprocess":
+        if not _is_str_list(capability.get("allowed_commands")):
+            raise ValueError("subprocess capability commands must be strings")
+        if not isinstance(capability.get("allow_shell", False), bool):
+            raise ValueError("subprocess capability allow_shell must be boolean")
+    elif kind in {"read_path", "write_path"}:
+        path = capability.get("path")
+        if not isinstance(path, str) or not path:
+            raise ValueError("path capability path must be a non-empty string")
+    elif kind == "connect_tcp":
+        host = capability.get("host")
+        port = capability.get("port")
+        if not isinstance(host, str) or not host:
+            raise ValueError("connect_tcp capability host must be a non-empty string")
+        if isinstance(port, bool) or not isinstance(port, int) or port <= 0:
+            raise ValueError("connect_tcp capability port must be a positive integer")
+    elif kind == "import":
+        module = capability.get("module")
+        if not isinstance(module, str) or not module:
+            raise ValueError("import capability module must be a non-empty string")
+    elif kind == "cpu_budget":
+        ms = capability.get("ms")
+        if isinstance(ms, bool) or not isinstance(ms, int) or ms <= 0:
+            raise ValueError("cpu_budget capability ms must be a positive integer")
+    elif kind not in {"clock", "random"}:
+        raise ValueError("unknown serialized capability kind")
+
+
+def _require_optional_capabilities(state: dict) -> dict | None:
+    value = state.get("capabilities")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or any(
+        not isinstance(name, str) or not name for name in value
+    ):
+        raise ValueError(
+            "invalid checkpoint payload: 'capabilities' must be None or a serialized capability mapping"
+        )
+    try:
+        for capability in value.values():
+            _validate_serialized_capability(capability)
+        deserialize_capabilities(value)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError(
+            "invalid checkpoint payload: 'capabilities' must be None or a serialized capability mapping"
+        ) from exc
+    return value
 
 
 def checkpoint(sandbox: Sandbox, key: bytes) -> bytes:
@@ -77,14 +191,19 @@ def restore(blob: bytes, key: bytes) -> Sandbox:
         raise ValueError(
             "invalid checkpoint payload: 'name' must be a non-empty string"
         )
+    cpu_ms = _require_optional_positive_int(state, "cpu_ms")
+    mem_bytes = _require_optional_positive_int(state, "mem_bytes")
+    allowed_imports = _require_optional_allowed_imports(state)
+    numa_node = _require_optional_numa_node(state)
+    capabilities = _require_optional_capabilities(state)
     return spawn(
         name,
         policy=state.get("policy"),
-        cpu_ms=state.get("cpu_ms"),
-        mem_bytes=state.get("mem_bytes"),
-        allowed_imports=state.get("allowed_imports"),
-        numa_node=state.get("numa_node"),
-        capabilities=state.get("capabilities"),
+        cpu_ms=cpu_ms,
+        mem_bytes=mem_bytes,
+        allowed_imports=allowed_imports,
+        numa_node=numa_node,
+        capabilities=capabilities,
     )
 
 
