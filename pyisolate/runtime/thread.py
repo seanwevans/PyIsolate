@@ -56,7 +56,7 @@ from .protocol import (
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
 from ..telemetry import DenialEvent
-from ..policy.model import from_sandbox_policy
+from ..policy.model import RuntimePolicy, from_sandbox_policy
 
 _thread_local = threading.local()
 
@@ -147,7 +147,11 @@ def _serialize_capability(capability: Any) -> Any:
     if isinstance(capability, WritePath):
         return {_CAPABILITY_MARKER: "write_path", "path": str(capability.path)}
     if isinstance(capability, ConnectTCP):
-        return {_CAPABILITY_MARKER: "connect_tcp", "host": capability.host, "port": capability.port}
+        return {
+            _CAPABILITY_MARKER: "connect_tcp",
+            "host": capability.host,
+            "port": capability.port,
+        }
     if isinstance(capability, Import):
         return {_CAPABILITY_MARKER: "import", "module": capability.module}
     if isinstance(capability, CpuBudget):
@@ -218,12 +222,12 @@ def deserialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str
     }
 
 
-
-
 def _iter_authorities(policy, capabilities: Optional[dict[str, Any]]) -> list[object]:
     authorities: list[object] = []
     if policy is not None:
         authorities.extend(getattr(policy, "capabilities", []) or [])
+        if isinstance(policy, RuntimePolicy):
+            return authorities
         for path in getattr(policy, "fs", []) or []:
             authorities.extend([ReadPath(path), WritePath(path)])
         for addr in getattr(policy, "tcp", []) or []:
@@ -234,13 +238,16 @@ def _iter_authorities(policy, capabilities: Optional[dict[str, Any]]) -> list[ob
         for module in getattr(policy, "imports", []) or []:
             authorities.append(Import(module))
     if capabilities:
-        values = capabilities.values() if isinstance(capabilities, dict) else capabilities
+        values = (
+            capabilities.values() if isinstance(capabilities, dict) else capabilities
+        )
         for capability in values:
             if isinstance(capability, (list, tuple, set, frozenset)):
                 authorities.extend(capability)
             else:
                 authorities.append(capability)
     return authorities
+
 
 def _fs_rule_matches(pattern: str, path: Path) -> bool:
     path_text = str(path)
@@ -270,14 +277,7 @@ def _blocked_open(file, *args, **kwargs):
         fs_cap = getattr(_thread_local, "fs_capability", None)
         allowed = getattr(_thread_local, "fs", None)
         runtime_policy = getattr(_thread_local, "runtime_policy", None)
-        if authority is not None:
-            if wants_write:
-                permitted = authority.allows_write(path)
-            else:
-                permitted = authority.allows_read(path)
-            if not permitted:
-                raise errors.PolicyError("file access blocked")
-        elif fs_cap is not None:
+        if fs_cap is not None:
             if not fs_cap.allows(path):
                 raise _deny(
                     "filesystem",
@@ -293,13 +293,37 @@ def _blocked_open(file, *args, **kwargs):
                     f"allow_fs:{_format_roots(allowed)}",
                     "file access blocked",
                 )
+        elif authority is not None:
+            if wants_write:
+                permitted = authority.allows_write(path)
+            else:
+                permitted = authority.allows_read(path)
+            if not permitted:
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    "authority:write_path" if wants_write else "authority:read_path",
+                    "file access blocked",
+                )
         elif runtime_policy is not None:
-            if any(_fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs):
-                raise errors.PolicyError("file access blocked")
+            if any(
+                _fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs
+            ):
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    "runtime_policy:deny_fs",
+                    "file access blocked",
+                )
             if not any(
                 _fs_rule_matches(rule.path, path) for rule in runtime_policy.allow_fs
             ):
-                raise errors.PolicyError("file access blocked")
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    "runtime_policy:allow_fs",
+                    "file access blocked",
+                )
         elif getattr(_thread_local, "active", False):
             raise _deny(
                 "filesystem",
@@ -322,6 +346,7 @@ def _blocked_open(file, *args, **kwargs):
     weakref.finalize(opened, _release)
     return opened
 
+
 def _check_network_destination(address: Iterable[str]) -> None:
     authority = getattr(_thread_local, "authority", None)
     net_cap = getattr(_thread_local, "net_capability", None)
@@ -332,10 +357,7 @@ def _check_network_destination(address: Iterable[str]) -> None:
     else:
         host, port = address
     destination = f"{host}:{port}"
-    if authority is not None:
-        if not authority.allows_tcp(str(host), int(port)):
-            raise errors.PolicyError(f"connect blocked: {destination}")
-    elif net_cap is not None:
+    if net_cap is not None:
         if not net_cap.allows(str(host), int(port)):
             raise _deny(
                 "network",
@@ -351,11 +373,31 @@ def _check_network_destination(address: Iterable[str]) -> None:
                 f"allow_tcp:{','.join(sorted(allowed))}",
                 f"connect blocked: {destination}",
             )
+    elif authority is not None:
+        if not authority.allows_tcp(str(host), int(port)):
+            raise _deny(
+                "network",
+                f"connect:{destination}",
+                "authority:connect_tcp",
+                f"connect blocked: {destination}",
+            )
     elif runtime_policy is not None:
         if any(rule.destination == destination for rule in runtime_policy.deny_tcp):
-            raise errors.PolicyError(f"connect blocked: {destination}")
-        if not any(rule.destination == destination for rule in runtime_policy.allow_tcp):
-            raise errors.PolicyError(f"connect blocked: {destination}")
+            raise _deny(
+                "network",
+                f"connect:{destination}",
+                "runtime_policy:deny_tcp",
+                f"connect blocked: {destination}",
+            )
+        if not any(
+            rule.destination == destination for rule in runtime_policy.allow_tcp
+        ):
+            raise _deny(
+                "network",
+                f"connect:{destination}",
+                "runtime_policy:allow_tcp",
+                f"connect blocked: {destination}",
+            )
     elif getattr(_thread_local, "active", False):
         raise _deny(
             "network",
@@ -707,7 +749,11 @@ class SandboxThread(threading.Thread):
         if policy is not None and getattr(policy, "imports", None):
             imports.update(policy.imports)
         if policy is not None:
-            imports.update(AuthoritySet.from_authorities(getattr(policy, "capabilities", []) or []).imports)
+            imports.update(
+                AuthoritySet.from_authorities(
+                    getattr(policy, "capabilities", []) or []
+                ).imports
+            )
         runtime_policy = from_sandbox_policy(policy) if policy is not None else None
         if runtime_policy is not None and runtime_policy.imports:
             imports.update(runtime_policy.imports)
@@ -737,9 +783,13 @@ class SandboxThread(threading.Thread):
         enforcement_status: Any = None,
     ) -> None:
         self.policy = policy
-        self._authority = AuthoritySet.from_authorities(_iter_authorities(policy, capabilities))
+        self._authority = AuthoritySet.from_authorities(
+            _iter_authorities(policy, capabilities)
+        )
         self.cpu_quota_ms = cpu_ms if cpu_ms is not None else self._authority.cpu_ms
-        self.runtime_policy = from_sandbox_policy(policy) if policy is not None else None        
+        self.runtime_policy = (
+            from_sandbox_policy(policy) if policy is not None else None
+        )
         self.mem_quota_bytes = mem_bytes
         self.wall_time_ms = wall_time_ms
         self.open_files_max = open_files_max
@@ -1036,7 +1086,9 @@ class SandboxThread(threading.Thread):
         if not self.cancel(timeout=timeout):
             self.kill(timeout=timeout)
 
-    def enforce_quota_breach(self, exc: Exception, reason: str, timeout: float = 0.05) -> bool:
+    def enforce_quota_breach(
+        self, exc: Exception, reason: str, timeout: float = 0.05
+    ) -> bool:
         """Record a kernel/watchdog quota breach and stop guest execution.
 
         The watchdog calls this path from outside the sandbox thread, so it does
@@ -1193,9 +1245,11 @@ class SandboxThread(threading.Thread):
 
                 allowed_tcp = None
                 allowed_fs = None
-                if self.policy is not None:
+                if self.policy is not None and not isinstance(
+                    self.policy, RuntimePolicy
+                ):
                     tcp_policy = getattr(self.policy, "tcp", None)
-                    if tcp_policy is not None:
+                    if tcp_policy:
                         allowed_tcp = set(tcp_policy)
                     if getattr(self.policy, "fs", None):
                         allowed_fs = [

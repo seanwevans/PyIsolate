@@ -173,3 +173,162 @@ def test_policy_blocks_side_effect_import_escape_surfaces(name, source, imports)
             sb.recv(timeout=1)
     finally:
         sb.close()
+
+
+def _assert_denial_event(events, *, cell, capability, attempted_action, policy_rule):
+    assert events
+    event = events[-1]
+    assert event["cell"] == cell
+    assert event["capability"] == capability
+    assert event["attempted_action"] == attempted_action
+    assert event["policy_rule"] == policy_rule
+    assert event["broker_decision"] == "deny"
+
+
+def test_authority_filesystem_denial_records_event(tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    denied_dir = tmp_path / "denied"
+    allowed_dir.mkdir()
+    denied_dir.mkdir()
+    denied_file = denied_dir / "secret.txt"
+    denied_file.write_text("nope")
+
+    sb = iso.spawn(
+        "authority-fs-denial", policy=policy.Policy().allow_read(str(allowed_dir))
+    )
+    try:
+        denied_path = denied_file.resolve(strict=False)
+        sb.exec(f"open({str(denied_path)!r}).read()")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="authority-fs-denial",
+            capability="filesystem",
+            attempted_action=f"open:{denied_path}",
+            policy_rule="authority:read_path",
+        )
+    finally:
+        sb.close()
+
+
+def test_authority_network_denial_records_event():
+    sb = iso.spawn(
+        "authority-net-denial",
+        policy=policy.Policy(
+            capabilities=[iso.ConnectTCP("127.0.0.1", 1), iso.Import("socket")]
+        ),
+    )
+    try:
+        sb.exec("import socket; s=socket.socket(); s.connect(('127.0.0.1', 2))")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="authority-net-denial",
+            capability="network",
+            attempted_action="connect:127.0.0.1:2",
+            policy_rule="authority:connect_tcp",
+        )
+    finally:
+        sb.close()
+
+
+def test_runtime_policy_filesystem_deny_rule_records_event(tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    denied_dir = tmp_path / "denied"
+    allowed_dir.mkdir()
+    denied_dir.mkdir()
+    denied_file = denied_dir / "secret.txt"
+    denied_file.write_text("nope")
+    denied_path = denied_file.resolve(strict=False)
+
+    runtime_policy = policy.RuntimePolicy(
+        allow_fs=(policy.FilesystemRule("allow", str(tmp_path)),),
+        deny_fs=(policy.FilesystemRule("deny", str(denied_dir)),),
+    )
+    sb = iso.spawn("runtime-fs-deny-rule", policy=runtime_policy)
+    try:
+        sb.exec(f"open({str(denied_path)!r}).read()")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="runtime-fs-deny-rule",
+            capability="filesystem",
+            attempted_action=f"open:{denied_path}",
+            policy_rule="runtime_policy:deny_fs",
+        )
+    finally:
+        sb.close()
+
+
+def test_runtime_policy_filesystem_missing_allow_rule_records_event(tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    denied_dir = tmp_path / "denied"
+    allowed_dir.mkdir()
+    denied_dir.mkdir()
+    denied_file = denied_dir / "secret.txt"
+    denied_file.write_text("nope")
+    denied_path = denied_file.resolve(strict=False)
+
+    runtime_policy = policy.RuntimePolicy(
+        allow_fs=(policy.FilesystemRule("allow", str(allowed_dir)),),
+    )
+    sb = iso.spawn("runtime-fs-missing-allow", policy=runtime_policy)
+    try:
+        sb.exec(f"open({str(denied_path)!r}).read()")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="runtime-fs-missing-allow",
+            capability="filesystem",
+            attempted_action=f"open:{denied_path}",
+            policy_rule="runtime_policy:allow_fs",
+        )
+    finally:
+        sb.close()
+
+
+def test_runtime_policy_network_deny_rule_records_event():
+    runtime_policy = policy.RuntimePolicy(
+        allow_tcp=(policy.NetworkRule("connect", "127.0.0.1:2"),),
+        deny_tcp=(policy.NetworkRule("deny", "127.0.0.1:2"),),
+        imports=("socket",),
+    )
+    sb = iso.spawn("runtime-net-deny-rule", policy=runtime_policy)
+    try:
+        sb.exec("import socket; s=socket.socket(); s.connect(('127.0.0.1', 2))")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="runtime-net-deny-rule",
+            capability="network",
+            attempted_action="connect:127.0.0.1:2",
+            policy_rule="runtime_policy:deny_tcp",
+        )
+    finally:
+        sb.close()
+
+
+def test_runtime_policy_network_missing_allow_rule_records_event():
+    runtime_policy = policy.RuntimePolicy(
+        allow_tcp=(policy.NetworkRule("connect", "127.0.0.1:1"),),
+        imports=("socket",),
+    )
+    sb = iso.spawn("runtime-net-missing-allow", policy=runtime_policy)
+    try:
+        sb.exec("import socket; s=socket.socket(); s.connect(('127.0.0.1', 2))")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="runtime-net-missing-allow",
+            capability="network",
+            attempted_action="connect:127.0.0.1:2",
+            policy_rule="runtime_policy:allow_tcp",
+        )
+    finally:
+        sb.close()
