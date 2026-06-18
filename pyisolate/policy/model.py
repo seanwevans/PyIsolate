@@ -15,14 +15,30 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True)
 class FilesystemRule:
-    """A canonical filesystem rule for one sandbox."""
+    """A canonical filesystem rule for one sandbox.
+
+    ``access`` is meaningful for allow rules: ``read`` permits only non-writing
+    opens, ``write`` permits only writing opens, and ``readwrite`` permits both.
+    Legacy ``allow`` and ``deny`` rules default to ``readwrite`` so existing
+    policies keep their previous behavior.
+    """
 
     action: str
     path: str
+    access: str = "readwrite"
 
     def __post_init__(self) -> None:
-        if self.action not in {"allow", "deny"}:
+        action = self.action
+        access = self.access
+        if action in {"read", "write"}:
+            access = action
+            action = "allow"
+            object.__setattr__(self, "action", action)
+            object.__setattr__(self, "access", access)
+        if action not in {"allow", "deny"}:
             raise ValueError(f"invalid filesystem action: {self.action}")
+        if access not in {"read", "write", "readwrite"}:
+            raise ValueError(f"invalid filesystem access mode: {self.access}")
         if not isinstance(self.path, str) or not self.path:
             raise ValueError("filesystem rule path must be a non-empty string")
 
@@ -111,10 +127,15 @@ class RuntimePolicySet:
 def _coerce_compiled_fs(rule: Any) -> FilesystemRule:
     action = getattr(rule, "action", None)
     path = getattr(rule, "path", None)
+    access = getattr(rule, "access", "readwrite")
     if isinstance(rule, Mapping):
         action = rule.get("action")
         path = rule.get("path")
-    return FilesystemRule(action=str(action), path=str(path))
+        access = rule.get("access", access)
+    if action in {"read", "write"}:
+        access = action
+        action = "allow"
+    return FilesystemRule(action=str(action), path=str(path), access=str(access))
 
 
 def _coerce_compiled_tcp(rule: Any) -> NetworkRule:
