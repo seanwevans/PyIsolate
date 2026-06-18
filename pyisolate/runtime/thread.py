@@ -478,6 +478,8 @@ def _blocked_open(file, *args, **kwargs):
                 rule
                 for rule in runtime_policy.allow_fs
                 if _fs_rule_matches(rule.path, path)
+                and rule.access
+                in ({"write", "readwrite"} if wants_write else {"read", "readwrite"})
             ]
             if not matching_allow_rules:
                 raise _deny(

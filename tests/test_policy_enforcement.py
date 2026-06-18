@@ -458,3 +458,62 @@ def test_runtime_policy_network_missing_allow_rule_records_event():
         )
     finally:
         sb.close()
+
+
+def test_compiled_read_filesystem_rule_allows_reads_only(tmp_path):
+    readable_dir = tmp_path / "readable"
+    readable_dir.mkdir()
+    readable_file = readable_dir / "data.txt"
+    readable_file.write_text("ok")
+
+    runtime_policy = policy.from_sandbox_policy(
+        policy.compiler.SandboxPolicy(
+            fs=[policy.compiler.FSRule("read", str(readable_dir))],
+            tcp=[],
+            imports=[],
+            capabilities=[],
+        )
+    )
+
+    sb = iso.spawn("compiled-fs-read", policy=runtime_policy)
+    try:
+        sb.exec(f"post(open({str(readable_file)!r}).read())")
+        assert sb.recv(timeout=1) == "ok"
+
+        sb.exec(f"open({str(readable_file)!r}, 'w').write('blocked')")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        assert readable_file.read_text() == "ok"
+    finally:
+        sb.close()
+
+
+def test_compiled_write_filesystem_rule_allows_writes_only(tmp_path):
+    writable_dir = tmp_path / "writable"
+    writable_dir.mkdir()
+    writable_file = writable_dir / "data.txt"
+    writable_file.write_text("old")
+
+    runtime_policy = policy.from_sandbox_policy(
+        policy.compiler.SandboxPolicy(
+            fs=[policy.compiler.FSRule("write", str(writable_dir))],
+            tcp=[],
+            imports=[],
+            capabilities=[],
+        )
+    )
+
+    sb = iso.spawn("compiled-fs-write", policy=runtime_policy)
+    try:
+        sb.exec(
+            f"with open({str(writable_file)!r}, 'w') as fh:\n"
+            "    post(fh.write('new'))"
+        )
+        assert sb.recv(timeout=1) == 3
+        assert writable_file.read_text() == "new"
+
+        sb.exec(f"post(open({str(writable_file)!r}).read())")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
