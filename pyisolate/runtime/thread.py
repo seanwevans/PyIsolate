@@ -147,7 +147,11 @@ def _serialize_capability(capability: Any) -> Any:
     if isinstance(capability, WritePath):
         return {_CAPABILITY_MARKER: "write_path", "path": str(capability.path)}
     if isinstance(capability, ConnectTCP):
-        return {_CAPABILITY_MARKER: "connect_tcp", "host": capability.host, "port": capability.port}
+        return {
+            _CAPABILITY_MARKER: "connect_tcp",
+            "host": capability.host,
+            "port": capability.port,
+        }
     if isinstance(capability, Import):
         return {_CAPABILITY_MARKER: "import", "module": capability.module}
     if isinstance(capability, CpuBudget):
@@ -218,8 +222,6 @@ def deserialize_capabilities(capabilities: Optional[dict[str, Any]]) -> dict[str
     }
 
 
-
-
 def _iter_authorities(policy, capabilities: Optional[dict[str, Any]]) -> list[object]:
     authorities: list[object] = []
     if policy is not None:
@@ -234,13 +236,16 @@ def _iter_authorities(policy, capabilities: Optional[dict[str, Any]]) -> list[ob
         for module in getattr(policy, "imports", []) or []:
             authorities.append(Import(module))
     if capabilities:
-        values = capabilities.values() if isinstance(capabilities, dict) else capabilities
+        values = (
+            capabilities.values() if isinstance(capabilities, dict) else capabilities
+        )
         for capability in values:
             if isinstance(capability, (list, tuple, set, frozenset)):
                 authorities.extend(capability)
             else:
                 authorities.append(capability)
     return authorities
+
 
 def _fs_rule_matches(pattern: str, path: Path) -> bool:
     path_text = str(path)
@@ -294,7 +299,9 @@ def _blocked_open(file, *args, **kwargs):
                     "file access blocked",
                 )
         elif runtime_policy is not None:
-            if any(_fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs):
+            if any(
+                _fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs
+            ):
                 raise errors.PolicyError("file access blocked")
             if not any(
                 _fs_rule_matches(rule.path, path) for rule in runtime_policy.allow_fs
@@ -321,6 +328,7 @@ def _blocked_open(file, *args, **kwargs):
 
     weakref.finalize(opened, _release)
     return opened
+
 
 def _check_network_destination(address: Iterable[str]) -> None:
     authority = getattr(_thread_local, "authority", None)
@@ -354,7 +362,9 @@ def _check_network_destination(address: Iterable[str]) -> None:
     elif runtime_policy is not None:
         if any(rule.destination == destination for rule in runtime_policy.deny_tcp):
             raise errors.PolicyError(f"connect blocked: {destination}")
-        if not any(rule.destination == destination for rule in runtime_policy.allow_tcp):
+        if not any(
+            rule.destination == destination for rule in runtime_policy.allow_tcp
+        ):
             raise errors.PolicyError(f"connect blocked: {destination}")
     elif getattr(_thread_local, "active", False):
         raise _deny(
@@ -707,7 +717,11 @@ class SandboxThread(threading.Thread):
         if policy is not None and getattr(policy, "imports", None):
             imports.update(policy.imports)
         if policy is not None:
-            imports.update(AuthoritySet.from_authorities(getattr(policy, "capabilities", []) or []).imports)
+            imports.update(
+                AuthoritySet.from_authorities(
+                    getattr(policy, "capabilities", []) or []
+                ).imports
+            )
         runtime_policy = from_sandbox_policy(policy) if policy is not None else None
         if runtime_policy is not None and runtime_policy.imports:
             imports.update(runtime_policy.imports)
@@ -737,9 +751,14 @@ class SandboxThread(threading.Thread):
         enforcement_status: Any = None,
     ) -> None:
         self.policy = policy
-        self._authority = AuthoritySet.from_authorities(_iter_authorities(policy, capabilities))
+        capabilities = deserialize_capabilities(capabilities)
+        self._authority = AuthoritySet.from_authorities(
+            _iter_authorities(policy, capabilities)
+        )
         self.cpu_quota_ms = cpu_ms if cpu_ms is not None else self._authority.cpu_ms
-        self.runtime_policy = from_sandbox_policy(policy) if policy is not None else None        
+        self.runtime_policy = (
+            from_sandbox_policy(policy) if policy is not None else None
+        )
         self.mem_quota_bytes = mem_bytes
         self.wall_time_ms = wall_time_ms
         self.open_files_max = open_files_max
@@ -834,6 +853,9 @@ class SandboxThread(threading.Thread):
             enforcement_status=enforcement_status,
         )
         self._reset_runtime_state()
+        self._tenant: str | None = None
+        self._tenant_quota: int | None = None
+        self._tenant_quota_reserved = False
         # Dedup set spans sandbox lifetimes for this thread; message IDs are monotonic
         # and intentionally preserved across reset() to avoid stale replay collisions.
         self._next_attach_msg_id = 1
@@ -1036,7 +1058,9 @@ class SandboxThread(threading.Thread):
         if not self.cancel(timeout=timeout):
             self.kill(timeout=timeout)
 
-    def enforce_quota_breach(self, exc: Exception, reason: str, timeout: float = 0.05) -> bool:
+    def enforce_quota_breach(
+        self, exc: Exception, reason: str, timeout: float = 0.05
+    ) -> bool:
         """Record a kernel/watchdog quota breach and stop guest execution.
 
         The watchdog calls this path from outside the sandbox thread, so it does

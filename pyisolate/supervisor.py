@@ -225,6 +225,21 @@ class Supervisor:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(f"{tenant},{delta}\n")
 
+    def _mark_tenant_reservation(
+        self, thread: SandboxThread, tenant: str | None, tenant_quota: int | None
+    ) -> None:
+        thread._tenant = tenant
+        thread._tenant_quota = tenant_quota
+        thread._tenant_quota_reserved = bool(tenant and tenant_quota is not None)
+
+    def _release_tenant_reservation(self, thread: SandboxThread) -> bool:
+        tenant = getattr(thread, "_tenant", None)
+        if tenant and getattr(thread, "_tenant_quota_reserved", False):
+            self._record_tenant_usage(tenant, -1)
+            thread._tenant_quota_reserved = False
+            return True
+        return False
+
     def _recover_state(self) -> None:
         """Recover durable supervisor state and clean stale resources."""
         stale = recovery.recover()
@@ -348,6 +363,7 @@ class Supervisor:
                     )
                     thread._backend = backend
                     thread.start()
+                self._mark_tenant_reservation(thread, tenant, tenant_quota)
                 thread._temp_dir = temp_dir
                 self._sandboxes[name] = thread
                 recovery.update_sandbox(
@@ -372,7 +388,12 @@ class Supervisor:
                 if temp_dir is not None:
                     recovery.cleanup_temp_dir(temp_dir)
                 recovery.drop_sandbox(name)
-                if usage_reserved and tenant:
+                released = (
+                    self._release_tenant_reservation(thread)
+                    if thread is not None
+                    else False
+                )
+                if usage_reserved and tenant and not released:
                     self._record_tenant_usage(tenant, -1)
                 raise
         # Remove references to any terminated sandboxes
@@ -473,6 +494,7 @@ class Supervisor:
         thread.reap()
         with self._lock:
             self._sandboxes.pop(name, None)
+            self._release_tenant_reservation(thread)
         cgroup.delete(getattr(thread, "_cgroup_path", None))
         recovery.cleanup_temp_dir(getattr(thread, "_temp_dir", name))
         recovery.drop_sandbox(name)
@@ -484,6 +506,9 @@ class Supervisor:
             if thread is None:
                 raise KeyError(f"unknown sandbox: {name}")
             snap = thread.snapshot()
+            snap["capabilities"] = getattr(thread, "_capabilities", None)
+            tenant = getattr(thread, "_tenant", None)
+            tenant_quota = getattr(thread, "_tenant_quota", None)
         if thread.is_alive():
             if not thread.cancel(timeout=0.2):
                 self.quarantine(name, "recycle requested on unresponsive sandbox")
@@ -491,6 +516,7 @@ class Supervisor:
                 thread.reap()
         with self._lock:
             self._sandboxes.pop(name, None)
+            self._release_tenant_reservation(thread)
         return self.spawn(
             name=snap["name"],
             policy=snap["policy"],
@@ -504,6 +530,8 @@ class Supervisor:
             allowed_imports=snap["allowed_imports"],
             numa_node=snap["numa_node"],
             capabilities=snap["capabilities"],
+            tenant=tenant,
+            tenant_quota=tenant_quota,
         )
 
     def _cleanup(self) -> None:
@@ -515,6 +543,7 @@ class Supervisor:
                 cgroup.delete(getattr(thread, "_cgroup_path", None))
                 recovery.cleanup_temp_dir(getattr(thread, "_temp_dir", n))
                 recovery.drop_sandbox(n)
+                self._release_tenant_reservation(thread)
                 del self._sandboxes[n]
             self._warm_pool = [t for t in self._warm_pool if t.is_alive()]
 

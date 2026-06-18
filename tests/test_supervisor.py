@@ -237,23 +237,87 @@ def test_sandbox_termination_reason_passthrough():
         sup.shutdown()
 
 
-def test_tenant_quota_is_durable(tmp_path, monkeypatch):
+def test_tenant_quota_released_after_close_allows_same_tenant_respawn(
+    tmp_path, monkeypatch
+):
     ledger = tmp_path / "quota.log"
     monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
 
-    sup1 = iso.Supervisor()
+    sup = iso.Supervisor()
     try:
-        sb = sup1.spawn("t1", tenant="acme", tenant_quota=1)
-        sb.close()
-    finally:
-        sup1.shutdown()
+        first = sup.spawn("t1", tenant="acme", tenant_quota=1)
+        assert first._thread._tenant == "acme"
+        assert first._thread._tenant_quota_reserved is True
+        first.close()
 
-    sup2 = iso.Supervisor()
-    try:
-        with pytest.raises(iso.TenantQuotaExceeded):
-            sup2.spawn("t2", tenant="acme", tenant_quota=1)
+        second = sup.spawn("t2", tenant="acme", tenant_quota=1)
+        assert second._thread._tenant == "acme"
+        assert sup._tenant_usage.get("acme", 0) == 1
     finally:
-        sup2.shutdown()
+        sup.shutdown()
+
+    assert ledger.read_text(encoding="utf-8").splitlines() == [
+        "acme,1",
+        "acme,-1",
+        "acme,1",
+        "acme,-1",
+    ]
+
+
+def test_quarantine_releases_tenant_reservation(tmp_path, monkeypatch):
+    ledger = tmp_path / "quota.log"
+    monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
+
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("qt", tenant="acme", tenant_quota=1)
+        sb.quarantine("bad")
+        assert sup._tenant_usage.get("acme", 0) == 0
+
+        again = sup.spawn("qt2", tenant="acme", tenant_quota=1)
+        assert again._thread._tenant_quota_reserved is True
+    finally:
+        sup.shutdown()
+
+
+def test_quota_ledger_replay_balances_positive_and_negative_entries(
+    tmp_path, monkeypatch
+):
+    ledger = tmp_path / "quota.log"
+    ledger.write_text("acme,1\nacme,1\nacme,-1\nacme,-1\nbeta,1\nbeta,-1\n")
+    monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
+
+    sup = iso.Supervisor()
+    try:
+        assert sup._tenant_usage.get("acme", 0) == 0
+        assert sup._tenant_usage.get("beta", 0) == 0
+        sup.spawn("ledger-ok", tenant="acme", tenant_quota=1)
+        assert sup._tenant_usage.get("acme", 0) == 1
+    finally:
+        sup.shutdown()
+
+
+def test_recycle_reacquires_tenant_reservation(tmp_path, monkeypatch):
+    ledger = tmp_path / "quota.log"
+    monkeypatch.setenv("PYISOLATE_QUOTA_LEDGER", str(ledger))
+
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("tenant-recycle", tenant="acme", tenant_quota=1)
+        recycled = sb.recycle()
+        assert recycled._thread._tenant == "acme"
+        assert recycled._thread._tenant_quota == 1
+        assert recycled._thread._tenant_quota_reserved is True
+        assert sup._tenant_usage.get("acme", 0) == 1
+    finally:
+        sup.shutdown()
+
+    assert ledger.read_text(encoding="utf-8").splitlines() == [
+        "acme,1",
+        "acme,-1",
+        "acme,1",
+        "acme,-1",
+    ]
 
 
 def test_spawn_start_failure_rolls_back_tenant_usage_and_ledger(tmp_path, monkeypatch):
