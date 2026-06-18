@@ -83,6 +83,50 @@ def test_open_files_quota_hard_stop(tmp_path):
         sb.stop()
 
 
+def test_open_files_quota_releases_on_explicit_close(tmp_path):
+    target = tmp_path / "data.txt"
+    target.write_text("ok", encoding="utf-8")
+
+    policy = type("Policy", (), {"fs": {str(tmp_path)}})()
+    sb = thread.SandboxThread("files-close", policy=policy, open_files_max=1)
+    sb.start()
+    try:
+        sb.exec(
+            f"path = {str(target)!r}\n"
+            "for _ in range(10):\n"
+            "    fh = open(path, 'r')\n"
+            "    assert fh.read() == 'ok'\n"
+            "    fh.close()\n"
+            "post('ok')"
+        )
+        assert sb.recv(timeout=1) == "ok"
+    finally:
+        sb.stop()
+
+
+def test_open_files_quota_close_is_idempotent(tmp_path):
+    target = tmp_path / "data.txt"
+    target.write_text("ok", encoding="utf-8")
+
+    policy = type("Policy", (), {"fs": {str(tmp_path)}})()
+    sb = thread.SandboxThread("files-close-idempotent", policy=policy, open_files_max=1)
+    sb.start()
+    try:
+        sb.exec(
+            f"path = {str(target)!r}\n"
+            "fh = open(path, 'r')\n"
+            "fh.close()\n"
+            "fh.close()\n"
+            "fh = open(path, 'r')\n"
+            "fh.close()\n"
+            "post('ok')"
+        )
+        assert sb.recv(timeout=1) == "ok"
+        assert sb._open_files == 0
+    finally:
+        sb.stop()
+
+
 def test_output_quota_hard_stop():
     sb = thread.SandboxThread("output", output_bytes_max=4)
     sb.start()
