@@ -389,6 +389,18 @@ def _fs_rule_matches(pattern: str, path: Path) -> bool:
     )
 
 
+def _fs_rule_safe_root(pattern: str) -> Path | None:
+    """Return the descriptor-broker root for a filesystem rule, if representable."""
+    if pattern.endswith("/**"):
+        root_pattern = pattern[:-3]
+        if any(char in root_pattern for char in "*?["):
+            return None
+        return Path(root_pattern).resolve(strict=False)
+    if any(char in pattern for char in "*?["):
+        return None
+    return Path(pattern).resolve(strict=False)
+
+
 def _blocked_open(file, *args, **kwargs):
     """Restrict file access based on the current thread's policy."""
 
@@ -414,7 +426,14 @@ def _blocked_open(file, *args, **kwargs):
             if not any(
                 lexical_path == root or lexical_path.is_relative_to(root)
                 for root in fs_cap.roots
-            ) or not fs_cap.allows(path):
+            ):
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    f"capability:filesystem roots={_format_roots(fs_cap.roots)}",
+                    "file access blocked",
+                )
+            if not fs_cap.allows(path):
                 raise _deny(
                     "filesystem",
                     f"open:{path}",
@@ -438,17 +457,6 @@ def _blocked_open(file, *args, **kwargs):
             )
             if candidate_roots:
                 safe_roots = tuple(candidate_roots)
-                permitted = any(
-                    lexical_path == root or lexical_path.is_relative_to(root)
-                    for root in candidate_roots
-                )
-                if not permitted:
-                    raise _deny(
-                        "filesystem",
-                        f"open:{path}",
-                        f"authority:{'write' if wants_write else 'read'} roots={_format_roots(candidate_roots)}",
-                        "file access blocked",
-                    )
             else:
                 raise errors.PolicyError("file access blocked")
             if wants_write:
@@ -472,15 +480,29 @@ def _blocked_open(file, *args, **kwargs):
                     "runtime_policy:deny_fs",
                     "file access blocked",
                 )
-            if not any(
-                _fs_rule_matches(rule.path, path) for rule in runtime_policy.allow_fs
-            ):
+            matching_allow_rules = [
+                rule
+                for rule in runtime_policy.allow_fs
+                if _fs_rule_matches(rule.path, path)
+            ]
+            if not matching_allow_rules:
                 raise _deny(
                     "filesystem",
                     f"open:{path}",
                     "runtime_policy:allow_fs",
                     "file access blocked",
                 )
+            candidate_roots = tuple(
+                _fs_rule_safe_root(rule.path) for rule in matching_allow_rules
+            )
+            if any(root is None for root in candidate_roots):
+                raise _deny(
+                    "filesystem",
+                    f"open:{path}",
+                    "runtime_policy:allow_fs",
+                    "filesystem glob allow rules are not supported for brokered open",
+                )
+            safe_roots = tuple(root for root in candidate_roots if root is not None)
         elif getattr(_thread_local, "active", False):
             raise _deny(
                 "filesystem",

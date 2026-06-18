@@ -6,32 +6,43 @@ from pyisolate.broker.crypto import CTR_LIMIT, CryptoBroker
 from pyisolate.libsodium import constant_compare
 
 
+def _private_bytes(private_key):
+    return private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+
+def _public_bytes(private_key):
+    return private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+
+def make_broker(max_frame_len=4096):
+    private_key = x25519.X25519PrivateKey.generate()
+    peer_key = x25519.X25519PrivateKey.generate()
+    return CryptoBroker(
+        _private_bytes(private_key),
+        _public_bytes(peer_key),
+        max_frame_len=max_frame_len,
+    )
+
+
 def make_pair():
     priv_a = x25519.X25519PrivateKey.generate()
     priv_b = x25519.X25519PrivateKey.generate()
     max_len = 4096
     a = CryptoBroker(
-        priv_a.private_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PrivateFormat.Raw,
-            encryption_algorithm=serialization.NoEncryption(),
-        ),
-        priv_b.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        ),
+        _private_bytes(priv_a),
+        _public_bytes(priv_b),
         max_frame_len=max_len,
     )
     b = CryptoBroker(
-        priv_b.private_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PrivateFormat.Raw,
-            encryption_algorithm=serialization.NoEncryption(),
-        ),
-        priv_a.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        ),
+        _private_bytes(priv_b),
+        _public_bytes(priv_a),
         max_frame_len=max_len,
     )
     return a, b
@@ -47,33 +58,35 @@ def test_unframe_short_frame():
         b.unframe(b"short")
 
 
+def test_max_frame_len_rejects_zero():
+    with pytest.raises(ValueError, match="max_frame_len must be at least 28 bytes"):
+        make_broker(max_frame_len=0)
+
+
+def test_max_frame_len_rejects_negative():
+    with pytest.raises(ValueError, match="max_frame_len must be at least 28 bytes"):
+        make_broker(max_frame_len=-1)
+
+
+def test_max_frame_len_rejects_too_small():
+    with pytest.raises(ValueError, match="max_frame_len must be at least 28 bytes"):
+        make_broker(max_frame_len=27)
+
+
+def test_max_frame_len_accepts_minimum_valid_limit():
+    broker = make_broker(max_frame_len=28)
+    assert broker._max_frame_len == 28
+
+
+def test_max_frame_len_rejects_non_integer():
+    with pytest.raises(ValueError, match="max_frame_len must be an integer"):
+        make_broker(max_frame_len="28")
+
+
 def test_unframe_frame_too_long():
-    priv_a = x25519.X25519PrivateKey.generate()
-    priv_b = x25519.X25519PrivateKey.generate()
-    a = CryptoBroker(
-        priv_a.private_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PrivateFormat.Raw,
-            encryption_algorithm=serialization.NoEncryption(),
-        ),
-        priv_b.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        ),
-    )
-    b = CryptoBroker(
-        priv_b.private_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PrivateFormat.Raw,
-            encryption_algorithm=serialization.NoEncryption(),
-        ),
-        priv_a.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        ),
-        max_frame_len=20,
-    )
-    frame = a.frame(b"0123456789")
+    a, _ = make_pair()
+    b = make_broker(max_frame_len=28)
+    frame = a.frame(b"x")
     with pytest.raises(ValueError):
         b.unframe(frame)
 
