@@ -68,10 +68,14 @@ frames are protected with ChaCha20-Poly1305.
 1. Each side generates an X25519 key pair.
 2. Public keys are exchanged out of band.
 3. A shared secret is derived via `X25519PrivateKey.exchange()`.
-4. The secret feeds HKDF-SHA256 with `info=b"pyisolate-channel"` to produce the
-   32 byte AEAD key.
+4. The secret feeds HKDF-SHA256 twice with direction-specific info strings:
+   `info=b"pyisolate-channel client->server"` and
+   `info=b"pyisolate-channel server->client"`. The client uses the
+   `client->server` key for transmit and the `server->client` key for receive;
+   the server uses the opposite mapping.
 5. The helper `pyisolate.broker.crypto.handshake()` wraps these steps and
-   returns `(public_key, broker)`.
+   returns `(public_key, broker)`. Pass `role="client"` or `role="server"` so
+   each peer selects the correct directional keys.
 6. Keys can be rotated by repeating steps 1‑5; counters reset to zero after a
    successful rotation.
 

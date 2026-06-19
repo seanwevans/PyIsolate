@@ -22,6 +22,7 @@ def make_pair():
             format=serialization.PublicFormat.Raw,
         ),
         max_frame_len=max_len,
+        role="client",
     )
     b = CryptoBroker(
         priv_b.private_bytes(
@@ -34,6 +35,7 @@ def make_pair():
             format=serialization.PublicFormat.Raw,
         ),
         max_frame_len=max_len,
+        role="server",
     )
     return a, b
 
@@ -71,7 +73,7 @@ def test_handshake_helper():
         format=serialization.PublicFormat.Raw,
     )
 
-    pub_a, broker_a = handshake(pub_b)
+    pub_a, broker_a = handshake(pub_b, role="client")
     broker_b = CryptoBroker(
         priv_b.private_bytes(
             encoding=serialization.Encoding.Raw,
@@ -80,6 +82,7 @@ def test_handshake_helper():
         ),
         pub_a,
         max_frame_len=4096,
+        role="server",
     )
 
     msg = b"hi"
@@ -143,3 +146,55 @@ def test_concurrent_rotate():
 
     msg = b"rotated"
     assert b.unframe(a.frame(msg)) == msg
+
+
+def test_directional_keys_prevent_opposite_direction_key_nonce_reuse():
+    a, b = make_pair()
+
+    assert a._tx_key == b._rx_key
+    assert a._rx_key == b._tx_key
+    assert a._tx_key != a._rx_key
+    assert b._tx_key != b._rx_key
+
+    client_frame = a.frame(b"client to server")
+    server_frame = b.frame(b"server to client")
+
+    assert client_frame[:12] == server_frame[:12] == b"\x00" * 12
+    assert b.unframe(client_frame) == b"client to server"
+    assert a.unframe(server_frame) == b"server to client"
+
+
+def test_same_role_peers_cannot_decrypt_first_frame_despite_same_nonce():
+    priv_a = x25519.X25519PrivateKey.generate()
+    priv_b = x25519.X25519PrivateKey.generate()
+    a = CryptoBroker(
+        priv_a.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        priv_b.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        ),
+        max_frame_len=4096,
+        role="client",
+    )
+    b = CryptoBroker(
+        priv_b.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        priv_a.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        ),
+        max_frame_len=4096,
+        role="client",
+    )
+
+    frame = a.frame(b"same role")
+    assert frame[:12] == b"\x00" * 12
+    with pytest.raises(ValueError, match="decryption failed"):
+        b.unframe(frame)
