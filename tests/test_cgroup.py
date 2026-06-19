@@ -69,6 +69,30 @@ def test_delete_does_not_unlink_files(tmp_path, monkeypatch):
     assert path.exists()
 
 
+def test_delete_drains_all_threads_despite_failures(tmp_path, monkeypatch):
+    path = tmp_path / "cg"
+    path.mkdir()
+    (path / "cgroup.threads").write_text("100\n200\n300\n")
+    parent_threads = tmp_path / "cgroup.threads"
+
+    attempted = []
+    real_write_text = Path.write_text
+
+    def tracking_write_text(self, data, *args, **kwargs):
+        if self == parent_threads:
+            attempted.append(data)
+            if data == "100":
+                raise OSError(errno.ESRCH, "No such process")
+            return None
+        return real_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", tracking_write_text)
+    cgroup.delete(path)
+    # A failed migration for one TID (e.g. an exited thread) must not abandon
+    # draining the remaining threads.
+    assert attempted == ["100", "200", "300"]
+
+
 def test_delete_logs_busy_warning(tmp_path, monkeypatch, caplog):
     path = tmp_path / "cg"
     path.mkdir()

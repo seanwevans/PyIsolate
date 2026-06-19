@@ -190,8 +190,10 @@ def delete(path: Path | CgroupEnforcement | None) -> None:
         try:
             parent_threads.write_text(tid)
         except (OSError, PermissionError, FileNotFoundError):
-            # Still attempt rmdir and rely on errno-aware logging below.
-            break
+            # Each TID migration is independent; one failure (e.g. a thread that
+            # already exited) must not abandon draining the rest, or the cgroup
+            # leaks. Keep going and rely on errno-aware rmdir logging below.
+            continue
 
     try:
         path.rmdir()
