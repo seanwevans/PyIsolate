@@ -32,8 +32,19 @@ def run_operator(namespace: str = "default") -> None:
         name = obj["metadata"]["name"]
         logger.info("received %s for sandbox %s", op, name)
         try:
-            if op == "ADDED":
-                sandboxes[name] = sup.spawn(name)
+            if op in ("ADDED", "MODIFIED"):
+                existing = sandboxes.get(name)
+                if existing is None:
+                    # New object, or a watch relist re-announcing one we do not
+                    # track yet.
+                    sandboxes[name] = sup.spawn(name)
+                elif op == "MODIFIED":
+                    # Reconcile a spec change by replacing the sandbox.
+                    existing.close()
+                    sandboxes[name] = sup.spawn(name)
+                # A re-delivered ADDED for a sandbox we already run is a no-op;
+                # Kubernetes relists re-send every object as ADDED, and spawning
+                # again would raise "already exists".
             elif op == "DELETED":
                 sb = sandboxes.pop(name, None)
                 if sb:
