@@ -94,6 +94,8 @@ def assert_hardened_supported(report: dict[str, Any] | None = None) -> None:
             f"{failure['check']}: {failure['reason']}" for failure in failures
         )
         raise RuntimeError(f"PyIsolate hardened mode is unsupported: {details}")
+
+
 from .conformance import ConformanceSuite
 from .nogil import imported_native_extensions, no_gil_readiness_report
 

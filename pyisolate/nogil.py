@@ -105,7 +105,9 @@ def no_gil_readiness_report() -> dict[str, Any]:
     extensions = imported_native_extensions()
     unknown_extensions = [item for item in extensions if not item["no_gil_safe"]]
 
-    parallel_cells_ready = bool(no_gil_build) and gil_enabled is not True and not unknown_extensions
+    parallel_cells_ready = (
+        bool(no_gil_build) and gil_enabled is not True and not unknown_extensions
+    )
     if parallel_cells_ready:
         mode = "parallel_cells"
         reason = "free-threaded runtime with no unknown native extensions loaded"

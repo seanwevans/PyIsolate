@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import queue
 import secrets as _secrets
-import socket
 import subprocess
 import time
 from dataclasses import dataclass, field

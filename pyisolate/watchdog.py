@@ -73,7 +73,8 @@ class ResourceWatchdog(threading.Thread):
                         )
                 except Exception:
                     logger.exception(
-                        "watchdog failed to stop sandbox %r after CPU quota breach", name
+                        "watchdog failed to stop sandbox %r after CPU quota breach",
+                        name,
                     )
                 continue
             if sb.mem_quota_bytes is not None and rss >= sb.mem_quota_bytes:
@@ -83,9 +84,11 @@ class ResourceWatchdog(threading.Thread):
                     )
                     if not stopped:
                         self._supervisor.quarantine(
-                            sb.name, "memory_exceeded: unresponsive after watchdog breach"
+                            sb.name,
+                            "memory_exceeded: unresponsive after watchdog breach",
                         )
                 except Exception:
                     logger.exception(
-                        "watchdog failed to stop sandbox %r after memory quota breach", name
+                        "watchdog failed to stop sandbox %r after memory quota breach",
+                        name,
                     )

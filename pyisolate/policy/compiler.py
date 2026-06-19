@@ -181,8 +181,12 @@ def _resolve_sandbox(
             parent_cfg = _resolve(parent_name)
         base = {
             "fs": _merge_unique(
-                _norm_rule_list(defaults.get("fs", []), field_name="fs", sb_name=current),
-                _norm_rule_list(parent_cfg.get("fs", []), field_name="fs", sb_name=current),
+                _norm_rule_list(
+                    defaults.get("fs", []), field_name="fs", sb_name=current
+                ),
+                _norm_rule_list(
+                    parent_cfg.get("fs", []), field_name="fs", sb_name=current
+                ),
             ),
             "net": _merge_unique(
                 _norm_rule_list(

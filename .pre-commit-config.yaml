@@ -11,6 +11,10 @@ repos:
     rev: v3.2.2
     hooks:
       - id: pylint
+        # The hook runs in an isolated env; give it the runtime deps so imports
+        # resolve and the score matches a normal install instead of being
+        # dragged down by spurious import-error findings.
+        additional_dependencies: [pyyaml, cryptography]
   - repo: https://github.com/pycqa/flake8
     rev: 6.1.0
     hooks:

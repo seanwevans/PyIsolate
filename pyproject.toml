@@ -46,6 +46,13 @@ python_version = "3.11"
 ignore_missing_imports = true
 
 
+[tool.pylint.main]
+# pylint is tracked as a quality badge (see scripts/pylint_badge.py) rather than
+# requiring a perfect score.  fail-under keeps the CI hook from blocking on the
+# project's accepted level of style/refactor findings while still surfacing them.
+fail-under = 8.0
+
+
 [tool.pytest.ini_options]
 markers = [
     "adversarial: adversarial input and exploit-style behavior",

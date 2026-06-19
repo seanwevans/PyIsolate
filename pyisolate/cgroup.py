@@ -140,6 +140,7 @@ def create(
             status = _failure(status, f"Failed to enforce memory quota for {path}")
     return status
 
+
 def _as_path(path: Path | CgroupEnforcement | None) -> Path | None:
     if isinstance(path, CgroupEnforcement):
         return path.path

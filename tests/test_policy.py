@@ -418,7 +418,13 @@ def test_named_policy_applies_runtime_restrictions(tmp_path):
 
 def test_compile_policy_emits_first_class_capabilities(tmp_path):
     import pyisolate.policy as policy
-    from pyisolate.capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
+    from pyisolate.capabilities import (
+        ConnectTCP,
+        CpuBudget,
+        Import,
+        ReadPath,
+        WritePath,
+    )
 
     doc = (
         "version: 1.0\n"
@@ -437,9 +443,16 @@ def test_compile_policy_emits_first_class_capabilities(tmp_path):
 
     compiled = policy.compile_policy(str(f))
     caps = compiled.sandboxes["sb"].capabilities
-    assert any(isinstance(cap, ReadPath) and str(cap.path) == "/tmp/input" for cap in caps)
-    assert any(isinstance(cap, WritePath) and str(cap.path) == "/tmp/output" for cap in caps)
-    assert any(isinstance(cap, ConnectTCP) and cap.address == "api.example.com:443" for cap in caps)
+    assert any(
+        isinstance(cap, ReadPath) and str(cap.path) == "/tmp/input" for cap in caps
+    )
+    assert any(
+        isinstance(cap, WritePath) and str(cap.path) == "/tmp/output" for cap in caps
+    )
+    assert any(
+        isinstance(cap, ConnectTCP) and cap.address == "api.example.com:443"
+        for cap in caps
+    )
     assert any(isinstance(cap, Import) and cap.module == "math" for cap in caps)
     assert any(isinstance(cap, CpuBudget) and cap.ms == 50 for cap in caps)
     assert compiled.sandboxes["sb"].cpu_ms == 50
@@ -497,6 +510,7 @@ def test_policy_objects_serialize_to_yaml_without_pyyaml(monkeypatch):
         "      - math\n"
         "    cpu_ms: 50\n"
     )
+
 
 def test_canonical_yaml_policy_drives_sandbox_and_bpf_maps(tmp_path, monkeypatch):
     import pyisolate as iso
@@ -641,6 +655,7 @@ def test_resolve_policy_dict_preserves_deny_and_cpu_ms(tmp_path):
 
 def test_resolve_policy_path_deny_rule_remains_effective(tmp_path):
     import pytest
+
     import pyisolate as iso
     import pyisolate.policy as policy
 
@@ -663,10 +678,7 @@ def test_resolve_policy_path_deny_rule_remains_effective(tmp_path):
 
     sb = iso.spawn("resolved-deny", policy=policy.resolve_policy(str(policy_path)))
     try:
-        sb.exec(
-            "import pathlib\n"
-            f"post(pathlib.Path({str(denied)!r}).read_text())\n"
-        )
+        sb.exec("import pathlib\n" f"post(pathlib.Path({str(denied)!r}).read_text())\n")
         with pytest.raises(iso.PolicyError):
             sb.recv(timeout=1)
         assert sb._thread.cpu_quota_ms == 25

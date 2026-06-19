@@ -113,6 +113,8 @@ def test_doctor_hardened_mode_passes_supported_report(monkeypatch, capsys):
         "status": "pass",
         "failures": [],
     }
+
+
 def test_doctor_cli_grade_output(monkeypatch, capsys):
     from pyisolate.doctor import ConformanceSuite
 
@@ -130,6 +132,8 @@ def test_doctor_cli_grade_output(monkeypatch, capsys):
     captured = capsys.readouterr()
 
     assert json.loads(captured.out) == {"score": 5, "max_score": 8}
+
+
 def test_installation_report_exposes_no_gil_axis():
     report = installation_report()
     assert report["no_gil"]["axis"]["mode"] in {
