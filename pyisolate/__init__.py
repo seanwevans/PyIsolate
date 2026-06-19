@@ -68,7 +68,14 @@ from .logging import setup_structured_logging  # noqa: F401
 from .telemetry import DenialEvent  # noqa: F401
 
 try:
-    from .migration import migrate
+    from .migration import (
+        MigrationProtocolError,
+        MigrationResponse,
+        handle_migration_connection,
+        migrate,
+        send_checkpoint,
+        serve_migration_once,
+    )
 except (
     ModuleNotFoundError,
     ImportError,
@@ -162,6 +169,11 @@ __all__ = [
     "checkpoint",
     "restore",
     "migrate",
+    "serve_migration_once",
+    "handle_migration_connection",
+    "send_checkpoint",
+    "MigrationProtocolError",
+    "MigrationResponse",
     "refresh_remote",
     "resolve_policy",
     "setup_structured_logging",

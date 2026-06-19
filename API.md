@@ -102,7 +102,7 @@ Event types: `MEM_KILL`, `CPU_THROTTLE`, `POLICY_HOTLOAD`, `BROKER_ERROR`.
 |------|-------------|
 | `psi.checkpoint(sb, key:bytes) -> bytes` | Serialize and encrypt sandbox state. |
 | `psi.restore(blob:bytes, key:bytes) -> Sandbox` | Spawn sandbox from encrypted state. |
-| `psi.migrate(sb, host:str, key:bytes) -> Sandbox` | Send checkpoint to `host` and restore there. |
+| `psi.migrate(sb, host:str, key:bytes) -> MigrationResponse` | Send checkpoint to `host` and restore there. |
 | `policy.refresh_remote(url:str, token:str, timeout: float | None = None, max_retries: int = 0)` | Fetch YAML policy over HTTP with an optional timeout and retry budget, then apply it to prototype policy maps. Hardened deployments must fail closed if the BPF map update fails. |
 
 
