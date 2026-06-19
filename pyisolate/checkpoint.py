@@ -60,6 +60,17 @@ def _require_optional_positive_int(state: dict, field: str) -> int | None:
     return value
 
 
+def _require_optional_nonnegative_int(state: dict, field: str) -> int | None:
+    value = state.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(
+            f"invalid checkpoint payload: {field!r} must be None or a non-negative integer"
+        )
+    return value
+
+
 def _require_optional_numa_node(state: dict) -> int | None:
     value = state.get("numa_node")
     if value is None:
@@ -245,6 +256,13 @@ def restore(blob: bytes, key: bytes) -> Sandbox:
         )
     cpu_ms = _require_optional_positive_int(state, "cpu_ms")
     mem_bytes = _require_optional_positive_int(state, "mem_bytes")
+    # Resource/quota caps captured by snapshot() must be restored too, otherwise
+    # a restored (or migrated) sandbox silently reverts to unbounded limits.
+    wall_time_ms = _require_optional_positive_int(state, "wall_time_ms")
+    open_files_max = _require_optional_nonnegative_int(state, "open_files_max")
+    network_ops_max = _require_optional_nonnegative_int(state, "network_ops_max")
+    output_bytes_max = _require_optional_nonnegative_int(state, "output_bytes_max")
+    child_work_max = _require_optional_nonnegative_int(state, "child_work_max")
     allowed_imports = _require_optional_allowed_imports(state)
     numa_node = _require_optional_numa_node(state)
     capabilities = _require_optional_capabilities(state)
@@ -254,6 +272,11 @@ def restore(blob: bytes, key: bytes) -> Sandbox:
         policy=policy,
         cpu_ms=cpu_ms,
         mem_bytes=mem_bytes,
+        wall_time_ms=wall_time_ms,
+        open_files_max=open_files_max,
+        network_ops_max=network_ops_max,
+        output_bytes_max=output_bytes_max,
+        child_work_max=child_work_max,
         allowed_imports=allowed_imports,
         numa_node=numa_node,
         capabilities=capabilities,

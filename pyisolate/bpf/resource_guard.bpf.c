@@ -198,6 +198,8 @@ int account_sched_switch(struct sched_switch_args *ctx)
 
     bpf_map_update_elem(&task_cpu_start, &pid_tgid, &now, 0);
     return 0;
+}
+
 static __inline int emit_breach(unsigned long cgroup_id,
                                 unsigned long cpu_time_ns,
                                 unsigned long rss_bytes,

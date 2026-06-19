@@ -149,6 +149,36 @@ def test_checkpoint_rejects_unserializable():
         sb.close()
 
 
+def test_checkpoint_restores_resource_limits():
+    key = os.urandom(32)
+    limits = dict(
+        cpu_ms=50,
+        mem_bytes=64 * 1024 * 1024,
+        wall_time_ms=1000,
+        open_files_max=4,
+        network_ops_max=0,
+        output_bytes_max=2048,
+        child_work_max=0,
+    )
+    sb = iso.spawn("limited", **limits)
+    try:
+        snap = sb.snapshot()
+        for field, value in limits.items():
+            assert snap[field] == value
+        blob = iso.checkpoint(sb, key)
+        sb2 = iso.restore(blob, key)
+        try:
+            restored = sb2.snapshot()
+            # All caps must survive the checkpoint/restore round-trip instead of
+            # silently reverting to unbounded (None).
+            for field, value in limits.items():
+                assert restored[field] == value
+        finally:
+            sb2.close()
+    finally:
+        pass
+
+
 def test_checkpoint_restores_imports_and_numa():
     key = os.urandom(32)
     allowed_imports = ["statistics", "math"]

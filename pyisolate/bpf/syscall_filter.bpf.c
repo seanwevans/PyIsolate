@@ -193,8 +193,11 @@ int BPF_PROG_filter_ptrace(void *child, unsigned int mode, int ret)
 }
 
 SEC("lsm/sb_mount")
+/* BPF programs receive at most five register arguments, so the opaque ``data``
+ * blob of the sb_mount hook is omitted here; the filter only needs the prior
+ * LSM decision (``ret``) and denies all mounts regardless of arguments. */
 int BPF_PROG_filter_mount(const char *dev_name, const void *path, const char *type,
-                          unsigned long flags, void *data, int ret)
+                          unsigned long flags, int ret)
 {
     if (ret)
         return ret;

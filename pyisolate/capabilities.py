@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import queue
 import secrets as _secrets
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -284,24 +285,30 @@ class SubprocessCapability(Capability[Literal["subprocess"]]):
         if isinstance(args, str):
             if not self.allow_shell:
                 raise PermissionError("shell string commands are not permitted")
-            command_name = args.split(maxsplit=1)[0]
-            if command_name not in self.allowed_commands:
-                raise PermissionError(f"subprocess blocked: {command_name}")
+            # Tokenize the string ourselves instead of handing it to a shell.
+            # Validating only the first whitespace token and then running with
+            # ``shell=True`` let metacharacters bypass the allowlist entirely
+            # (e.g. ``"echo hi; rm -rf ~"`` passed the ``echo`` check but the
+            # shell still executed ``rm``).
+            try:
+                argv = shlex.split(args)
+            except ValueError as exc:
+                raise PermissionError(f"subprocess blocked: unparseable command: {exc}")
         else:
-            seq = list(args)
-            if not seq:
-                raise ValueError("empty command")
-            command_name = seq[0]
-            if command_name not in self.allowed_commands:
-                raise PermissionError(f"subprocess blocked: {command_name}")
+            argv = list(args)
+        if not argv:
+            raise ValueError("empty command")
+        command_name = argv[0]
+        if command_name not in self.allowed_commands:
+            raise PermissionError(f"subprocess blocked: {command_name}")
 
         return subprocess.run(
-            args,
+            argv,
             check=check,
             capture_output=capture_output,
             text=text,
             timeout=timeout,
-            shell=isinstance(args, str),
+            shell=False,
         )
 
 
