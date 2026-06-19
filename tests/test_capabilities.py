@@ -81,6 +81,22 @@ def test_secret_capability_is_explicitly_handed() -> None:
         sup.shutdown(ROOT)
 
 
+def test_subprocess_shell_string_does_not_allow_injection(tmp_path) -> None:
+    sentinel = tmp_path / "pwned"
+    cap = SubprocessCapability.from_commands("echo", allow_shell=True)
+    # ``echo`` passes the allowlist, but the injected ``touch`` must not run:
+    # the string is tokenized and executed without a shell.
+    result = cap.run(f"echo hi; touch {sentinel}")
+    assert not sentinel.exists()
+    assert "touch" in result.stdout
+
+
+def test_subprocess_shell_string_blocks_disallowed_command() -> None:
+    cap = SubprocessCapability.from_commands("echo", allow_shell=True)
+    with pytest.raises(PermissionError):
+        cap.run("rm -rf /tmp/should-not-run")
+
+
 def test_subprocess_capability_brokered() -> None:
     sup = iso.Supervisor()
     sb = sup.spawn("subproc-block")
