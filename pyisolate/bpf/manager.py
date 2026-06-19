@@ -8,9 +8,13 @@ available on the test system; any missing executables are therefore ignored.
 
 import json
 import logging
+import os
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Literal
+
+from platformdirs import user_cache_dir
 
 from ..policy.compiler import PolicyCompilerError, compile_policy
 from ..policy.model import from_compiled_policy, to_bpf_map_entries
@@ -26,19 +30,46 @@ class BPFManager:
     """
 
     _SKEL_CACHE: dict[Path, str] = {}
+    _CACHE_ENV = "PYISOLATE_BPF_CACHE"
+
+    @classmethod
+    def _cache_dir(cls) -> Path:
+        """Return the writable cache directory for generated BPF artifacts."""
+
+        cache_root = os.environ.get(cls._CACHE_ENV)
+        path = (
+            Path(cache_root).expanduser()
+            if cache_root
+            else Path(user_cache_dir("pyisolate")) / "bpf"
+        )
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Unable to create BPF cache directory {path!s}. "
+                "Set PYISOLATE_BPF_CACHE to a writable directory before loading BPF programs; "
+                f"hardened mode cannot continue without writable generated-artifact storage: {exc}"
+            ) from exc
+        if not path.is_dir():
+            raise RuntimeError(
+                f"BPF cache path {path!s} exists but is not a directory. "
+                "Set PYISOLATE_BPF_CACHE to a writable directory."
+            )
+        return path
 
     def __init__(self):
         self.loaded = False
         self.policy_maps: dict[str, object] = {}
         self._src = Path(__file__).with_name("dummy.bpf.c")
-        self._obj = Path(__file__).with_name("dummy.bpf.o")
-        self._skel = Path(__file__).with_name("dummy.skel.h")
+        self._cache = self._cache_dir()
+        self._obj = self._cache / "dummy.bpf.o"
+        self._skel = self._cache / "dummy.skel.h"
         self.skeleton = ""
         self._compiled_skeleton = False
         self._filter_src = Path(__file__).with_name("syscall_filter.bpf.c")
-        self._filter_obj = Path(__file__).with_name("syscall_filter.bpf.o")
+        self._filter_obj = self._cache / "syscall_filter.bpf.o"
         self._guard_src = Path(__file__).with_name("resource_guard.bpf.c")
-        self._guard_obj = Path(__file__).with_name("resource_guard.bpf.o")
+        self._guard_obj = self._cache / "resource_guard.bpf.o"
         self._bpffs_root = Path("/sys/fs/bpf/pyisolate")
         self._dummy_pin = Path("/sys/fs/bpf/dummy")
         self._filter_pin_dir = self._bpffs_root / "syscall_filter"
@@ -143,7 +174,7 @@ class BPFManager:
             skel_cmd = [
                 "sh",
                 "-c",
-                f"bpftool gen skeleton {self._obj} > {self._skel}",
+                f"bpftool gen skeleton {shlex.quote(str(self._obj))} > {shlex.quote(str(self._skel))}",
             ]
             ok &= self._run(skel_cmd, raise_on_error=strict_mode)
             if ok and self._skel.exists():

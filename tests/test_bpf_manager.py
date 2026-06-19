@@ -133,6 +133,56 @@ def test_load_lenient_mode_does_not_raise(monkeypatch):
     assert mgr.loaded
 
 
+def test_generated_bpf_artifacts_use_configured_cache(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "bpf-cache"
+    monkeypatch.setenv(BPFManager._CACHE_ENV, str(cache_dir))
+    BPFManager._SKEL_CACHE.clear()
+
+    calls = []
+
+    def record(self, cmd, *, raise_on_error=False):
+        calls.append(cmd)
+        return True
+
+    monkeypatch.setattr(BPFManager, "_run", record)
+    mgr = BPFManager()
+    mgr.load()
+
+    package_dir = Path(BPFManager.__module__.replace(".", "/"))
+    package_bpf_dir = ROOT / package_dir.parent
+    output_paths = {mgr._obj, mgr._skel, mgr._filter_obj, mgr._guard_obj}
+
+    assert output_paths == {
+        cache_dir / "dummy.bpf.o",
+        cache_dir / "dummy.skel.h",
+        cache_dir / "syscall_filter.bpf.o",
+        cache_dir / "resource_guard.bpf.o",
+    }
+    assert all(path.is_relative_to(cache_dir) for path in output_paths)
+    assert not any(path.is_relative_to(package_bpf_dir) for path in output_paths)
+    assert mgr._src == package_bpf_dir / "dummy.bpf.c"
+    assert mgr._filter_src == package_bpf_dir / "syscall_filter.bpf.c"
+    assert mgr._guard_src == package_bpf_dir / "resource_guard.bpf.c"
+
+    command_text = "\n".join(" ".join(map(str, cmd)) for cmd in calls)
+    assert str(cache_dir) in command_text
+    assert str(package_bpf_dir / "dummy.bpf.o") not in command_text
+    assert str(package_bpf_dir / "syscall_filter.bpf.o") not in command_text
+    assert str(package_bpf_dir / "resource_guard.bpf.o") not in command_text
+
+
+def test_cache_directory_creation_failure_is_descriptive(tmp_path, monkeypatch):
+    cache_file = tmp_path / "not-a-directory"
+    cache_file.write_text("not a directory")
+    monkeypatch.setenv(BPFManager._CACHE_ENV, str(cache_file))
+
+    with pytest.raises(RuntimeError) as exc:
+        BPFManager()
+
+    assert str(cache_file) in str(exc.value)
+    assert "writable directory" in str(exc.value)
+
+
 def test_hot_reload_updates_maps(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "subprocess.run", lambda *a, **k: subprocess.CompletedProcess([], 0)
