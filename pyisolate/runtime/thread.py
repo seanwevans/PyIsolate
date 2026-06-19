@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import ctypes
 import fnmatch
+import importlib.util
 import io
 import logging
 import os
@@ -73,6 +74,43 @@ _CAPABILITY_MARKER = "__pyisolate_capability__"
 # falling back to unrestricted Python imports.
 DEFAULT_ALLOWED_IMPORTS: frozenset[str] = frozenset()
 _BLOCKED_MODULES = {"ctypes", "multiprocessing"}
+# Developer-facing audit of Python-level wrappers. These wrappers are not the
+# production isolation boundary; they make dangerous APIs fail closed in local
+# tests while the broker/cgroup path provides production enforcement.
+_BLOCKED_WRAPPER_APIS: dict[str, tuple[str, ...]] = {
+    "os": (
+        "open",
+        "system",
+        "popen",
+        "fork",
+        "forkpty",
+        "posix_spawn",
+        "posix_spawnp",
+        "startfile",
+        "exec*",
+        "spawn*",
+    ),
+    "socket": (
+        "raw sockets",
+        "packet sockets",
+        "socketpair",
+        "fromfd",
+        "create_server",
+    ),
+    "subprocess": (
+        "Popen",
+        "call",
+        "check_call",
+        "check_output",
+        "getoutput",
+        "getstatusoutput",
+    ),
+    "pathlib": ("Path.open via filesystem policy",),
+    "io": ("open",),
+    "random": ("randbytes without RandomCapability",),
+    "secrets": ("token_bytes without RandomCapability",),
+    "threading": ("Thread.start beyond child_work_max",),
+}
 
 
 def _active_sandbox() -> "SandboxThread | None":
@@ -728,17 +766,73 @@ def _make_sandbox_thread_class(sandbox: "SandboxThread"):
     return SandboxedThread
 
 
+def _module_proxy(name: str, module) -> types.ModuleType:
+    proxy = types.ModuleType(name, getattr(module, "__doc__", None))
+    proxy.__dict__.update({k: getattr(module, k) for k in dir(module)})
+    proxy.__dict__["__name__"] = name
+    proxy.__dict__["__package__"] = getattr(
+        module, "__package__", name.rpartition(".")[0]
+    )
+    proxy.__dict__["__loader__"] = getattr(module, "__loader__", None)
+    proxy.__dict__["__spec__"] = getattr(module, "__spec__", None)
+    return proxy
+
+
+def _sanitize_module_refs(
+    mod: types.ModuleType, *module_names: str
+) -> types.ModuleType:
+    """Replace module attributes that would otherwise expose unwrapped APIs."""
+
+    for module_name in module_names:
+        attr = module_name.rsplit(".", 1)[-1]
+        if hasattr(mod, attr) and isinstance(getattr(mod, attr), types.ModuleType):
+            setattr(mod, attr, _wrap_module(module_name, getattr(mod, attr)))
+    return mod
+
+
+def _os_proxy(include_path: bool = True) -> types.ModuleType:
+    mod = _module_proxy("os", os)
+    mod.urandom = _guarded_urandom
+    for attr in (
+        "open",
+        "system",
+        "popen",
+        "fork",
+        "forkpty",
+        "posix_spawn",
+        "posix_spawnp",
+        "startfile",
+    ):
+        if hasattr(mod, attr):
+            setattr(mod, attr, _deny_side_effect_api(f"os.{attr}"))
+    for attr in dir(os):
+        if attr.startswith("exec") or attr.startswith("spawn"):
+            setattr(mod, attr, _deny_side_effect_api(f"os.{attr}"))
+    if include_path and hasattr(mod, "path") and isinstance(mod.path, types.ModuleType):
+        mod.path = _wrap_module(mod.path.__name__, mod.path)
+    return mod
+
+
 def _wrap_module(name: str, module):
     """Return developer-ergonomic wrappers around risky modules.
 
     These Python wrappers fail fast for tests and local development. They are
     not a production sandbox boundary; production denial and brokering should
     be enforced by the supervisor's BPF/cgroup broker path.
+
+    Intentionally blocked wrapper APIs are documented in
+    ``_BLOCKED_WRAPPER_APIS``. Return values are sandbox-owned proxy modules so
+    standard-library modules in ``sys.modules`` are not mutated in-place.
     """
 
     base = name.split(".")[0]
     if base in _BLOCKED_MODULES:
         raise errors.PolicyError(f"import of {base!r} is not permitted")
+    if name in {"os.path", "posixpath", "ntpath"}:
+        mod = _module_proxy(name, module)
+        if hasattr(mod, "os") and isinstance(mod.os, types.ModuleType):
+            mod.os = _os_proxy(include_path=False)
+        return mod
     if base == "time":
 
         def _require_clock() -> ClockCapability:
@@ -763,27 +857,21 @@ def _wrap_module(name: str, module):
                 return 0.0
             return cap.monotonic()
 
-        mod = types.ModuleType("time", module.__doc__)
-        mod.__dict__.update({k: getattr(time, k) for k in dir(time)})
+        mod = _module_proxy("time", time)
         mod.time = _time
         mod.monotonic = _monotonic
         mod.perf_counter = _perf_counter
         return mod
     if base == "io":
-        mod = types.ModuleType("io", module.__doc__)
-        mod.__dict__.update({k: getattr(io, k) for k in dir(io)})
+        mod = _module_proxy("io", io)
         mod.open = _blocked_open
         return mod
     if base == "socket":
-        mod = types.ModuleType("socket", module.__doc__)
-        mod.__dict__.update({k: getattr(socket, k) for k in dir(socket)})
+        mod = _module_proxy("socket", socket)
 
         class GuardedSocket(socket.socket):
             def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
                 sock_type = type if type != -1 else socket.SOCK_STREAM
-                # Socket type may include flags such as SOCK_NONBLOCK; the low
-                # nibble carries the base type on Linux. Do not treat regular
-                # SOCK_STREAM as raw just because 1 & 3 is truthy.
                 if int(sock_type) & 0xF == int(socket.SOCK_RAW):
                     raise errors.PolicyError("raw sockets are blocked")
                 if hasattr(socket, "AF_PACKET") and family == socket.AF_PACKET:
@@ -815,63 +903,33 @@ def _wrap_module(name: str, module):
         mod.fromfd = _deny_side_effect_api("socket.fromfd")
         if hasattr(socket, "create_server"):
             mod.create_server = _deny_side_effect_api("socket.create_server")
-        return mod
+        return _sanitize_module_refs(mod, "os")
     if base == "subprocess":
-        mod = types.ModuleType("subprocess", module.__doc__)
-        mod.__dict__.update({k: getattr(subprocess, k) for k in dir(subprocess)})
+        mod = _module_proxy("subprocess", subprocess)
         mod.run = _blocked_subprocess_run
-        for attr in (
-            "Popen",
-            "call",
-            "check_call",
-            "check_output",
-            "getoutput",
-            "getstatusoutput",
-        ):
+        for attr in _BLOCKED_WRAPPER_APIS["subprocess"]:
             if hasattr(mod, attr):
                 setattr(mod, attr, _deny_side_effect_api(f"subprocess.{attr}"))
-        return mod
+        return _sanitize_module_refs(mod, "os")
     if base == "os":
-        mod = types.ModuleType("os", module.__doc__)
-        mod.__dict__.update({k: getattr(os, k) for k in dir(os)})
-        mod.urandom = _guarded_urandom
-        for attr in (
-            "open",
-            "system",
-            "popen",
-            "fork",
-            "forkpty",
-            "posix_spawn",
-            "posix_spawnp",
-            "startfile",
-        ):
-            if hasattr(mod, attr):
-                setattr(mod, attr, _deny_side_effect_api(f"os.{attr}"))
-        for attr in dir(os):
-            if attr.startswith("exec") or attr.startswith("spawn"):
-                setattr(mod, attr, _deny_side_effect_api(f"os.{attr}"))
-        return mod
+        return _os_proxy()
     if base == "secrets":
-        mod = types.ModuleType("secrets", module.__doc__)
-        mod.__dict__.update({k: getattr(pysecrets, k) for k in dir(pysecrets)})
+        mod = _module_proxy("secrets", pysecrets)
         mod.token_bytes = _guarded_urandom
-        return mod
+        return _sanitize_module_refs(mod, "os", "random")
     if base == "random":
-        mod = types.ModuleType("random", module.__doc__)
-        mod.__dict__.update({k: getattr(random, k) for k in dir(random)})
+        mod = _module_proxy("random", random)
         mod.randbytes = _guarded_urandom
         return mod
     if base == "threading":
         sandbox = getattr(_thread_local, "sandbox", None)
         if sandbox is None:
             return module
-        mod = types.ModuleType("threading", module.__doc__)
-        mod.__dict__.update({k: getattr(threading, k) for k in dir(threading)})
+        mod = _module_proxy("threading", threading)
         mod.Thread = _make_sandbox_thread_class(sandbox)
         return mod
     if base == "pathlib":
-        mod = types.ModuleType("pathlib", module.__doc__)
-        mod.__dict__.update({k: getattr(module, k) for k in dir(module)})
+        mod = _module_proxy("pathlib", module)
 
         class SandboxedPath(type(module.Path())):
             def open(
@@ -887,29 +945,54 @@ def _wrap_module(name: str, module):
                 return _blocked_open(self, mode, buffering, encoding, errors, newline)
 
         mod.Path = SandboxedPath
-        return mod
+        return _sanitize_module_refs(mod, "os", "io")
     return module
 
 
+def _is_import_allowed(name: str, allowed: set[str]) -> bool:
+    if name in allowed:
+        return True
+    # ``import package.child`` may import ``package`` first internally; allow
+    # package parents only when a more specific child is explicitly allowed.
+    return any(allowed_name.startswith(f"{name}.") for allowed_name in allowed)
+
+
+def _enforce_sandbox_import(
+    name,
+    globals=None,
+    locals=None,
+    fromlist=(),
+    level=0,
+    *,
+    allowed: Iterable[str] | None = None,
+):
+    requested = name
+    if level:
+        package = globals.get("__package__") if isinstance(globals, dict) else None
+        requested = importlib.util.resolve_name("." * level + name, package or "")
+    allowed_set = set(allowed) if allowed is not None else None
+    if allowed_set is not None and not _is_import_allowed(requested, allowed_set):
+        raise _deny(
+            "import",
+            f"import:{requested}",
+            f"allow_import:{','.join(sorted(allowed_set))}",
+            f"import of {requested!r} is not permitted",
+        )
+    module = builtins.__import__(requested, globals, locals, fromlist, 0)
+    return _wrap_module(requested, module)
+
+
 def _sandbox_import(name, globals=None, locals=None, fromlist=(), level=0):
-    module = builtins.__import__(name, globals, locals, fromlist, level)
-    return _wrap_module(name, module)
+    return _enforce_sandbox_import(name, globals, locals, fromlist, level)
 
 
 def _make_importer(allowed: Iterable[str]):
-    allowed_set = {name.split(".")[0] for name in allowed}
+    allowed_set = set(allowed)
 
     def _import(name, globals=None, locals=None, fromlist=(), level=0):
-        base = name.split(".")[0]
-        if base not in allowed_set:
-            raise _deny(
-                "import",
-                f"import:{name}",
-                f"allow_import:{','.join(sorted(allowed_set))}",
-                f"import of {name!r} is not permitted",
-            )
-        module = builtins.__import__(name, globals, locals, fromlist, level)
-        return _wrap_module(name, module)
+        return _enforce_sandbox_import(
+            name, globals, locals, fromlist, level, allowed=allowed_set
+        )
 
     return _import
 
