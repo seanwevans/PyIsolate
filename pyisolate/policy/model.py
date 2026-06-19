@@ -63,6 +63,8 @@ class RuntimePolicy:
 
     Rules are split by behavior so the runtime can apply deny-before-allow
     semantics explicitly instead of inferring behavior from loosely shaped lists.
+    Explicit runtime deny rules override all allow sources, including runtime
+    allow rules, legacy allow lists, capabilities, and AuthoritySet grants.
     """
 
     allow_fs: tuple[FilesystemRule, ...] = ()
