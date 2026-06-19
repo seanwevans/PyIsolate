@@ -12,6 +12,23 @@ sys.path.insert(0, str(ROOT))
 from pyisolate.bpf.manager import BPFManager
 
 
+@pytest.fixture(autouse=True)
+def _cold_skeleton_cache():
+    """Give every test a cold ``_SKEL_CACHE``.
+
+    The cache is shared class state, so another test -- or the supervisor
+    singleton's real BPF ``load()`` -- can warm it with a compiled skeleton.
+    When that happens ``load()`` legitimately skips the clang/bpftool build,
+    which would defeat the tests that assert those toolchain commands run.
+    """
+    saved = BPFManager._SKEL_CACHE
+    BPFManager._SKEL_CACHE = {}
+    try:
+        yield
+    finally:
+        BPFManager._SKEL_CACHE = saved
+
+
 def _canonical_policy(*, fs_path="/tmp/**", tcp_addr="1.1.1.1:80"):
     return {
         "schema_version": "1.0",
