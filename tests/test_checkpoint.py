@@ -298,6 +298,83 @@ def test_restore_rejects_malformed_capabilities_after_decrypt(monkeypatch, value
         iso.restore(blob, key)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "readonly-fs",
+        [],
+        1,
+        True,
+    ],
+)
+def test_restore_rejects_invalid_policy_types_after_decrypt(monkeypatch, value):
+    key = os.urandom(32)
+    blob = _make_blob({"name": "bad-policy", "policy": value}, key)
+
+    def fail_spawn(*args, **kwargs):
+        raise AssertionError("spawn should not be called for invalid payloads")
+
+    monkeypatch.setattr(checkpoint_mod, "spawn", fail_spawn)
+    with pytest.raises(
+        ValueError,
+        match="invalid checkpoint payload: 'policy'.*serialized policy mapping",
+    ):
+        iso.restore(blob, key)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"version": "1.0", "sandboxes": {}},
+        {"allow_fs": "not-a-list"},
+        {"allow_fs": [{"action": "execute", "path": "/tmp"}]},
+        {"allow_tcp": [{"action": "connect"}]},
+        {"imports": [""]},
+        {"cpu_ms": 0},
+        {"unsupported": []},
+    ],
+)
+def test_restore_rejects_malformed_policy_mappings_after_decrypt(monkeypatch, value):
+    key = os.urandom(32)
+    blob = _make_blob({"name": "bad-policy-map", "policy": value}, key)
+
+    def fail_spawn(*args, **kwargs):
+        raise AssertionError("spawn should not be called for invalid payloads")
+
+    monkeypatch.setattr(checkpoint_mod, "spawn", fail_spawn)
+    with pytest.raises(
+        ValueError,
+        match="invalid checkpoint payload: 'policy'.*serialized policy mapping",
+    ):
+        iso.restore(blob, key)
+
+
+def test_restore_accepts_valid_serialized_policy_after_decrypt(tmp_path):
+    key = os.urandom(32)
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    target = allowed / "ok.txt"
+    target.write_text("ok", encoding="utf-8")
+    policy_payload = {
+        "allow_fs": [
+            {"action": "allow", "path": str(allowed), "access": "read"},
+        ],
+        "imports": ["math"],
+    }
+    blob = _make_blob({"name": "valid-policy", "policy": policy_payload}, key)
+
+    sb = iso.restore(blob, key)
+    try:
+        restored = sb.snapshot()["policy"]
+        assert restored.allow_fs[0].path == str(allowed)
+        assert restored.allow_fs[0].access == "read"
+        assert restored.imports == ("math",)
+        sb.exec(f"import math\npost((open({str(target)!r}).read(), math.sqrt(16)))")
+        assert sb.recv(timeout=0.5) == ("ok", 4.0)
+    finally:
+        sb.close()
+
+
 def test_checkpoint_closes_on_serialization_failure():
     key = os.urandom(32)
 
