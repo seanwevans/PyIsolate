@@ -55,7 +55,10 @@ def test_manager_loads_and_attaches_kernel_programs(monkeypatch):
 
     mgr.load(mode="hardened")
 
-    assert any(cmd[:3] == ["bpftool", "prog", "loadall"] and "autoattach" in cmd for cmd in calls)
+    assert any(
+        cmd[:3] == ["bpftool", "prog", "loadall"] and "autoattach" in cmd
+        for cmd in calls
+    )
     assert any(cmd[:3] == ["bpftool", "cgroup", "attach"] for cmd in calls)
     assert mgr.loaded is True
 

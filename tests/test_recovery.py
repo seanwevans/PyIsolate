@@ -43,7 +43,9 @@ def test_supervisor_recovery_cleans_stale_resources(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(BPFManager, "load", fake_load)
-    monkeypatch.setattr("pyisolate.watchdog.ResourceWatchdog.start", fake_watchdog_start)
+    monkeypatch.setattr(
+        "pyisolate.watchdog.ResourceWatchdog.start", fake_watchdog_start
+    )
     monkeypatch.setattr("pyisolate.watchdog.ResourceWatchdog.stop", fake_watchdog_stop)
 
     stale_cg = cgroup.create("stale")
@@ -88,7 +90,9 @@ def test_cleanup_drops_registry_and_temp_dir_for_dead_sandbox(tmp_path, monkeypa
         return None
 
     monkeypatch.setattr(BPFManager, "load", fake_load)
-    monkeypatch.setattr("pyisolate.watchdog.ResourceWatchdog.start", fake_watchdog_start)
+    monkeypatch.setattr(
+        "pyisolate.watchdog.ResourceWatchdog.start", fake_watchdog_start
+    )
     monkeypatch.setattr("pyisolate.watchdog.ResourceWatchdog.stop", fake_watchdog_stop)
 
     sup = iso.Supervisor()

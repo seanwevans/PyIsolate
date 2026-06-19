@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
-.skel.h
+*.skel.h
+*.bpf.o
+*.egg-info/
 .env/

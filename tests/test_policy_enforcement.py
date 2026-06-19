@@ -396,6 +396,7 @@ def test_runtime_policy_deny_fs_preempts_filesystem_capability_allow(tmp_path):
     finally:
         sb.close()
 
+
 def test_runtime_policy_filesystem_deny_rule_records_event(tmp_path):
     allowed_dir = tmp_path / "allowed"
     denied_dir = tmp_path / "denied"

@@ -35,8 +35,8 @@ from ..capabilities import (
     ClockCapability,
     ConnectTCP,
     CpuBudget,
-    Import,
     FilesystemCapability,
+    Import,
     NetworkCapability,
     RandomCapability,
     ReadPath,
@@ -44,6 +44,10 @@ from ..capabilities import (
     SubprocessCapability,
     WritePath,
 )
+from ..numa import bind_current_thread
+from ..observability.trace import Tracer
+from ..policy.model import RuntimePolicy, from_sandbox_policy
+from ..telemetry import DenialEvent
 from .protocol import (
     AttachCgroupRequest,
     BrokerRequest,
@@ -53,10 +57,6 @@ from .protocol import (
     MetricEvent,
     StopRequest,
 )
-from ..numa import bind_current_thread
-from ..observability.trace import Tracer
-from ..telemetry import DenialEvent
-from ..policy.model import RuntimePolicy, from_sandbox_policy
 
 _thread_local = threading.local()
 
@@ -533,11 +533,22 @@ def _blocked_open(file, *args, **kwargs):
             released = True
             sandbox._open_files = max(0, sandbox._open_files - 1)
 
-    original_close = opened.close
+    # Wrap ``close`` to release the open-file slot.  Capturing the bound
+    # ``opened.close`` here would keep ``opened`` referenced from its own
+    # ``__dict__`` (a reference cycle), defeating CPython's prompt refcount
+    # finalization.  That left writes unflushed for the common
+    # ``open(path, "w").write(...)`` idiom that relies on the file being closed
+    # when its last reference is dropped.  Reference ``opened`` weakly and call
+    # the type's ``close`` so no cycle is created.
+    opened_ref = weakref.ref(opened)
+    type_close = type(opened).close
 
     def _close_once(*close_args, **close_kwargs):
         try:
-            return original_close(*close_args, **close_kwargs)
+            target = opened_ref()
+            if target is not None:
+                return type_close(target, *close_args, **close_kwargs)
+            return None
         finally:
             _release()
 

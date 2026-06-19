@@ -1,2 +1,6 @@
 [flake8]
-ignore = E501,E402
+# Use extend-ignore (not ignore) so flake8's default ignore list -- W503/W504
+# and friends -- is preserved; plain "ignore" overrides it and surfaces warnings
+# that conflict with black's formatting. E203/E501 are likewise delegated to
+# black, and E402 allows the module-level import placement used across the tree.
+extend-ignore = E203,E402,E501

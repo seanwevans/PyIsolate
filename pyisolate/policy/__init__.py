@@ -1,12 +1,12 @@
 """Policy helpers stub."""
 
+import logging
 import os
 import socket
 import tempfile
 import urllib.request
-import logging
-from importlib import resources
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 from urllib.error import URLError
 
@@ -69,14 +69,13 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
     yaml = _MiniYaml()
 
 
-from .compiler import (
+from ..capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
+from .compiler import (  # noqa: F401
     CompiledPolicy,
     PolicyCompilerError,
     SandboxPolicy,
     compile_policy,
-)  # noqa: F401
-
-from ..capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
+)
 from .model import (  # noqa: F401
     FilesystemRule,
     NetworkRule,
@@ -351,6 +350,7 @@ def _runtime_policy_from_dict(data: dict) -> RuntimePolicy:
     raise PolicyCompilerError(
         "policy mapping contains multiple sandboxes; " f"select one of: {available}"
     )
+
 
 def _resolve_policy_path(name: str) -> Path:
     candidate = Path(name)

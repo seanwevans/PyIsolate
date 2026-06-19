@@ -44,16 +44,53 @@ class DummyBPFManager:
         return iter(())
 
 
-sys.modules["pyisolate.bpf.manager"] = bpf_manager
 bpf_manager.BPFManager = DummyBPFManager
+
+# Install the stub while this module imports the rest of the package, but keep a
+# reference to the real module so it can be restored.  The supervisor imports
+# ``pyisolate.bpf.manager`` lazily, so leaving the stub in ``sys.modules`` would
+# leak the dummy manager into every test collected/run afterward (their
+# singleton supervisor would silently use ``DummyBPFManager``).  The stub is
+# re-installed per test via the autouse fixture below instead.
+_ORIG_BPF_MANAGER = sys.modules.get("pyisolate.bpf.manager")
+sys.modules["pyisolate.bpf.manager"] = bpf_manager
 
 import pytest
 
 import pyisolate as iso
 import pyisolate.policy as policy
+import pyisolate.supervisor as _supervisor_mod
 from pyisolate.capabilities import FilesystemCapability
 
 checkpoint_mod = importlib.import_module("pyisolate.checkpoint")
+
+# Restore the real module after this module's imports so collection of other
+# test modules is unaffected.
+if _ORIG_BPF_MANAGER is not None:
+    sys.modules["pyisolate.bpf.manager"] = _ORIG_BPF_MANAGER
+else:
+    sys.modules.pop("pyisolate.bpf.manager", None)
+
+
+@pytest.fixture(autouse=True)
+def _use_dummy_bpf_manager():
+    """Activate the in-memory BPF manager stub only while a checkpoint test runs.
+
+    The supervisor singleton is reset so it is recreated against the stub, and
+    both the module entry and the singleton are restored on teardown to keep the
+    rest of the suite on the real BPF manager.
+    """
+    orig_module = sys.modules.get("pyisolate.bpf.manager")
+    sys.modules["pyisolate.bpf.manager"] = bpf_manager
+    _supervisor_mod._supervisor = None
+    try:
+        yield
+    finally:
+        _supervisor_mod._supervisor = None
+        if orig_module is not None:
+            sys.modules["pyisolate.bpf.manager"] = orig_module
+        else:
+            sys.modules.pop("pyisolate.bpf.manager", None)
 
 
 def _make_blob(payload, key):
@@ -278,7 +315,6 @@ def test_checkpoint_closes_on_serialization_failure():
     with pytest.raises(ValueError, match="JSON serializable"):
         iso.checkpoint(sandbox, key)
     assert sandbox.closed
-
 
 
 def test_restore_rejects_truncated_envelope_before_decrypt(monkeypatch):

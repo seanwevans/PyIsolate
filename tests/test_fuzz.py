@@ -33,11 +33,32 @@ def test_bpf_hot_reload_fuzz(tmp_path, monkeypatch):
     mgr.load()
 
     for _ in range(50):
-        mapping = {random_text(5): random_text(5) for _ in range(3)}
+        # A structurally valid canonical policy must hot-reload cleanly.
+        valid_policy = {
+            "schema_version": "1.0",
+            "semantics_version": 1,
+            "sandboxes": {
+                "default": {
+                    "allow_fs": [
+                        {
+                            "action": "allow",
+                            "path": "/" + random_text(5),
+                            "access": "readwrite",
+                        }
+                    ],
+                    "deny_fs": [],
+                    "allow_tcp": [],
+                    "deny_tcp": [],
+                    "imports": ["math"],
+                }
+            },
+            "deny_log": [],
+        }
         p = tmp_path / "p.json"
-        p.write_text(json.dumps(mapping))
+        p.write_text(json.dumps(valid_policy))
         mgr.hot_reload(str(p))
 
+        # Random, structurally invalid payloads must be rejected, not crash.
         p.write_text(random_text())
         with pytest.raises((RuntimeError, AttributeError)):
             mgr.hot_reload(str(p))

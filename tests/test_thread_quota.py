@@ -41,7 +41,7 @@ def test_sigxcpu_handler_scoped_to_sandbox_thread():
     orig = signal.getsignal(signal.SIGXCPU)
     assert orig is not thread._sigxcpu_handler
 
-    sb = thread.SandboxThread("handler")
+    sb = thread.SandboxThread("handler", allowed_imports=["signal"])
     sb._inbox.put("import signal; post(signal.getsignal(signal.SIGXCPU))")
     sb._inbox.put(thread._STOP)
     sb.run()
@@ -153,7 +153,7 @@ def test_network_ops_quota_hard_stop():
 
 
 def test_child_work_quota_hard_stop():
-    sb = thread.SandboxThread("child", child_work_max=0)
+    sb = thread.SandboxThread("child", child_work_max=0, allowed_imports=["threading"])
     sb.start()
     try:
         sb.exec("import threading\nthreading.Thread(target=lambda: None).start()")

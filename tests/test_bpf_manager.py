@@ -18,7 +18,9 @@ def _canonical_policy(*, fs_path="/tmp/**", tcp_addr="1.1.1.1:80"):
         "semantics_version": 1,
         "sandboxes": {
             "default": {
-                "allow_fs": [{"action": "allow", "path": fs_path}],
+                "allow_fs": [
+                    {"action": "allow", "path": fs_path, "access": "readwrite"}
+                ],
                 "deny_fs": [],
                 "allow_tcp": [{"action": "connect", "destination": tcp_addr}],
                 "deny_tcp": [],
@@ -192,7 +194,7 @@ def test_hot_reload_accepts_yaml_template(monkeypatch):
     mgr.hot_reload(str(ROOT / "policy" / "readonly-fs.yml"))
 
     assert mgr.policy_maps["sandboxes"]["default"]["allow_fs"] == [
-        {"action": "allow", "path": "/tmp"}
+        {"action": "allow", "path": "/tmp", "access": "readwrite"}
     ]
     assert mgr.policy_maps["sandboxes"]["default"]["allow_tcp"] == []
 
@@ -223,13 +225,6 @@ def test_hot_reload_invalid_yaml_reports_runtime_error(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="Invalid policy data"):
         mgr.hot_reload(str(bad))
-
-
-def test_load_failure_logs_and_raises(monkeypatch, caplog):
-    def fake_run(cmd, check, capture_output, text):
-        if "bpftool" in cmd:
-            raise subprocess.CalledProcessError(1, cmd, stderr="load boom")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
 
 
 def test_load_failure_keeps_unloaded(monkeypatch, caplog):

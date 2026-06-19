@@ -3,13 +3,13 @@ import pytest
 from pyisolate import errors
 from pyisolate.capabilities import ROOT, FilesystemCapability
 from pyisolate.runtime.protocol import (
+    MINIMAL_CELL_ABI,
     BrokerRequest,
     CallRequest,
     CellOp,
     ExecRequest,
     LogEvent,
     MetricEvent,
-    MINIMAL_CELL_ABI,
 )
 from pyisolate.runtime.thread import SandboxThread
 from pyisolate.supervisor import Supervisor
@@ -31,7 +31,7 @@ def test_minimal_cell_abi_is_frozen_to_seven_operations():
 
 
 def test_sandbox_thread_uses_structured_requests(monkeypatch):
-    thread = SandboxThread(name="proto")
+    thread = SandboxThread(name="proto", allowed_imports=["builtins"])
     captured = []
     original_put = thread._inbox.put
 

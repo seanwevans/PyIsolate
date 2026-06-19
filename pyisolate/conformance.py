@@ -428,6 +428,7 @@ class ConformanceSuite:
     def _probe_broker_crypto(self) -> ProbeResult:
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import x25519
+
         from pyisolate.broker.crypto import CryptoBroker
 
         priv_a = x25519.X25519PrivateKey.generate()

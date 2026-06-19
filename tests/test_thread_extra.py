@@ -54,7 +54,7 @@ def test_other_thread_unaffected_by_sandbox():
         with open(__file__, "r") as f:
             results["line"] = f.readline()
 
-    sb = iso.spawn("restore", policy=policy.Policy())
+    sb = iso.spawn("restore", policy=policy.Policy(), allowed_imports=["time"])
     try:
         sb.exec("import time; time.sleep(0.2); post('done')")
         t = threading.Thread(target=worker)
@@ -67,7 +67,6 @@ def test_other_thread_unaffected_by_sandbox():
         assert sb.recv(timeout=1) == "done"
     finally:
         sb.close()
-
 
 
 def test_attach_cgroup_control_message_is_idempotent(monkeypatch):
@@ -109,7 +108,9 @@ def test_sandbox_threading_patch_is_local_and_does_not_touch_global_start():
     def outside_worker() -> None:
         started_outside["count"] += 1
 
-    sb = SandboxThread(name="local-threading", child_work_max=1)
+    sb = SandboxThread(
+        name="local-threading", child_work_max=1, allowed_imports=["threading", "time"]
+    )
     sb.start()
     try:
         sb.exec(

@@ -1,5 +1,5 @@
-import logging
 import errno
+import logging
 import sys
 from pathlib import Path
 
@@ -93,7 +93,6 @@ def test_delete_logs_permission_error(tmp_path, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger=cgroup.__name__):
         cgroup.delete(path)
     assert "Permission denied deleting cgroup" in caplog.text
-
 
 
 def test_list_children_and_cleanup_orphans(tmp_path, monkeypatch):
