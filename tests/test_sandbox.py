@@ -35,7 +35,7 @@ def test_exec_runs_code_and_recv():
 
 
 def test_call_returns_result():
-    sb = iso.spawn("t3")
+    sb = iso.spawn("t3", allowed_imports=["math"])
     try:
         result = sb.call("math.sqrt", 9)
         assert result == 3.0

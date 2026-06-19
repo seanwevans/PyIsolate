@@ -48,7 +48,13 @@ def test_connect_guard_handles_multi_field_addresses(family, host, suffix):
     if family == socket.AF_INET6 and not socket.has_ipv6:
         pytest.skip("IPv6 is not available")
 
-    srv = socket.socket(family)
+    # ``socket.has_ipv6`` only reflects build-time support; the runtime (e.g.
+    # containers or CI runners with IPv6 disabled) may still reject AF_INET6
+    # socket creation with EAFNOSUPPORT, so guard creation as well as bind.
+    try:
+        srv = socket.socket(family)
+    except OSError as exc:
+        pytest.skip(f"cannot create {family!r} socket: {exc}")
     try:
         srv.bind((host, 0))
     except OSError as exc:
