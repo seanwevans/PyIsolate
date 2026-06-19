@@ -298,32 +298,98 @@ class BPFManager:
                 f"Unable to read policy file {policy_path}: {exc}"
             ) from exc
 
-        # Replace the active policy entirely to drop removed entries. Store the
-        # canonical structure, not the source JSON shape, so the userspace and BPF
-        # paths have one representation.
-        self.policy_maps = runtime_policy.to_dict()
+        # Build the replacement policy first, but only publish it after every
+        # kernel map update succeeds. This keeps userspace state aligned with the
+        # last fully-applied BPF policy if a partial hot reload fails.
+        new_policy_maps = runtime_policy.to_dict()
+        attempted_updates: list[tuple[str, str, str]] = []
+        previous_entries: dict[tuple[str, str], str] = {}
+        if self.policy_maps:
+            try:
+                previous_entries = {
+                    (map_name, key): value
+                    for map_name, key, value in to_bpf_map_entries(
+                        from_compiled_policy(self.policy_maps)
+                    )
+                }
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "unable to build rollback entries from current policy maps: %s",
+                    exc,
+                )
+
         for map_name, key, value in to_bpf_map_entries(runtime_policy):
             logger.info("updating map %s[%s] -> %s", map_name, key, value)
             try:
-                self._run(
-                    [
-                        "bpftool",
-                        "map",
-                        "update",
-                        "pinned",
-                        f"/sys/fs/bpf/{map_name}",
-                        "key",
-                        key,
-                        "value",
-                        value,
-                        "any",
-                    ],
-                    raise_on_error=True,
-                )
+                self._update_bpf_map(map_name, key, value)
             except RuntimeError as exc:
+                rollback_errors = self._rollback_bpf_map_updates(
+                    attempted_updates, previous_entries
+                )
+                rollback_context = ""
+                if rollback_errors:
+                    rollback_context = (
+                        f"; rollback errors: {'; '.join(rollback_errors)}"
+                    )
                 raise RuntimeError(
-                    f"BPF map update failed for {map_name}[{key}]: {exc}"
+                    f"BPF map update failed for {map_name}[{key}] with value {value!r} "
+                    f"after {len(attempted_updates)} successful update(s): {exc}"
+                    f"{rollback_context}"
                 ) from exc
+            attempted_updates.append((map_name, key, value))
+
+        # Replace the active policy entirely to drop removed entries. Store the
+        # canonical structure, not the source JSON shape, so the userspace and BPF
+        # paths have one representation.
+        self.policy_maps = new_policy_maps
+
+    def _update_bpf_map(self, map_name: str, key: str, value: str) -> None:
+        self._run(
+            [
+                "bpftool",
+                "map",
+                "update",
+                "pinned",
+                f"/sys/fs/bpf/{map_name}",
+                "key",
+                key,
+                "value",
+                value,
+                "any",
+            ],
+            raise_on_error=True,
+        )
+
+    def _rollback_bpf_map_updates(
+        self,
+        attempted_updates: list[tuple[str, str, str]],
+        previous_entries: dict[tuple[str, str], str],
+    ) -> list[str]:
+        """Best-effort rollback for map entries changed during hot reload."""
+
+        rollback_errors: list[str] = []
+        for rollback_map, rollback_key, _ in reversed(attempted_updates):
+            previous_value = previous_entries.get((rollback_map, rollback_key))
+            if previous_value is None:
+                logger.warning(
+                    "no previous value available to rollback %s[%s]",
+                    rollback_map,
+                    rollback_key,
+                )
+                continue
+            try:
+                logger.info(
+                    "rolling back map %s[%s] -> %s",
+                    rollback_map,
+                    rollback_key,
+                    previous_value,
+                )
+                self._update_bpf_map(rollback_map, rollback_key, previous_value)
+            except RuntimeError as rollback_exc:
+                rollback_errors.append(
+                    f"{rollback_map}[{rollback_key}] -> {previous_value!r}: {rollback_exc}"
+                )
+        return rollback_errors
 
     def open_ring_buffer(self):
         """Return an iterator over resource guard events."""

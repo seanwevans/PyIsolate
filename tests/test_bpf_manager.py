@@ -394,3 +394,48 @@ def test_load_strict_missing_executable_raises_runtime_error(monkeypatch, missin
     assert "Command not found" in str(exc.value)
     assert missing_tool in str(exc.value)
     assert mgr.loaded is False
+
+
+def test_hot_reload_midway_failure_keeps_policy_maps_unchanged_and_rolls_back(
+    monkeypatch, tmp_path
+):
+    mgr = BPFManager()
+    mgr.loaded = True
+    original = _canonical_policy(fs_path="/tmp/original/**", tcp_addr="1.1.1.1:80")
+    mgr.policy_maps = original
+
+    replacement = _canonical_policy(
+        fs_path="/tmp/replacement/**", tcp_addr="2.2.2.2:443"
+    )
+    policy = tmp_path / "replacement.json"
+    policy.write_text(json.dumps(replacement))
+
+    calls = []
+
+    def fail_second_update(self, cmd, *, raise_on_error=False):
+        calls.append(cmd)
+        if "policy_net_allow" in cmd[4]:
+            raise RuntimeError("midway map failure")
+        return True
+
+    monkeypatch.setattr(BPFManager, "_run", fail_second_update)
+
+    with pytest.raises(RuntimeError) as exc:
+        mgr.hot_reload(str(policy))
+
+    assert mgr.policy_maps == original
+    assert "policy_net_allow[default:0]" in str(exc.value)
+    assert "2.2.2.2:443" in str(exc.value)
+    assert "after 1 successful update" in str(exc.value)
+    assert [
+        "bpftool",
+        "map",
+        "update",
+        "pinned",
+        "/sys/fs/bpf/policy_fs_allow",
+        "key",
+        "default:0",
+        "value",
+        "/tmp/original/**",
+        "any",
+    ] in calls
