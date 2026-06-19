@@ -605,6 +605,59 @@ def test_canonical_yaml_policy_drives_sandbox_and_bpf_maps(tmp_path, monkeypatch
     ] in calls
 
 
+@pytest.mark.parametrize("cpu_ms", [0, -1, True, False, 1.5, "100"])
+def test_from_compiled_policy_rejects_invalid_canonical_cpu_ms(cpu_ms):
+    from pyisolate.policy import from_compiled_policy
+
+    with pytest.raises(ValueError, match="cpu_ms"):
+        from_compiled_policy(
+            {
+                "schema_version": "1.0",
+                "semantics_version": 1,
+                "sandboxes": {"default": {"imports": [], "cpu_ms": cpu_ms}},
+            }
+        )
+
+
+@pytest.mark.parametrize("imports", [[123], [""], [None], "math"])
+def test_from_compiled_policy_rejects_invalid_canonical_imports(imports):
+    from pyisolate.policy import from_compiled_policy
+
+    with pytest.raises(ValueError, match="imports"):
+        from_compiled_policy(
+            {
+                "schema_version": "1.0",
+                "semantics_version": 1,
+                "sandboxes": {"default": {"imports": imports}},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("rule_field", "rules"),
+    [
+        ("allow_fs", ["not-a-mapping"]),
+        ("deny_fs", [None]),
+        ("allow_tcp", ["not-a-mapping"]),
+        ("deny_tcp", [None]),
+        ("allow_fs", {"action": "allow", "path": "/tmp"}),
+    ],
+)
+def test_from_compiled_policy_rejects_non_mapping_canonical_rule_entries(
+    rule_field, rules
+):
+    from pyisolate.policy import from_compiled_policy
+
+    with pytest.raises(ValueError, match=rule_field):
+        from_compiled_policy(
+            {
+                "schema_version": "1.0",
+                "semantics_version": 1,
+                "sandboxes": {"default": {rule_field: rules}},
+            }
+        )
+
+
 def test_resolve_policy_path_preserves_deny_and_cpu_ms(tmp_path):
     import pyisolate.policy as policy
 
