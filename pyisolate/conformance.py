@@ -451,8 +451,8 @@ class ConformanceSuite:
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
-        broker_a = CryptoBroker(priv_a_bytes, pub_b, max_frame_len=64)
-        broker_b = CryptoBroker(priv_b_bytes, pub_a, max_frame_len=64)
+        broker_a = CryptoBroker(priv_a_bytes, pub_b, max_frame_len=64, role="client")
+        broker_b = CryptoBroker(priv_b_bytes, pub_a, max_frame_len=64, role="server")
         frame = broker_a.frame(b"doctor-grade")
         roundtrip = broker_b.unframe(frame) == b"doctor-grade"
         replay_blocked = False

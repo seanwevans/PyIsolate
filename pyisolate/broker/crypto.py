@@ -66,6 +66,7 @@ class CryptoBroker:
         *,
         pq_secret: bytes | None = None,
         max_frame_len: int = DEFAULT_MAX_FRAME_LEN,
+        role: str = "client",
     ):
         self._lock = Lock()
         if type(max_frame_len) is not int:
@@ -73,17 +74,41 @@ class CryptoBroker:
         if max_frame_len < MIN_FRAME_LEN:
             raise ValueError("max_frame_len must be at least 28 bytes")
         self._max_frame_len = max_frame_len
+        self._role = self._validate_role(role)
         self.rotate(private_key, peer_key, pq_secret=pq_secret)
 
     @staticmethod
     def _nonce(counter: int) -> bytes:
         return counter.to_bytes(12, "little")
 
+    @staticmethod
+    def _validate_role(role: str) -> str:
+        if role not in {"client", "server"}:
+            raise ValueError('role must be "client" or "server"')
+        return role
+
+    @staticmethod
+    def _derive_key(shared: bytes, info: bytes) -> bytes:
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=info,
+        )
+        return hkdf.derive(shared)
+
     def rotate(
-        self, private_key: bytes, peer_key: bytes, *, pq_secret: bytes | None = None
+        self,
+        private_key: bytes,
+        peer_key: bytes,
+        *,
+        pq_secret: bytes | None = None,
+        role: str | None = None,
     ) -> None:
-        """Derive a new AEAD key and reset counters."""
+        """Derive new directional AEAD keys and reset counters."""
         with self._lock:
+            if role is not None:
+                self._role = self._validate_role(role)
             priv = x25519.X25519PrivateKey.from_private_bytes(private_key)
             try:
                 pub = x25519.X25519PublicKey.from_public_bytes(peer_key)
@@ -93,18 +118,24 @@ class CryptoBroker:
             shared = priv.exchange(pub)
             if pq_secret is not None:
                 shared += pq_secret
-            hkdf = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=None,
-                info=b"pyisolate-channel",
+            client_to_server = self._derive_key(
+                shared, b"pyisolate-channel client->server"
             )
-            self._key = hkdf.derive(shared)
+            server_to_client = self._derive_key(
+                shared, b"pyisolate-channel server->client"
+            )
+            if self._role == "client":
+                self._tx_key = client_to_server
+                self._rx_key = server_to_client
+            else:
+                self._tx_key = server_to_client
+                self._rx_key = client_to_server
             self.public_key = priv.public_key().public_bytes(
                 encoding=serialization.Encoding.Raw,
                 format=serialization.PublicFormat.Raw,
             )
-            self._aead = ChaCha20Poly1305(self._key)
+            self._tx_aead = ChaCha20Poly1305(self._tx_key)
+            self._rx_aead = ChaCha20Poly1305(self._rx_key)
             self._tx_ctr = 0
             self._rx_ctr = 0
 
@@ -115,7 +146,7 @@ class CryptoBroker:
                 raise OverflowError("send counter overflow")
             nonce = self._nonce(self._tx_ctr)
             self._tx_ctr += 1
-            return nonce + self._aead.encrypt(nonce, data, b"")
+            return nonce + self._tx_aead.encrypt(nonce, data, b"")
 
     def unframe(self, data: bytes) -> bytes:
         """Validate counter, decrypt, and return plaintext."""
@@ -125,7 +156,7 @@ class CryptoBroker:
             if len(data) > self._max_frame_len:
                 nonce = b"\x00" * 12
                 try:
-                    self._aead.decrypt(nonce, b"\x00" * 16, b"")
+                    self._rx_aead.decrypt(nonce, b"\x00" * 16, b"")
                 except Exception:
                     pass
                 raise ValueError("frame too large")
@@ -134,7 +165,7 @@ class CryptoBroker:
             if len(data) < 12:
                 nonce = b"\x00" * 12
                 try:
-                    self._aead.decrypt(nonce, b"\x00" * 16, b"")
+                    self._rx_aead.decrypt(nonce, b"\x00" * 16, b"")
                 except Exception:
                     pass
                 raise ValueError("invalid frame")
@@ -143,13 +174,13 @@ class CryptoBroker:
             expected_nonce = self._nonce(self._rx_ctr)
             if not constant_compare(nonce, expected_nonce):
                 try:
-                    self._aead.decrypt(nonce, data[12:], b"")
+                    self._rx_aead.decrypt(nonce, data[12:], b"")
                 except Exception:
                     pass
                 raise ValueError("replay detected")
 
             try:
-                plaintext = self._aead.decrypt(nonce, data[12:], b"")
+                plaintext = self._rx_aead.decrypt(nonce, data[12:], b"")
             except Exception:
                 raise ValueError("decryption failed") from None
             self._rx_ctr += 1
@@ -158,7 +189,11 @@ class CryptoBroker:
 
 
 def handshake(
-    peer_key: bytes, *, private_key: bytes | None = None, pq_secret: bytes | None = None
+    peer_key: bytes,
+    *,
+    private_key: bytes | None = None,
+    pq_secret: bytes | None = None,
+    role: str = "client",
 ) -> tuple[bytes, CryptoBroker]:
     """Perform a one-shot X25519 handshake and return ``(public_key, broker)``.
 
@@ -183,5 +218,5 @@ def handshake(
         format=serialization.PublicFormat.Raw,
     )
 
-    broker = CryptoBroker(priv_bytes, peer_key, pq_secret=pq_secret)
+    broker = CryptoBroker(priv_bytes, peer_key, pq_secret=pq_secret, role=role)
     return pub_bytes, broker

@@ -28,6 +28,7 @@ def make_broker(max_frame_len=4096):
         _private_bytes(private_key),
         _public_bytes(peer_key),
         max_frame_len=max_frame_len,
+        role="client",
     )
 
 
@@ -39,11 +40,13 @@ def make_pair():
         _private_bytes(priv_a),
         _public_bytes(priv_b),
         max_frame_len=max_len,
+        role="client",
     )
     b = CryptoBroker(
         _private_bytes(priv_b),
         _public_bytes(priv_a),
         max_frame_len=max_len,
+        role="server",
     )
     return a, b
 

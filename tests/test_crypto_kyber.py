@@ -31,6 +31,7 @@ def make_pair():
         ),
         pq_secret=ss_a,
         max_frame_len=max_len,
+        role="client",
     )
     b = CryptoBroker(
         priv_b.private_bytes(
@@ -44,6 +45,7 @@ def make_pair():
         ),
         pq_secret=ss_b,
         max_frame_len=max_len,
+        role="server",
     )
     return a, b
 
