@@ -153,6 +153,73 @@ def _coerce_compiled_tcp(rule: Any) -> NetworkRule:
     return NetworkRule(action=str(action), destination=str(destination))
 
 
+_CANONICAL_RUNTIME_POLICY_KEYS = {
+    "allow_fs",
+    "deny_fs",
+    "allow_tcp",
+    "deny_tcp",
+    "imports",
+    "cpu_ms",
+}
+
+
+def _validate_cpu_ms(cpu_ms: Any) -> int | None:
+    if cpu_ms is None:
+        return None
+    if isinstance(cpu_ms, bool) or not isinstance(cpu_ms, int) or cpu_ms <= 0:
+        raise ValueError("cpu_ms must be absent, null, or a positive integer")
+    return cpu_ms
+
+
+def _require_mapping_list(value: Any, field_name: str) -> list[Mapping[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list of mappings")
+    rules: list[Mapping[str, Any]] = []
+    for index, rule in enumerate(value):
+        if not isinstance(rule, Mapping):
+            raise ValueError(f"{field_name}[{index}] must be a mapping")
+        rules.append(rule)
+    return rules
+
+
+def _validate_imports(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("imports must be a list of non-empty strings")
+    imports: list[str] = []
+    for index, module in enumerate(value):
+        if not isinstance(module, str) or not module:
+            raise ValueError(f"imports[{index}] must be a non-empty string")
+        imports.append(module)
+    return tuple(imports)
+
+
+def _runtime_policy_from_canonical_mapping(policy: Mapping[str, Any]) -> RuntimePolicy:
+    return RuntimePolicy(
+        allow_fs=tuple(
+            FilesystemRule(**rule)
+            for rule in _require_mapping_list(policy.get("allow_fs", []), "allow_fs")
+        ),
+        deny_fs=tuple(
+            FilesystemRule(**rule)
+            for rule in _require_mapping_list(policy.get("deny_fs", []), "deny_fs")
+        ),
+        allow_tcp=tuple(
+            NetworkRule(**rule)
+            for rule in _require_mapping_list(policy.get("allow_tcp", []), "allow_tcp")
+        ),
+        deny_tcp=tuple(
+            NetworkRule(**rule)
+            for rule in _require_mapping_list(policy.get("deny_tcp", []), "deny_tcp")
+        ),
+        imports=_validate_imports(policy.get("imports", [])),
+        cpu_ms=_validate_cpu_ms(policy.get("cpu_ms")),
+    )
+
+
 def from_sandbox_policy(policy: Any) -> RuntimePolicy:
     """Convert a legacy ``Policy`` or compiler ``SandboxPolicy`` into runtime form."""
 
@@ -229,28 +296,10 @@ def from_compiled_policy(compiled: Any) -> RuntimePolicySet:
 
     sandboxes: dict[str, RuntimePolicy] = {}
     for name, policy in sandboxes_raw.items():
-        if isinstance(policy, Mapping) and {
-            "allow_fs",
-            "deny_fs",
-            "allow_tcp",
-            "deny_tcp",
-        }.intersection(policy.keys()):
-            sandboxes[str(name)] = RuntimePolicy(
-                allow_fs=tuple(
-                    FilesystemRule(**rule) for rule in policy.get("allow_fs", [])
-                ),
-                deny_fs=tuple(
-                    FilesystemRule(**rule) for rule in policy.get("deny_fs", [])
-                ),
-                allow_tcp=tuple(
-                    NetworkRule(**rule) for rule in policy.get("allow_tcp", [])
-                ),
-                deny_tcp=tuple(
-                    NetworkRule(**rule) for rule in policy.get("deny_tcp", [])
-                ),
-                imports=tuple(str(module) for module in policy.get("imports", [])),
-                cpu_ms=policy.get("cpu_ms"),
-            )
+        if isinstance(policy, Mapping) and _CANONICAL_RUNTIME_POLICY_KEYS.intersection(
+            policy.keys()
+        ):
+            sandboxes[str(name)] = _runtime_policy_from_canonical_mapping(policy)
         else:
             sandboxes[str(name)] = from_sandbox_policy(policy)
 
