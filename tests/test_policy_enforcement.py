@@ -636,3 +636,57 @@ def test_compiled_write_filesystem_rule_allows_writes_only(tmp_path):
             sb.recv(timeout=1)
     finally:
         sb.close()
+
+
+def test_import_policy_validates_full_submodule_name():
+    sb = iso.spawn(
+        "import-full-submodule", policy=policy.Policy().allow_import("email")
+    )
+    try:
+        sb.exec("import email.message")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
+
+
+def test_import_policy_allows_explicit_submodule_name():
+    sb = iso.spawn(
+        "import-explicit-submodule",
+        policy=policy.Policy().allow_import("email.message"),
+    )
+    try:
+        sb.exec(
+            "import email.message; post(email.message.Message().__class__.__name__)"
+        )
+        assert sb.recv(timeout=1) == "Message"
+    finally:
+        sb.close()
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "imports"),
+    [
+        ("os-path-os-system", "import os; os.path.os.system('true')", ["os"]),
+        ("pathlib-os-system", "import pathlib; pathlib.os.system('true')", ["pathlib"]),
+        ("socket-os-system", "import socket; socket.os.system('true')", ["socket"]),
+        (
+            "subprocess-os-system",
+            "import subprocess; subprocess.os.system('true')",
+            ["subprocess"],
+        ),
+    ],
+)
+def test_allowed_parent_modules_do_not_expose_dangerous_module_apis(
+    name, source, imports
+):
+    p = policy.Policy()
+    for module in imports:
+        p.allow_import(module)
+    sb = iso.spawn(f"parent-danger-{name}", policy=p)
+    try:
+        sb.exec(source)
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+    finally:
+        sb.close()
