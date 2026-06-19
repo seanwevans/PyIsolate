@@ -417,10 +417,9 @@ def _blocked_open(file, *args, **kwargs):
         lexical_path = Path(os.path.abspath(display_path))
         path = display_path.resolve(strict=False)
 
-        authority = getattr(_thread_local, "authority", None)
-        fs_cap = getattr(_thread_local, "fs_capability", None)
-        allowed = getattr(_thread_local, "fs", None)
         runtime_policy = getattr(_thread_local, "runtime_policy", None)
+        # Explicit runtime denies take precedence over every allow source,
+        # including capabilities, legacy allow lists, and AuthoritySet grants.
         if runtime_policy is not None and any(
             _fs_rule_matches(rule.path, path) for rule in runtime_policy.deny_fs
         ):
@@ -431,6 +430,9 @@ def _blocked_open(file, *args, **kwargs):
                 "file access blocked",
             )
 
+        authority = getattr(_thread_local, "authority", None)
+        fs_cap = getattr(_thread_local, "fs_capability", None)
+        allowed = getattr(_thread_local, "fs", None)
         if fs_cap is not None:
             safe_roots = fs_cap.roots
             if not any(
@@ -558,15 +560,27 @@ def _blocked_open(file, *args, **kwargs):
 
 
 def _check_network_destination(address: Iterable[str]) -> None:
-    authority = getattr(_thread_local, "authority", None)
-    net_cap = getattr(_thread_local, "net_capability", None)
-    allowed = getattr(_thread_local, "tcp", None)
     runtime_policy = getattr(_thread_local, "runtime_policy", None)
     if isinstance(address, tuple):
         host, port, *_ = address
     else:
         host, port = address
     destination = f"{host}:{port}"
+    # Explicit runtime denies take precedence over every allow source,
+    # including capabilities, legacy allow lists, and AuthoritySet grants.
+    if runtime_policy is not None and any(
+        rule.destination == destination for rule in runtime_policy.deny_tcp
+    ):
+        raise _deny(
+            "network",
+            f"connect:{destination}",
+            "runtime_policy:deny_tcp",
+            f"connect blocked: {destination}",
+        )
+
+    authority = getattr(_thread_local, "authority", None)
+    net_cap = getattr(_thread_local, "net_capability", None)
+    allowed = getattr(_thread_local, "tcp", None)
     if net_cap is not None:
         if not net_cap.allows(str(host), int(port)):
             raise _deny(
@@ -592,13 +606,6 @@ def _check_network_destination(address: Iterable[str]) -> None:
                 f"connect blocked: {destination}",
             )
     elif runtime_policy is not None:
-        if any(rule.destination == destination for rule in runtime_policy.deny_tcp):
-            raise _deny(
-                "network",
-                f"connect:{destination}",
-                "runtime_policy:deny_tcp",
-                f"connect blocked: {destination}",
-            )
         if not any(
             rule.destination == destination for rule in runtime_policy.allow_tcp
         ):
@@ -1007,9 +1014,11 @@ class SandboxThread(threading.Thread):
         self.cpu_quota_ms = (
             cpu_ms
             if cpu_ms is not None
-            else self._authority.cpu_ms
-            if self._authority.cpu_ms is not None
-            else policy_cpu_ms
+            else (
+                self._authority.cpu_ms
+                if self._authority.cpu_ms is not None
+                else policy_cpu_ms
+            )
         )
         self.mem_quota_bytes = mem_bytes
         self.wall_time_ms = wall_time_ms

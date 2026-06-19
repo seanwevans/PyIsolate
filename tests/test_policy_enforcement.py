@@ -397,6 +397,88 @@ def test_runtime_policy_deny_fs_preempts_filesystem_capability_allow(tmp_path):
         sb.close()
 
 
+def test_runtime_policy_deny_fs_preempts_authority_allow(tmp_path):
+    allowed_dir = tmp_path / "authority-allowed"
+    allowed_dir.mkdir()
+    denied_file = allowed_dir / "secret.txt"
+    denied_file.write_text("nope")
+    denied_path = denied_file.resolve(strict=False)
+
+    runtime_policy = policy.RuntimePolicy(
+        deny_fs=(policy.FilesystemRule("deny", str(denied_file)),),
+    )
+    sb = iso.spawn(
+        "runtime-deny-preempts-fs-authority",
+        policy=runtime_policy,
+        capabilities=[iso.ReadPath(allowed_dir)],
+    )
+    try:
+        sb.exec(f"open({str(denied_path)!r}).read()")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="runtime-deny-preempts-fs-authority",
+            capability="filesystem",
+            attempted_action=f"open:{denied_path}",
+            policy_rule="runtime_policy:deny_fs",
+        )
+    finally:
+        sb.close()
+
+
+def test_runtime_policy_deny_tcp_preempts_network_capability_allow():
+    runtime_policy = policy.RuntimePolicy(
+        deny_tcp=(policy.NetworkRule("deny", "127.0.0.1:2"),),
+        imports=("socket",),
+    )
+    sb = iso.spawn(
+        "runtime-deny-preempts-net-cap",
+        policy=runtime_policy,
+        capabilities={
+            "network": iso.NetworkCapability.from_destinations("127.0.0.1:2")
+        },
+    )
+    try:
+        sb.exec("import socket; s=socket.socket(); s.connect(('127.0.0.1', 2))")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="runtime-deny-preempts-net-cap",
+            capability="network",
+            attempted_action="connect:127.0.0.1:2",
+            policy_rule="runtime_policy:deny_tcp",
+        )
+    finally:
+        sb.close()
+
+
+def test_runtime_policy_deny_tcp_preempts_authority_allow():
+    runtime_policy = policy.RuntimePolicy(
+        deny_tcp=(policy.NetworkRule("deny", "127.0.0.1:2"),),
+        imports=("socket",),
+    )
+    sb = iso.spawn(
+        "runtime-deny-preempts-net-authority",
+        policy=runtime_policy,
+        capabilities=[iso.ConnectTCP("127.0.0.1", 2), iso.Import("socket")],
+    )
+    try:
+        sb.exec("import socket; s=socket.socket(); s.connect(('127.0.0.1', 2))")
+        with pytest.raises(iso.PolicyError):
+            sb.recv(timeout=1)
+        _assert_denial_event(
+            sb.get_denial_events(),
+            cell="runtime-deny-preempts-net-authority",
+            capability="network",
+            attempted_action="connect:127.0.0.1:2",
+            policy_rule="runtime_policy:deny_tcp",
+        )
+    finally:
+        sb.close()
+
+
 def test_runtime_policy_filesystem_deny_rule_records_event(tmp_path):
     allowed_dir = tmp_path / "allowed"
     denied_dir = tmp_path / "denied"
