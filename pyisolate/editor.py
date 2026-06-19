@@ -8,9 +8,17 @@ from __future__ import annotations
 
 import fnmatch
 import sys
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog
+
+try:  # tkinter is an optional GUI dependency and is absent on headless installs
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, simpledialog
+
+    _TK_IMPORT_ERROR: ImportError | None = None
+except ImportError as exc:  # pragma: no cover - exercised only without tkinter
+    tk = None  # type: ignore[assignment]
+    filedialog = messagebox = simpledialog = None  # type: ignore[assignment]
+    _TK_IMPORT_ERROR = exc
 
 from .policy import refresh
 from .policy import yaml as policy_yaml
@@ -72,10 +80,18 @@ def check_tcp(policy: dict, addr: str) -> bool:
 # ---------- Tkinter UI ----------
 
 
-class PolicyEditor(tk.Tk):
+_TkBase = tk.Tk if tk is not None else object
+
+
+class PolicyEditor(_TkBase):  # type: ignore[misc, valid-type]
     """Minimal Tk-based policy editor and debugger."""
 
     def __init__(self, path: str | None = None, token: str | None = None):
+        if tk is None:
+            raise ModuleNotFoundError(
+                "tkinter is required for the PolicyEditor GUI; install the "
+                "platform's Tk package (e.g. python3-tk) to use it"
+            ) from _TK_IMPORT_ERROR
         super().__init__()
         self.title("PyIsolate Policy Editor")
         self.geometry("600x400")

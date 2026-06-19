@@ -11,10 +11,16 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Serializes read-modify-write access to the on-disk registry so concurrent
+# supervisor operations (spawn/drop from different threads) neither lose
+# updates nor race on the temporary file used for the atomic replace.
+_REGISTRY_LOCK = threading.Lock()
 
 _STATE_ROOT = Path(
     os.environ.get("PYISOLATE_STATE_ROOT", Path(tempfile.gettempdir()) / "pyisolate")
@@ -25,21 +31,28 @@ _REGISTRY_PATH = Path(
 _TEMP_ROOT = Path(os.environ.get("PYISOLATE_TEMP_ROOT", _STATE_ROOT / "sandboxes"))
 
 
-
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     _ensure_parent(path)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh, sort_keys=True)
-        fh.flush()
-        os.fsync(fh.fileno())
-    tmp.replace(path)
-
+    # Use a unique temp file per write so concurrent writers do not clobber a
+    # shared ``*.tmp`` and then fail the rename with FileNotFoundError once the
+    # first writer has already moved it into place.
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp"
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _read_registry() -> dict[str, dict[str, Any]]:
@@ -67,10 +80,8 @@ def _read_registry() -> dict[str, dict[str, Any]]:
     return result
 
 
-
 def _write_registry(sandboxes: dict[str, dict[str, Any]]) -> None:
     _atomic_write_json(_REGISTRY_PATH, {"sandboxes": sandboxes})
-
 
 
 def recover() -> dict[str, dict[str, Any]]:
@@ -79,26 +90,26 @@ def recover() -> dict[str, dict[str, Any]]:
     Corrupt registries are tolerated and reset to an empty map.
     """
 
-    sandboxes = _read_registry()
-    if not sandboxes and _REGISTRY_PATH.exists():
-        # Normalize a corrupt/invalid registry to empty valid JSON.
-        _write_registry({})
+    with _REGISTRY_LOCK:
+        sandboxes = _read_registry()
+        if not sandboxes and _REGISTRY_PATH.exists():
+            # Normalize a corrupt/invalid registry to empty valid JSON.
+            _write_registry({})
     return sandboxes
 
 
-
 def update_sandbox(name: str, meta: dict[str, Any]) -> None:
-    sandboxes = _read_registry()
-    sandboxes[name] = dict(meta)
-    _write_registry(sandboxes)
-
+    with _REGISTRY_LOCK:
+        sandboxes = _read_registry()
+        sandboxes[name] = dict(meta)
+        _write_registry(sandboxes)
 
 
 def drop_sandbox(name: str) -> None:
-    sandboxes = _read_registry()
-    sandboxes.pop(name, None)
-    _write_registry(sandboxes)
-
+    with _REGISTRY_LOCK:
+        sandboxes = _read_registry()
+        sandboxes.pop(name, None)
+        _write_registry(sandboxes)
 
 
 def allocate_temp_dir(name: str) -> Path:
@@ -109,7 +120,6 @@ def allocate_temp_dir(name: str) -> Path:
     return path
 
 
-
 def cleanup_temp_dir(path_or_name: str | Path) -> None:
     """Remove a sandbox temp directory if it exists."""
 
@@ -118,7 +128,6 @@ def cleanup_temp_dir(path_or_name: str | Path) -> None:
     else:
         path = _TEMP_ROOT / path_or_name
     shutil.rmtree(path, ignore_errors=True)
-
 
 
 def cleanup_temp_orphans(active_names: set[str]) -> list[Path]:

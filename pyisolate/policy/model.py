@@ -171,7 +171,10 @@ def from_sandbox_policy(policy: Any) -> RuntimePolicy:
         if rule.action == "deny":
             deny_fs.append(rule)
         else:
-            allow_fs.append(FilesystemRule("allow", rule.path))
+            # ``_coerce_compiled_fs`` already normalized read/write rules into an
+            # ``allow`` action carrying the correct ``access`` mode; preserve it
+            # instead of collapsing every allow rule back to ``readwrite``.
+            allow_fs.append(rule)
 
     tcp_rules = getattr(policy, "tcp", None) or []
     for item in tcp_rules:
@@ -208,7 +211,9 @@ def from_compiled_policy(compiled: Any) -> RuntimePolicySet:
     )
     semantics_version = int(
         getattr(compiled, "semantics_version", None)
-        or (compiled.get("semantics_version") if isinstance(compiled, Mapping) else None)
+        or (
+            compiled.get("semantics_version") if isinstance(compiled, Mapping) else None
+        )
         or 1
     )
     deny_log_raw = getattr(compiled, "deny_log", None)
@@ -229,10 +234,18 @@ def from_compiled_policy(compiled: Any) -> RuntimePolicySet:
             "deny_tcp",
         }.intersection(policy.keys()):
             sandboxes[str(name)] = RuntimePolicy(
-                allow_fs=tuple(FilesystemRule(**rule) for rule in policy.get("allow_fs", [])),
-                deny_fs=tuple(FilesystemRule(**rule) for rule in policy.get("deny_fs", [])),
-                allow_tcp=tuple(NetworkRule(**rule) for rule in policy.get("allow_tcp", [])),
-                deny_tcp=tuple(NetworkRule(**rule) for rule in policy.get("deny_tcp", [])),
+                allow_fs=tuple(
+                    FilesystemRule(**rule) for rule in policy.get("allow_fs", [])
+                ),
+                deny_fs=tuple(
+                    FilesystemRule(**rule) for rule in policy.get("deny_fs", [])
+                ),
+                allow_tcp=tuple(
+                    NetworkRule(**rule) for rule in policy.get("allow_tcp", [])
+                ),
+                deny_tcp=tuple(
+                    NetworkRule(**rule) for rule in policy.get("deny_tcp", [])
+                ),
                 imports=tuple(str(module) for module in policy.get("imports", [])),
                 cpu_ms=policy.get("cpu_ms"),
             )
@@ -250,9 +263,9 @@ def from_compiled_policy(compiled: Any) -> RuntimePolicySet:
 def from_yaml_dict(data: Mapping[str, Any]) -> RuntimePolicySet:
     """Compile a YAML dictionary into the canonical runtime policy set."""
 
-    from .compiler import compile_policy
-
     import tempfile
+
+    from .compiler import compile_policy
 
     try:
         import yaml  # type: ignore
