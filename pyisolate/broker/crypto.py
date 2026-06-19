@@ -24,7 +24,7 @@ try:  # Optional post-quantum KEM
 except Exception:  # pragma: no cover - library optional
     HAVE_KYBER = False
 
-CTR_LIMIT = 0xFFFFFFFFFFFFFFFFFFFF  # 2^96 - 1
+CTR_LIMIT = (1 << 96) - 1  # 96-bit nonce space (counter.to_bytes(12, ...))
 DEFAULT_MAX_FRAME_LEN = 1 << 20  # 1 MiB
 MIN_FRAME_LEN = 12 + 16  # nonce + ChaCha20-Poly1305 tag
 
