@@ -11,12 +11,23 @@ import os
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
+from .policy.model import RuntimePolicy, from_compiled_policy
 from .runtime.thread import deserialize_capabilities
 from .supervisor import Sandbox, spawn
 
 _MAGIC = b"PYISOCP1"
 _NONCE_LEN = 12
 _LEN_SIZE = 4
+
+
+_CANONICAL_RUNTIME_POLICY_KEYS = {
+    "allow_fs",
+    "deny_fs",
+    "allow_tcp",
+    "deny_tcp",
+    "imports",
+    "cpu_ms",
+}
 
 
 def _encode_envelope(blob: bytes) -> bytes:
@@ -130,6 +141,47 @@ def _validate_serialized_capability(capability: object) -> None:
         raise ValueError("unknown serialized capability kind")
 
 
+def _select_policy_from_set(policy_set, name: str) -> RuntimePolicy:
+    if name in policy_set.sandboxes:
+        return policy_set.sandbox(name)
+    if "default" in policy_set.sandboxes:
+        return policy_set.sandbox("default")
+    if len(policy_set.sandboxes) == 1:
+        return next(iter(policy_set.sandboxes.values()))
+    raise ValueError("policy set does not contain a matching sandbox policy")
+
+
+def _require_optional_policy(state: dict) -> RuntimePolicy | None:
+    """Validate and normalize the serialized checkpoint policy field.
+
+    Checkpoints intentionally support only JSON-compatible policy shapes that
+    are documented as serialized runtime policy data: ``None``, a canonical
+    ``RuntimePolicy.to_dict()`` mapping, or a canonical
+    ``RuntimePolicySet.to_dict()``/compiled-policy mapping with ``sandboxes``.
+    """
+    value = state.get("policy")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(
+            "invalid checkpoint payload: 'policy' must be None or a serialized policy mapping"
+        )
+
+    try:
+        if "sandboxes" in value:
+            policy_set = from_compiled_policy(value)
+            return _select_policy_from_set(policy_set, state["name"])
+
+        if not value.keys() <= _CANONICAL_RUNTIME_POLICY_KEYS:
+            raise ValueError("policy mapping contains unsupported keys")
+        policy_set = from_compiled_policy({"sandboxes": {"default": value}})
+        return policy_set.sandbox("default")
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError(
+            "invalid checkpoint payload: 'policy' must be None or a serialized policy mapping"
+        ) from exc
+
+
 def _require_optional_capabilities(state: dict) -> dict | None:
     value = state.get("capabilities")
     if value is None:
@@ -196,9 +248,10 @@ def restore(blob: bytes, key: bytes) -> Sandbox:
     allowed_imports = _require_optional_allowed_imports(state)
     numa_node = _require_optional_numa_node(state)
     capabilities = _require_optional_capabilities(state)
+    policy = _require_optional_policy(state)
     return spawn(
         name,
-        policy=state.get("policy"),
+        policy=policy,
         cpu_ms=cpu_ms,
         mem_bytes=mem_bytes,
         allowed_imports=allowed_imports,
