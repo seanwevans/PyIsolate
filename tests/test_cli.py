@@ -3,7 +3,7 @@ import pytest
 from pyisolate import cli
 
 
-def test_pyisolate_doctor_delegates_to_doctor_main(monkeypatch):
+def test_pyisolate_doctor_gil_json_delegates_to_doctor_main(monkeypatch):
     calls = []
 
     def fake_doctor_main(argv):
@@ -22,7 +22,8 @@ def test_pyisolate_no_command_exits_nonzero(capsys):
 
     assert excinfo.value.code != 0
     captured = capsys.readouterr()
-    assert "usage: pyisolate" in captured.out
+    assert "usage: pyisolate" in captured.err
+    assert "the following arguments are required: command" in captured.err
 
 
 def test_pyisolate_unknown_command_exits_nonzero(capsys):
