@@ -686,7 +686,12 @@ def test_allowed_parent_modules_do_not_expose_dangerous_module_apis(
     sb = iso.spawn(f"parent-danger-{name}", policy=p)
     try:
         sb.exec(source)
-        with pytest.raises(iso.PolicyError):
+        # The sandbox blocks the dangerous call (PolicyError). On some Python
+        # versions the attribute chain itself does not exist -- e.g. Python 3.13
+        # no longer exposes ``pathlib.os`` -- which raises AttributeError before
+        # the guard runs. Either way ``os.system`` is unreachable, which is the
+        # property under test.
+        with pytest.raises((iso.PolicyError, AttributeError)):
             sb.recv(timeout=1)
     finally:
         sb.close()
