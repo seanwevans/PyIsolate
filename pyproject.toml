@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Prototype PyIsolate sandbox; kernel enforcement and no-GIL support are experimental roadmap items"
 authors = [{ name = "PyIsolate" }]
 requires-python = ">=3.11"
-dependencies = ["pyyaml", "cryptography"]
+dependencies = ["pyyaml", "cryptography", "platformdirs"]
 
 [build-system]
 requires = ["setuptools>=64"]
