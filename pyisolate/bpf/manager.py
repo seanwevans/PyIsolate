@@ -6,6 +6,7 @@ concept used by the tests.  ``bpftool`` and ``llvm-objdump`` may not be
 available on the test system; any missing executables are therefore ignored.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -20,6 +21,22 @@ from ..policy.compiler import PolicyCompilerError, compile_policy
 from ..policy.model import from_compiled_policy, to_bpf_map_entries
 
 logger = logging.getLogger(__name__)
+
+# BPF hash maps require fixed-width keys and values. The logical entries from
+# ``to_bpf_map_entries`` (e.g. ``"default:0"`` -> ``"/tmp/**"``) are therefore
+# encoded to fixed-width little-endian byte strings before being handed to
+# ``bpftool``, which consumes them as space-separated hex tokens. A blake2b
+# digest gives a deterministic, collision-resistant fixed-width encoding for the
+# variable-length logical strings; the matching kernel-side derivation is a
+# separate concern from this user-space encoding.
+BPF_KEY_BYTES = 8
+BPF_VALUE_BYTES = 8
+
+
+def encode_map_field(text: str, width: int) -> list[str]:
+    """Encode *text* as *width* hex byte tokens (``["0x.."]``) for ``bpftool``."""
+    digest = hashlib.blake2b(text.encode("utf-8"), digest_size=width).digest()
+    return [f"0x{byte:02x}" for byte in digest]
 
 
 class BPFManager:
@@ -383,9 +400,9 @@ class BPFManager:
                 "pinned",
                 f"/sys/fs/bpf/{map_name}",
                 "key",
-                key,
+                *encode_map_field(key, BPF_KEY_BYTES),
                 "value",
-                value,
+                *encode_map_field(value, BPF_VALUE_BYTES),
                 "any",
             ],
             raise_on_error=True,
