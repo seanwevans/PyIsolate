@@ -466,7 +466,20 @@ class ConformanceSuite:
             broker_b.unframe(large_frame)
         except ValueError:
             oversized_blocked = True
-        passed = roundtrip and replay_blocked and oversized_blocked
+
+        # Exercise the length-framed SecureChannel that the cross-process and
+        # microVM backends use to carry encrypted traffic over a byte transport.
+        from pyisolate.broker.channel import secure_channel_pair
+
+        client, server = secure_channel_pair()
+        client.send_message(b"channel-grade")
+        channel_roundtrip = server.recv_message() == b"channel-grade"
+        server.send_message(b"ack")
+        channel_roundtrip = channel_roundtrip and client.recv_message() == b"ack"
+
+        passed = (
+            roundtrip and replay_blocked and oversized_blocked and channel_roundtrip
+        )
         return ProbeResult(
             name="broker_crypto",
             passed=passed,
@@ -478,6 +491,7 @@ class ConformanceSuite:
                 "roundtrip": roundtrip,
                 "replay_blocked": replay_blocked,
                 "oversized_frame_blocked": oversized_blocked,
+                "secure_channel_roundtrip": channel_roundtrip,
             },
         )
 
