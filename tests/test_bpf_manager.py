@@ -9,7 +9,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from pyisolate.bpf.manager import BPFManager
+from pyisolate.bpf.manager import (
+    BPF_KEY_BYTES,
+    BPF_VALUE_BYTES,
+    BPFManager,
+    encode_map_field,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +51,17 @@ def _canonical_policy(*, fs_path="/tmp/**", tcp_addr="1.1.1.1:80"):
         },
         "deny_log": [],
     }
+
+
+def test_encode_map_field_is_fixed_width_hex():
+    encoded = encode_map_field("default:0", BPF_KEY_BYTES)
+    assert len(encoded) == BPF_KEY_BYTES
+    assert all(tok.startswith("0x") and len(tok) == 4 for tok in encoded)
+    # Deterministic for the same input; distinct inputs differ.
+    assert encode_map_field("default:0", BPF_KEY_BYTES) == encoded
+    assert encode_map_field("default:1", BPF_KEY_BYTES) != encoded
+    # The requested width is honored.
+    assert len(encode_map_field("/tmp/**", BPF_VALUE_BYTES)) == BPF_VALUE_BYTES
 
 
 def test_load_runs_toolchain(monkeypatch):
@@ -244,9 +260,9 @@ def test_hot_reload_handles_nested_policy(tmp_path, monkeypatch):
         "pinned",
         "/sys/fs/bpf/policy_net_allow",
         "key",
-        "default:0",
+        *encode_map_field("default:0", BPF_KEY_BYTES),
         "value",
-        "1.1.1.1:80",
+        *encode_map_field("1.1.1.1:80", BPF_VALUE_BYTES),
         "any",
     ] in calls
 
@@ -501,8 +517,8 @@ def test_hot_reload_midway_failure_keeps_policy_maps_unchanged_and_rolls_back(
         "pinned",
         "/sys/fs/bpf/policy_fs_allow",
         "key",
-        "default:0",
+        *encode_map_field("default:0", BPF_KEY_BYTES),
         "value",
-        "/tmp/original/**",
+        *encode_map_field("/tmp/original/**", BPF_VALUE_BYTES),
         "any",
     ] in calls

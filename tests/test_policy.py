@@ -515,7 +515,12 @@ def test_policy_objects_serialize_to_yaml_without_pyyaml(monkeypatch):
 def test_canonical_yaml_policy_drives_sandbox_and_bpf_maps(tmp_path, monkeypatch):
     import pyisolate as iso
     import pyisolate.policy as policy
-    from pyisolate.bpf.manager import BPFManager
+    from pyisolate.bpf.manager import (
+        BPF_KEY_BYTES,
+        BPF_VALUE_BYTES,
+        BPFManager,
+        encode_map_field,
+    )
     from pyisolate.policy import from_compiled_policy
 
     allowed_dir = tmp_path / "allowed"
@@ -586,9 +591,9 @@ def test_canonical_yaml_policy_drives_sandbox_and_bpf_maps(tmp_path, monkeypatch
         "pinned",
         "/sys/fs/bpf/policy_fs_allow",
         "key",
-        "default:0",
+        *encode_map_field("default:0", BPF_KEY_BYTES),
         "value",
-        f"{allowed_dir}/**",
+        *encode_map_field(f"{allowed_dir}/**", BPF_VALUE_BYTES),
         "any",
     ] in calls
     assert [
@@ -598,9 +603,9 @@ def test_canonical_yaml_policy_drives_sandbox_and_bpf_maps(tmp_path, monkeypatch
         "pinned",
         "/sys/fs/bpf/policy_net_allow",
         "key",
-        "default:0",
+        *encode_map_field("default:0", BPF_KEY_BYTES),
         "value",
-        "127.0.0.1:9",
+        *encode_map_field("127.0.0.1:9", BPF_VALUE_BYTES),
         "any",
     ] in calls
 
