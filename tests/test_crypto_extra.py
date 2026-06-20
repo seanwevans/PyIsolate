@@ -126,6 +126,9 @@ def test_rotate_rejects_identical_key_material():
     a = CryptoBroker(a_priv, b_pub, role="client")
     b = CryptoBroker(b_priv, a_pub, role="server")
 
+    # Exchange a frame so the counters advance past zero.
+    assert b.unframe(a.frame(b"hello")) == b"hello"
+
     # Re-rotating onto the same key material would reset the counters and reuse
     # (key, nonce) pairs, so it must be rejected -- and leave the broker intact.
     with pytest.raises(ValueError, match="fresh key material"):

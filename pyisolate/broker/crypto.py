@@ -130,14 +130,21 @@ class CryptoBroker:
             else:
                 new_tx_key = server_to_client
                 new_rx_key = client_to_server
-            # Refuse to reset the counters onto identical key material. ``rotate``
-            # zeroes the send/receive counters, so re-deriving the current keys
-            # would reuse (key, nonce) pairs -- catastrophic for ChaCha20-Poly1305.
-            # A genuine rotation always supplies fresh key material.
+            # ``rotate`` zeroes the send/receive counters. Re-deriving the
+            # current keys after frames have been exchanged would restart the
+            # nonce sequence and reuse (key, nonce) pairs -- catastrophic for
+            # ChaCha20-Poly1305 (and a replay window on the receive side). A
+            # genuine rotation supplies fresh key material; resetting onto the
+            # same keys before any frame is exchanged is harmless.
             prev_tx_key = getattr(self, "_tx_key", None)
-            if prev_tx_key is not None and constant_compare(new_tx_key, prev_tx_key):
+            if (
+                prev_tx_key is not None
+                and (self._tx_ctr > 0 or self._rx_ctr > 0)
+                and constant_compare(new_tx_key, prev_tx_key)
+            ):
                 raise ValueError(
-                    "rotate requires fresh key material; identical keys would reuse nonces"
+                    "rotate requires fresh key material once frames have been "
+                    "exchanged; identical keys would reuse nonces"
                 )
             self._tx_key = new_tx_key
             self._rx_key = new_rx_key
