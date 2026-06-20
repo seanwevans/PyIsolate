@@ -125,11 +125,29 @@ class CryptoBroker:
                 shared, b"pyisolate-channel server->client"
             )
             if self._role == "client":
-                self._tx_key = client_to_server
-                self._rx_key = server_to_client
+                new_tx_key = client_to_server
+                new_rx_key = server_to_client
             else:
-                self._tx_key = server_to_client
-                self._rx_key = client_to_server
+                new_tx_key = server_to_client
+                new_rx_key = client_to_server
+            # ``rotate`` zeroes the send/receive counters. Re-deriving the
+            # current keys after frames have been exchanged would restart the
+            # nonce sequence and reuse (key, nonce) pairs -- catastrophic for
+            # ChaCha20-Poly1305 (and a replay window on the receive side). A
+            # genuine rotation supplies fresh key material; resetting onto the
+            # same keys before any frame is exchanged is harmless.
+            prev_tx_key = getattr(self, "_tx_key", None)
+            if (
+                prev_tx_key is not None
+                and (self._tx_ctr > 0 or self._rx_ctr > 0)
+                and constant_compare(new_tx_key, prev_tx_key)
+            ):
+                raise ValueError(
+                    "rotate requires fresh key material once frames have been "
+                    "exchanged; identical keys would reuse nonces"
+                )
+            self._tx_key = new_tx_key
+            self._rx_key = new_rx_key
             self.public_key = priv.public_key().public_bytes(
                 encoding=serialization.Encoding.Raw,
                 format=serialization.PublicFormat.Raw,

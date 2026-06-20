@@ -118,6 +118,24 @@ def test_rx_final_frame_allowed():
     assert b.unframe(frame) == b"edge"
 
 
+def test_rotate_rejects_identical_key_material():
+    priv_a = x25519.X25519PrivateKey.generate()
+    priv_b = x25519.X25519PrivateKey.generate()
+    a_priv, a_pub = _private_bytes(priv_a), _public_bytes(priv_a)
+    b_priv, b_pub = _private_bytes(priv_b), _public_bytes(priv_b)
+    a = CryptoBroker(a_priv, b_pub, role="client")
+    b = CryptoBroker(b_priv, a_pub, role="server")
+
+    # Exchange a frame so the counters advance past zero.
+    assert b.unframe(a.frame(b"hello")) == b"hello"
+
+    # Re-rotating onto the same key material would reset the counters and reuse
+    # (key, nonce) pairs, so it must be rejected -- and leave the broker intact.
+    with pytest.raises(ValueError, match="fresh key material"):
+        a.rotate(a_priv, b_pub)
+    assert b.unframe(a.frame(b"still-works")) == b"still-works"
+
+
 def test_key_rotation():
     a, b = make_pair()
     first = a.frame(b"first")
