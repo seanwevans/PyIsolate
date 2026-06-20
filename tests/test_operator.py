@@ -34,6 +34,69 @@ def test_operator_module():
     assert hasattr(op, "scale_sandboxes")
 
 
+def test_operator_handles_relisted_added_and_modified(monkeypatch):
+    op = load_operator()
+    events = [
+        {"type": "ADDED", "object": {"metadata": {"name": "sb"}}},
+        {"type": "ADDED", "object": {"metadata": {"name": "sb"}}},  # watch relist
+        {"type": "MODIFIED", "object": {"metadata": {"name": "sb"}}},
+    ]
+
+    class FakeWatch:
+        def stream(self, *args, **kwargs):
+            for ev in events:
+                yield ev
+
+    fake_client = types.SimpleNamespace(
+        CustomObjectsApi=lambda: types.SimpleNamespace(
+            list_namespaced_custom_object=lambda *a, **kw: None
+        )
+    )
+    fake_config = types.SimpleNamespace(load_incluster_config=lambda: None)
+    fake_watch_module = types.SimpleNamespace(Watch=lambda: FakeWatch())
+    fake_k8s = types.SimpleNamespace(
+        client=fake_client, config=fake_config, watch=fake_watch_module
+    )
+    monkeypatch.setitem(sys.modules, "kubernetes", fake_k8s)
+    monkeypatch.setitem(sys.modules, "kubernetes.client", fake_client)
+    monkeypatch.setitem(sys.modules, "kubernetes.config", fake_config)
+    monkeypatch.setitem(sys.modules, "kubernetes.watch", fake_watch_module)
+
+    spawns = []
+    closed = []
+
+    class FakeSandbox:
+        def __init__(self, name, sup):
+            self.name = name
+            self._sup = sup
+
+        def close(self):
+            self._sup.active.pop(self.name, None)
+            closed.append(self.name)
+
+    class FakeSupervisor:
+        def __init__(self):
+            self.active = {}
+
+        def spawn(self, name):
+            # Mirror the real supervisor, which rejects a duplicate name.
+            if name in self.active:
+                raise RuntimeError(f"sandbox '{name}' already exists")
+            sb = FakeSandbox(name, self)
+            self.active[name] = sb
+            spawns.append(sb)
+            return sb
+
+    monkeypatch.setattr(op, "Supervisor", FakeSupervisor)
+
+    op.run_operator("default")
+
+    # Initial ADDED spawns once; the relisted ADDED is a no-op (not an error);
+    # MODIFIED closes the existing sandbox and respawns it.
+    assert len(spawns) == 2
+    assert closed == ["sb"]
+
+
 def test_operator_add_delete(monkeypatch):
     op = load_operator()
     events = [
