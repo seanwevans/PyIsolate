@@ -85,9 +85,12 @@ jobs:
         # build, so a normal ``.[dev]`` install aborts before any test runs.
         # Install pyisolate without that dependency and rely on the suite's
         # crypto stub (tests/conftest.py) so the race tests actually execute.
+        # ``--no-deps`` skips *all* runtime deps, so re-add the pure-Python ones
+        # the import path needs (pyyaml, platformdirs) -- everything declared in
+        # ``project.dependencies`` except the unbuildable cryptography.
         run: |
           python -m pip install -e . --no-deps
-          python -m pip install pytest pyyaml
+          python -m pip install pytest pyyaml platformdirs
       - name: Run race tests under free-threaded build
         run: pytest -q tests/test_matrix_hardening.py -m "race and no_gil"
 
