@@ -1,6 +1,7 @@
 """Tests for the length-framed :class:`SecureChannel` transport wiring."""
 
 import threading
+import time
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -194,3 +195,61 @@ def test_concurrent_senders_preserve_frame_integrity():
 
     assert not errors
     assert sorted(received) == sorted(f"payload-{i:03d}".encode() for i in range(count))
+
+
+def test_concurrent_recv_decrypts_in_counter_order():
+    # ``unframe`` validates the receive nonce counter in strictly increasing
+    # order, so decryption must happen in the same order frames are read off the
+    # wire. This forces the hazardous interleave deterministically: reader "a"
+    # takes the recv lock, reads frame 0, and parks inside ``unframe``; reader
+    # "b" is then started and tries to read frame 1. If decryption ran outside
+    # the recv lock, reader "b" would unframe frame 1 while the broker still
+    # expects frame 0 and raise a spurious replay/decrypt error, silently
+    # dropping a valid message.
+    client, server = secure_channel_pair()
+    client.send_message(b"first")
+    client.send_message(b"second")
+
+    real_unframe = server._broker.unframe
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    seen = []
+    seen_lock = threading.Lock()
+
+    def gated_unframe(frame):
+        with seen_lock:
+            index = len(seen)
+            seen.append(frame)
+        if index == 0:
+            # Announce that the first decrypt has begun, then wait so a second
+            # reader has a chance to overtake us.
+            first_entered.set()
+            assert release_first.wait(timeout=5)
+        return real_unframe(frame)
+
+    server._broker.unframe = gated_unframe
+
+    results = {}
+
+    def reader(key):
+        try:
+            results[key] = server.recv_message()
+        except Exception as exc:  # noqa: BLE001 - recorded for the assertion
+            results[key] = exc
+
+    reader_a = threading.Thread(target=reader, args=("a",))
+    reader_a.start()
+    # Reader "a" has now read frame 0 and is parked inside the first unframe.
+    assert first_entered.wait(timeout=5)
+
+    reader_b = threading.Thread(target=reader, args=("b",))
+    reader_b.start()
+    # Give reader "b" the opportunity to read frame 1 and reach unframe (with the
+    # bug) or block on the recv lock (once fixed).
+    time.sleep(0.2)
+    release_first.set()
+    reader_a.join(timeout=5)
+    reader_b.join(timeout=5)
+
+    assert results.get("a") == b"first"
+    assert results.get("b") == b"second"
