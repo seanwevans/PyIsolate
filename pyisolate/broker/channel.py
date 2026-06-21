@@ -113,7 +113,14 @@ class SecureChannel:
             if length < 1:
                 raise ValueError("declared frame length is zero")
             frame = self._recv_exact(length)
-        return self._broker.unframe(frame)
+            # Decrypt while still holding the lock. ``unframe`` validates the
+            # receive nonce counter in strictly increasing order, so it must run
+            # in the same order frames were read off the wire. Releasing the lock
+            # before decrypting would let a second reader that pulled the *next*
+            # frame call ``unframe`` first, present an out-of-order counter, and
+            # trip a spurious replay/decrypt failure that drops a valid message.
+            # This mirrors the send path, which holds the lock across framing.
+            return self._broker.unframe(frame)
 
     def _recv_exact(self, count: int) -> bytes:
         """Read exactly ``count`` bytes or raise :class:`EOFError`."""
