@@ -1483,9 +1483,16 @@ class SandboxThread(threading.Thread):
 
     @property
     def stats(self):
+        # ``stats`` is read from other threads (the metrics scraper, supervisor)
+        # while the sandbox thread concurrently flips ``_start_time`` between a
+        # float and ``None`` in its run loop. Snapshot it once so the value
+        # cannot change between the ``is not None`` check and the subtraction --
+        # otherwise a concurrent reset turns the subtraction into
+        # ``monotonic() - None`` and raises ``TypeError``, aborting the scrape.
+        start_time = self._start_time
         cpu_ms = self._cpu_time
-        if self._start_time is not None:
-            cpu_ms += (time.monotonic() - self._start_time) * 1000
+        if start_time is not None:
+            cpu_ms += (time.monotonic() - start_time) * 1000
         cost = cpu_ms * 0.0001 + self._mem_peak * 1e-9
         return Stats(
             cpu_ms=cpu_ms,
