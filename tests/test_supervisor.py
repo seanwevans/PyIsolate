@@ -121,6 +121,32 @@ def test_shutdown_clears_warm_pool():
     assert sup._warm_pool == []
 
 
+def test_failed_spawn_returns_borrowed_warm_thread(monkeypatch):
+    # The warm pool is filled only at startup and never replenished, so a spawn
+    # that borrows a warm thread and then fails must return it to the pool rather
+    # than stop it -- otherwise every failed spawn permanently shrinks the pool.
+    from pyisolate import recovery
+
+    sup = iso.Supervisor(warm_pool=1)
+    try:
+        warm = sup._warm_pool[0]
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated recovery failure")
+
+        # update_sandbox runs after the warm thread has been popped and reset.
+        monkeypatch.setattr(recovery, "update_sandbox", boom)
+
+        with pytest.raises(RuntimeError, match="simulated recovery failure"):
+            sup.spawn("warm-fail")
+
+        assert len(sup._warm_pool) == 1
+        assert sup._warm_pool[0] is warm
+        assert warm.is_alive()
+    finally:
+        sup.shutdown()
+
+
 def test_shutdown_requires_root():
     sup = iso.Supervisor()
     try:
