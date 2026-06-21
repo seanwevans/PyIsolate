@@ -793,3 +793,32 @@ def test_canonical_policy_accepts_consistent_actions():
     assert [r.action for r in rp.deny_fs] == ["deny"]
     assert [r.action for r in rp.allow_tcp] == ["connect"]
     assert [r.action for r in rp.deny_tcp] == ["deny"]
+
+
+def test_from_yaml_dict_cleans_up_tempfile_on_dump_error(tmp_path, monkeypatch):
+    # from_yaml_dict writes a delete=False temp file before compiling it. If the
+    # YAML serialization raises, the file must still be removed rather than
+    # leaked once per failure.
+    import tempfile
+
+    import yaml
+
+    from pyisolate.policy.model import from_yaml_dict
+
+    real_named_temp = tempfile.NamedTemporaryFile
+
+    def named_temp_in_tmp_path(*args, **kwargs):
+        kwargs.setdefault("dir", str(tmp_path))
+        return real_named_temp(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", named_temp_in_tmp_path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("dump failed")
+
+    monkeypatch.setattr(yaml, "safe_dump", boom)
+
+    with pytest.raises(RuntimeError, match="dump failed"):
+        from_yaml_dict({"version": "1.0", "sandboxes": {}})
+
+    assert list(tmp_path.iterdir()) == []
