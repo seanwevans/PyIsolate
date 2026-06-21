@@ -105,6 +105,66 @@ def test_watchdog_ignores_malformed_event_payloads(caplog):
     assert "watchdog ignored non-mapping event payload" in caplog.text
 
 
+class _QuotaThread:
+    """Minimal active-thread stand-in with quotas so the comparisons run."""
+
+    def __init__(self):
+        self.name = "wd-bad"
+        self.cpu_quota_ms = 10
+        self.mem_quota_bytes = 1024
+        self.enforce_calls = 0
+
+    def enforce_quota_breach(self, *args, **kwargs):
+        self.enforce_calls += 1
+        return True
+
+
+class _ActiveSupervisor:
+    def __init__(self, iterator_factory, threads):
+        self._bpf = _FakeBPF(iterator_factory)
+        self._threads = list(threads)
+
+    def get_active_threads(self):
+        return self._threads
+
+    def quarantine(self, *args, **kwargs):  # pragma: no cover - not reached here
+        pass
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"name": "wd-bad", "cpu_ms": "lots", "rss_bytes": 0},
+        {"name": "wd-bad", "cpu_ms": 0, "rss_bytes": "huge"},
+    ],
+)
+def test_watchdog_survives_non_numeric_counters(event, caplog):
+    from pyisolate.watchdog import ResourceWatchdog
+
+    thread = _QuotaThread()
+
+    def fake_iter():
+        # The malformed event targets a real active sandbox with quotas set, so
+        # it reaches the quota comparison -- where a non-numeric counter used to
+        # raise TypeError out of run() and kill the watchdog thread.
+        yield event
+        while True:
+            time.sleep(0.01)
+            yield {"name": "noop", "cpu_ms": 0, "rss_bytes": 0}
+
+    caplog.set_level("WARNING")
+    wd = ResourceWatchdog(_ActiveSupervisor(fake_iter, [thread]), interval=0.01)
+    wd.start()
+    try:
+        time.sleep(0.08)
+        assert wd.is_alive()
+    finally:
+        wd.stop()
+
+    assert thread.enforce_calls == 0
+    assert "non-numeric counters" in caplog.text
+
+
 def test_watchdog_survives_ring_buffer_iterator_exceptions(caplog):
     from pyisolate.watchdog import ResourceWatchdog
 

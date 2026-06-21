@@ -58,6 +58,18 @@ class ResourceWatchdog(threading.Thread):
             name = event.get("name")
             cpu_ms = event.get("cpu_ms", 0)
             rss = event.get("rss_bytes", 0)
+            # The quota comparisons below run outside their try/except blocks, so
+            # a non-numeric counter (e.g. a malformed ring-buffer event with a
+            # string cpu_ms) would raise TypeError out of run(), killing the
+            # watchdog thread and silently disabling quota enforcement for every
+            # sandbox. Validate up front and skip the event instead.
+            if not isinstance(cpu_ms, (int, float)) or not isinstance(
+                rss, (int, float)
+            ):
+                logger.warning(
+                    "watchdog ignored event with non-numeric counters: %r", event
+                )
+                continue
             active = {t.name: t for t in self._supervisor.get_active_threads()}
             sb = active.get(name)
             if not sb:
