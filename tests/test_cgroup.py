@@ -143,3 +143,12 @@ def test_create_reports_controller_enforcement(tmp_path, monkeypatch):
     assert status.memory is True
     assert status.enforced is True
     assert status.errors == ()
+
+
+@pytest.mark.parametrize("bad", ["../escaped", "a/b", "..", ".", "", "a/../b"])
+def test_create_rejects_unsafe_names(monkeypatch, tmp_path, bad):
+    monkeypatch.setattr(cgroup, "_BASE", tmp_path)
+    with pytest.raises(ValueError):
+        cgroup.create(bad)
+    # Rejected before any mkdir, so nothing is created inside or outside _BASE.
+    assert list(tmp_path.iterdir()) == []

@@ -88,6 +88,24 @@ def _failure(status: CgroupEnforcement, message: str) -> CgroupEnforcement:
     return failed
 
 
+def _validate_name(name: str) -> str:
+    """Reject names that would escape the managed cgroup root.
+
+    Callers (``Supervisor.spawn``) already constrain names, but ``create`` is a
+    public helper; a name containing a path separator or ``..`` would resolve
+    outside ``_BASE``, so guard against it here as defense in depth.
+    """
+
+    if not isinstance(name, str) or not name:
+        raise ValueError("cgroup name must be a non-empty string")
+    # Only reject what actually escapes a single path component on Linux: the
+    # path separator, the parent/current refs, and an embedded NUL. Otherwise
+    # weird-but-contained names (which the metrics layer sanitizes) are allowed.
+    if name in {".", ".."} or "/" in name or "\x00" in name:
+        raise ValueError(f"unsafe cgroup name: {name!r}")
+    return name
+
+
 def create(
     name: str,
     cpu_ms: int | None = None,
@@ -105,6 +123,7 @@ def create(
     if mode not in {"dev", "compatibility", "hardened"}:
         raise ValueError(f"invalid rollout mode: {mode}")
 
+    name = _validate_name(name)
     path = _BASE / name
     try:
         path.mkdir(parents=True, exist_ok=True)
