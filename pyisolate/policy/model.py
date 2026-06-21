@@ -197,23 +197,53 @@ def _validate_imports(value: Any) -> tuple[str, ...]:
     return tuple(imports)
 
 
+def _canonical_fs_rules(
+    value: Any, field_name: str, *, expected: str
+) -> tuple[FilesystemRule, ...]:
+    rules: list[FilesystemRule] = []
+    for index, raw in enumerate(_require_mapping_list(value, field_name)):
+        rule = FilesystemRule(**raw)
+        # Enforcement keys off the bucket, not the rule action, so a rule whose
+        # action contradicts its bucket (e.g. a ``deny`` rule under ``allow_fs``)
+        # would silently be treated as the bucket's behavior -- turning a deny
+        # into an allow. Reject the contradiction instead of mis-enforcing it.
+        if rule.action != expected:
+            raise ValueError(
+                f"{field_name}[{index}] has action {rule.action!r}, "
+                f"but {field_name} only accepts {expected!r} rules"
+            )
+        rules.append(rule)
+    return tuple(rules)
+
+
+def _canonical_net_rules(
+    value: Any, field_name: str, *, expected: str
+) -> tuple[NetworkRule, ...]:
+    rules: list[NetworkRule] = []
+    for index, raw in enumerate(_require_mapping_list(value, field_name)):
+        rule = NetworkRule(**raw)
+        if rule.action != expected:
+            raise ValueError(
+                f"{field_name}[{index}] has action {rule.action!r}, "
+                f"but {field_name} only accepts {expected!r} rules"
+            )
+        rules.append(rule)
+    return tuple(rules)
+
+
 def _runtime_policy_from_canonical_mapping(policy: Mapping[str, Any]) -> RuntimePolicy:
     return RuntimePolicy(
-        allow_fs=tuple(
-            FilesystemRule(**rule)
-            for rule in _require_mapping_list(policy.get("allow_fs", []), "allow_fs")
+        allow_fs=_canonical_fs_rules(
+            policy.get("allow_fs", []), "allow_fs", expected="allow"
         ),
-        deny_fs=tuple(
-            FilesystemRule(**rule)
-            for rule in _require_mapping_list(policy.get("deny_fs", []), "deny_fs")
+        deny_fs=_canonical_fs_rules(
+            policy.get("deny_fs", []), "deny_fs", expected="deny"
         ),
-        allow_tcp=tuple(
-            NetworkRule(**rule)
-            for rule in _require_mapping_list(policy.get("allow_tcp", []), "allow_tcp")
+        allow_tcp=_canonical_net_rules(
+            policy.get("allow_tcp", []), "allow_tcp", expected="connect"
         ),
-        deny_tcp=tuple(
-            NetworkRule(**rule)
-            for rule in _require_mapping_list(policy.get("deny_tcp", []), "deny_tcp")
+        deny_tcp=_canonical_net_rules(
+            policy.get("deny_tcp", []), "deny_tcp", expected="deny"
         ),
         imports=_validate_imports(policy.get("imports", [])),
         cpu_ms=_validate_cpu_ms(policy.get("cpu_ms")),
