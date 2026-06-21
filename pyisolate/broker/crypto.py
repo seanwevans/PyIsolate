@@ -77,6 +77,11 @@ class CryptoBroker:
         self._role = self._validate_role(role)
         self.rotate(private_key, peer_key, pq_secret=pq_secret)
 
+    @property
+    def max_frame_len(self) -> int:
+        """Maximum accepted frame size in bytes (including nonce and tag)."""
+        return self._max_frame_len
+
     @staticmethod
     def _nonce(counter: int) -> bytes:
         return counter.to_bytes(12, "little")
