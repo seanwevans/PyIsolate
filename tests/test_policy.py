@@ -742,3 +742,54 @@ def test_resolve_policy_path_deny_rule_remains_effective(tmp_path):
         assert sb._thread.cpu_quota_ms == 25
     finally:
         sb.close()
+
+
+@pytest.mark.parametrize(
+    "bucket, rule",
+    [
+        ("allow_fs", {"action": "deny", "path": "/etc"}),
+        ("allow_tcp", {"action": "deny", "destination": "10.0.0.1:22"}),
+        ("deny_fs", {"action": "allow", "path": "/etc"}),
+        ("deny_tcp", {"action": "connect", "destination": "10.0.0.1:22"}),
+    ],
+)
+def test_canonical_policy_rejects_contradictory_action(bucket, rule):
+    # Enforcement keys off the bucket, not the rule action, so a deny rule under
+    # allow_fs/allow_tcp would otherwise be enforced as an allow (deny -> allow).
+    # The canonical-mapping path must reject the contradiction. Reachable via the
+    # public from_compiled_policy (checkpoint restore / BPF JSON policy).
+    from pyisolate.policy.model import from_compiled_policy
+
+    blob = {"sandboxes": {"s1": {bucket: [rule]}}}
+    with pytest.raises(ValueError, match="only accepts"):
+        from_compiled_policy(blob)
+
+
+def test_canonical_policy_accepts_consistent_actions():
+    # The well-formed counterpart of the rejection test still parses, including
+    # the read/write -> allow access normalization.
+    from pyisolate.policy.model import from_compiled_policy
+
+    rendered = from_compiled_policy(
+        {
+            "sandboxes": {
+                "s1": {
+                    "allow_fs": [
+                        {"action": "allow", "path": "/tmp"},
+                        {"action": "read", "path": "/etc/hosts"},
+                    ],
+                    "deny_fs": [{"action": "deny", "path": "/secret"}],
+                    "allow_tcp": [{"action": "connect", "destination": "1.2.3.4:80"}],
+                    "deny_tcp": [{"action": "deny", "destination": "9.9.9.9:53"}],
+                }
+            }
+        }
+    )
+    rp = rendered.sandboxes["s1"]
+    assert [(r.action, r.access) for r in rp.allow_fs] == [
+        ("allow", "readwrite"),
+        ("allow", "read"),
+    ]
+    assert [r.action for r in rp.deny_fs] == ["deny"]
+    assert [r.action for r in rp.allow_tcp] == ["connect"]
+    assert [r.action for r in rp.deny_tcp] == ["deny"]
