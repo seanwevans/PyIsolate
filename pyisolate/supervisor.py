@@ -321,6 +321,7 @@ class Supervisor:
             cg_path = None
             temp_dir = None
             thread = None
+            reused_warm = False
             try:
                 cg_status = cgroup.create(
                     name, cpu_ms, mem_bytes, mode=self._rollout_mode
@@ -342,6 +343,7 @@ class Supervisor:
                 }
                 if self._warm_pool:
                     thread = self._warm_pool.pop()
+                    reused_warm = True
                     # Intentionally mirrors Sandbox.reset by sharing reset_config.
                     thread.reset(
                         name,
@@ -382,7 +384,14 @@ class Supervisor:
                 )
             except Exception:
                 self._sandboxes.pop(name, None)
-                if thread is not None and thread.is_alive():
+                if reused_warm and thread is not None and thread.is_alive():
+                    # Return the borrowed warm thread to the pool rather than
+                    # destroying it. The warm pool is only filled at startup and
+                    # never replenished, so stopping a reused thread on every
+                    # failed spawn would permanently shrink it. The next spawn
+                    # that pops it calls reset() again, reconfiguring it cleanly.
+                    self._warm_pool.append(thread)
+                elif thread is not None and thread.is_alive():
                     thread.stop()
                 cgroup.delete(cg_path)
                 if temp_dir is not None:
