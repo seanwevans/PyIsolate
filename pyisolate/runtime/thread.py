@@ -746,21 +746,26 @@ def _guarded_urandom(n: int) -> bytes:
 def _make_sandbox_thread_class(sandbox: "SandboxThread"):
     class SandboxedThread(threading.Thread):
         def start(self, *args, **kwargs):
-            sandbox._check_child_work_quota()
             original_run = self.run
 
             def _run_with_accounting(*r_args, **r_kwargs):
                 try:
                     return original_run(*r_args, **r_kwargs)
                 finally:
-                    sandbox._child_work = max(0, sandbox._child_work - 1)
+                    sandbox._release_child_work()
 
+            # Reserve the slot (quota check + increment) atomically before the
+            # accounting wrapper is installed, so concurrent starts cannot both
+            # pass the check, the increment cannot be lost against a child
+            # thread's concurrent decrement, and a start that is rejected (or
+            # fails) does not leave a wrapper stacked on self.run.
+            sandbox._reserve_child_work()
             self.run = _run_with_accounting  # type: ignore[assignment]
-            sandbox._child_work += 1
             try:
                 return _ORIG_THREAD_START(self, *args, **kwargs)
             except Exception:
-                sandbox._child_work = max(0, sandbox._child_work - 1)
+                self.run = original_run  # type: ignore[assignment]
+                sandbox._release_child_work()
                 raise
 
     return SandboxedThread
@@ -1197,6 +1202,12 @@ class SandboxThread(threading.Thread):
             enforcement_status=enforcement_status,
         )
         self._reset_runtime_state()
+        # Guards the cross-thread _child_work counter: it is incremented on the
+        # sandbox thread (reserving a slot) and decremented on each child thread
+        # as it finishes, so those read-modify-writes must be serialized -- doubly
+        # so on free-threaded builds where ``+= 1`` is not atomic. Created once
+        # here (not in _reset_runtime_state) so it survives warm-thread reuse.
+        self._child_work_lock = threading.Lock()
         self._tenant: str | None = None
         self._tenant_quota: int | None = None
         self._tenant_quota_reserved = False
@@ -1307,9 +1318,20 @@ class SandboxThread(threading.Thread):
         if self.open_files_max is not None and self._open_files >= self.open_files_max:
             raise errors.OpenFilesExceeded()
 
-    def _check_child_work_quota(self) -> None:
-        if self.child_work_max is not None and self._child_work >= self.child_work_max:
-            raise errors.ChildWorkExceeded()
+    def _reserve_child_work(self) -> None:
+        """Atomically enforce the child-work quota and claim a slot."""
+        with self._child_work_lock:
+            if (
+                self.child_work_max is not None
+                and self._child_work >= self.child_work_max
+            ):
+                raise errors.ChildWorkExceeded()
+            self._child_work += 1
+
+    def _release_child_work(self) -> None:
+        """Atomically release a previously reserved child-work slot."""
+        with self._child_work_lock:
+            self._child_work = max(0, self._child_work - 1)
 
     def _trace_guard(self, frame, event, arg):
         if self.wall_time_ms is None:

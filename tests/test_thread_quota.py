@@ -1,4 +1,5 @@
 import signal
+import threading
 
 import pytest
 
@@ -162,3 +163,78 @@ def test_child_work_quota_hard_stop():
         assert sb.termination_reason == "child_work_exceeded"
     finally:
         sb.stop()
+
+
+def test_reserve_release_child_work_contract():
+    # The atomic reserve/release pair enforces the quota and floors at zero.
+    sb = thread.SandboxThread("rr", child_work_max=2)
+    sb._reserve_child_work()
+    sb._reserve_child_work()
+    assert sb._child_work == 2
+    with pytest.raises(errors.ChildWorkExceeded):
+        sb._reserve_child_work()
+    sb._release_child_work()
+    assert sb._child_work == 1
+    sb._reserve_child_work()  # a freed slot can be reused
+    assert sb._child_work == 2
+    for _ in range(5):  # release never drives the counter negative
+        sb._release_child_work()
+    assert sb._child_work == 0
+
+
+def test_child_work_counter_is_mutated_only_under_its_lock():
+    # The counter is incremented on the sandbox thread (start) and decremented on
+    # each child thread (completion); those read-modify-writes must be serialized
+    # by _child_work_lock or they race and lose updates. Rather than chase the
+    # rare lost update (the inline += is "mostly" atomic under the GIL, so a
+    # natural-race test is unreliable), assert the invariant directly: every
+    # mutation of _child_work must happen while _child_work_lock is held. Driving
+    # real child-thread starts through the inline, unlocked accounting trips this.
+    sb = thread.SandboxThread("locked", child_work_max=None)
+    sandboxed_cls = thread._make_sandbox_thread_class(sb)
+    lock = sb._child_work_lock
+    backing = {"value": sb._child_work}
+    violations: list[str] = []
+
+    class _Probe(type(sb)):
+        @property
+        def _child_work(self):
+            return backing["value"]
+
+        @_child_work.setter
+        def _child_work(self, value):
+            # A non-reentrant lock that acquires here means no one (including the
+            # current thread) holds it -- i.e. this mutation is happening outside
+            # the lock, which is the bug.
+            if lock.acquire(blocking=False):
+                lock.release()
+                violations.append(f"unlocked write -> {value}")
+            backing["value"] = value
+
+    sb.__class__ = _Probe
+
+    starters = 4
+    per_starter = 25
+    ready = threading.Barrier(starters)
+    errors_seen: list[BaseException] = []
+
+    def starter() -> None:
+        try:
+            ready.wait()
+            children = [sandboxed_cls(target=lambda: None) for _ in range(per_starter)]
+            for child in children:
+                child.start()
+            for child in children:
+                child.join()
+        except BaseException as exc:  # pragma: no cover - surfaced via list
+            errors_seen.append(exc)
+
+    workers = [threading.Thread(target=starter) for _ in range(starters)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+
+    assert not errors_seen
+    assert violations == []
+    assert backing["value"] == 0
