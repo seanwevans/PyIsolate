@@ -353,13 +353,16 @@ def from_yaml_dict(data: Mapping[str, Any]) -> RuntimePolicySet:
     except ModuleNotFoundError:  # pragma: no cover - package fallback
         from . import yaml  # type: ignore[attr-defined]
 
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
-        if hasattr(yaml, "safe_dump"):
-            yaml.safe_dump(dict(data), tmp)
-        else:  # pragma: no cover - only used with the minimal fallback parser
-            tmp.write(str(dict(data)))
-        tmp_path = tmp.name
+    tmp = tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml")
+    # Capture the name before writing so cleanup runs even if the dump raises;
+    # delete=False means a failed serialization would otherwise leak the file.
+    tmp_path = tmp.name
     try:
+        with tmp:
+            if hasattr(yaml, "safe_dump"):
+                yaml.safe_dump(dict(data), tmp)
+            else:  # pragma: no cover - only used with the minimal fallback parser
+                tmp.write(str(dict(data)))
         return from_compiled_policy(compile_policy(tmp_path))
     finally:
         Path(tmp_path).unlink(missing_ok=True)
