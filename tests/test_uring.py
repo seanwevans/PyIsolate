@@ -86,3 +86,71 @@ def test_io_uring_write_error_propagates(monkeypatch):
 
     assert excinfo.value.errno == errno.EPIPE
     assert ring.seen
+
+
+def test_io_uring_write_loops_over_short_writes(monkeypatch):
+    # Each io_uring submission reports a short byte count; write() must keep
+    # submitting the remaining bytes until the whole buffer is delivered.
+    payload = b"abcdefghij"  # 10 bytes
+    counts = iter([4, 4, 2])
+    prep_lengths = []
+
+    class DummyCQE:
+        def __init__(self, res):
+            self.res = res
+
+    class DummyRing:
+        def setup(self, entries):
+            pass
+
+        def get_sqe(self):
+            return object()
+
+        def submit_and_wait(self, n):
+            return None
+
+        def wait_cqe(self):
+            return DummyCQE(next(counts))
+
+        def cqe_seen(self, cqe):
+            return None
+
+    ring = DummyRing()
+
+    class StubUring:
+        def __init__(self):
+            self.io_uring = lambda: ring
+
+        @staticmethod
+        def io_uring_prep_read(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def io_uring_prep_write(sqe, fd, buf, nbytes, offset):
+            prep_lengths.append(nbytes)
+
+    monkeypatch.setattr(uring_mod, "uring", StubUring())
+
+    io = IOUring()
+    total = asyncio.run(io.write(7, payload))
+
+    assert total == len(payload)
+    # Full buffer first, then only the bytes left after each short write.
+    assert prep_lengths == [10, 6, 2]
+
+
+def test_io_uring_write_delivers_all_bytes_through_pipe():
+    # End-to-end via the os.write fallback: a multi-byte payload round-trips.
+    rfd, wfd = os.pipe()
+    ring = IOUring()
+
+    async def _io():
+        written = await ring.write(wfd, b"length-framed")
+        os.close(wfd)
+        data = await ring.read(rfd, 13)
+        os.close(rfd)
+        return written, data
+
+    written, data = asyncio.run(_io())
+    assert written == 13
+    assert data == b"length-framed"

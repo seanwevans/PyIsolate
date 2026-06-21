@@ -44,13 +44,34 @@ class IOUring:
         return bytes(buf[:res])
 
     async def write(self, fd: int, data: bytes) -> int:
-        """Write ``data`` to ``fd`` asynchronously."""
+        """Write all of ``data`` to ``fd``, looping over short writes.
+
+        A single underlying write (``os.write`` or one ``io_uring`` submission)
+        may transfer fewer bytes than requested when the destination buffer is
+        full, so loop until the whole buffer is delivered. This keeps callers
+        whose contract is "write every byte" -- e.g. a framed channel's ``send``
+        -- from silently dropping the tail of a frame. Returns the number of
+        bytes written (only ``< len(data)`` if the transport stops accepting).
+        """
+        view = memoryview(data)
+        total = 0
+        while True:
+            written = await self._write_once(fd, view[total:])
+            total += written
+            # Stop once the buffer is drained, or if a write made no progress
+            # (guards against an empty buffer and against a stalled transport).
+            if total >= len(view) or written <= 0:
+                break
+        return total
+
+    async def _write_once(self, fd: int, view: memoryview) -> int:
         if self._ring is None:
             loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, os.write, fd, data)
+            return await loop.run_in_executor(None, os.write, fd, view)
 
+        chunk = view.tobytes()
         sqe = self._ring.get_sqe()
-        uring.io_uring_prep_write(sqe, fd, data, len(data), 0)
+        uring.io_uring_prep_write(sqe, fd, chunk, len(chunk), 0)
         self._ring.submit_and_wait(1)
         cqe = self._ring.wait_cqe()
         return self._complete(cqe)
