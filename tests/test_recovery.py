@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import pytest
+
 import pyisolate as iso
 from pyisolate import cgroup, recovery
 from pyisolate.bpf.manager import BPFManager
@@ -108,3 +110,29 @@ def test_cleanup_drops_registry_and_temp_dir_for_dead_sandbox(tmp_path, monkeypa
         assert not temp_dir.exists()
     finally:
         sup.shutdown()
+
+
+@pytest.mark.parametrize("bad", ["../escaped", "a/b", "..", ".", "", "a/../b"])
+def test_allocate_temp_dir_rejects_unsafe_names(monkeypatch, tmp_path, bad):
+    monkeypatch.setattr(recovery, "_TEMP_ROOT", tmp_path)
+    with pytest.raises(ValueError):
+        recovery.allocate_temp_dir(bad)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cleanup_temp_dir_rejects_escaping_name(monkeypatch, tmp_path):
+    temp_root = tmp_path / "root"
+    temp_root.mkdir()
+    monkeypatch.setattr(recovery, "_TEMP_ROOT", temp_root)
+
+    # A directory outside the temp root must not be deletable via a traversal
+    # name -- cleanup_temp_dir calls shutil.rmtree on the joined path.
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "data.txt").write_text("keep me")
+
+    with pytest.raises(ValueError):
+        recovery.cleanup_temp_dir("../victim")
+
+    assert victim.exists()
+    assert (victim / "data.txt").read_text() == "keep me"

@@ -112,10 +112,29 @@ def drop_sandbox(name: str) -> None:
         _write_registry(sandboxes)
 
 
+def _validate_name(name: str) -> str:
+    """Reject names that would escape the managed temp root.
+
+    ``Supervisor.spawn`` already constrains names, but these helpers are public;
+    a name containing a path separator or ``..`` would resolve outside
+    ``_TEMP_ROOT`` -- and for ``cleanup_temp_dir`` would ``rmtree`` an arbitrary
+    directory -- so guard against it here as defense in depth.
+    """
+
+    if not isinstance(name, str) or not name:
+        raise ValueError("sandbox name must be a non-empty string")
+    # Only reject what actually escapes a single path component on Linux: the
+    # path separator, the parent/current refs, and an embedded NUL. Otherwise
+    # weird-but-contained names (which the metrics layer sanitizes) are allowed.
+    if name in {".", ".."} or "/" in name or "\x00" in name:
+        raise ValueError(f"unsafe sandbox name: {name!r}")
+    return name
+
+
 def allocate_temp_dir(name: str) -> Path:
     """Allocate a deterministic per-sandbox temp directory."""
 
-    path = _TEMP_ROOT / name
+    path = _TEMP_ROOT / _validate_name(name)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -126,7 +145,7 @@ def cleanup_temp_dir(path_or_name: str | Path) -> None:
     if isinstance(path_or_name, Path):
         path = path_or_name
     else:
-        path = _TEMP_ROOT / path_or_name
+        path = _TEMP_ROOT / _validate_name(path_or_name)
     shutil.rmtree(path, ignore_errors=True)
 
 
