@@ -31,6 +31,8 @@ import resource
 import sys
 from dataclasses import dataclass, field
 
+from . import landlock as _landlock
+
 # prctl options
 _PR_SET_NO_NEW_PRIVS = 38
 _PR_SET_SECCOMP = 22
@@ -114,7 +116,19 @@ class ConfinementReport:
     seccomp: bool = False
     seccomp_denied: int = 0
     rlimits: list[str] = field(default_factory=list)
+    landlock: bool = False
+    landlock_rules: int = 0
     skipped: list[str] = field(default_factory=list)
+
+
+def _set_no_new_privs() -> bool:
+    """Set ``PR_SET_NO_NEW_PRIVS`` on the current process. Returns success.
+
+    Required both to install a seccomp filter and to call
+    ``landlock_restrict_self`` while unprivileged.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    return libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0
 
 
 def seccomp_supported() -> bool:
@@ -201,22 +215,55 @@ def _apply_rlimits(
             report.skipped.append("rlimit_cpu")
 
 
+def _apply_landlock(
+    report: ConfinementReport,
+    *,
+    fs_read: list[str] | None,
+    fs_write: list[str] | None,
+    require_landlock: bool,
+) -> None:
+    # Only restrict the filesystem when the policy actually names paths; without
+    # an allow-list a default-deny ruleset would just break the interpreter.
+    if not fs_read and not fs_write:
+        return
+    landlock_report = _landlock.apply_landlock(
+        fs_read, fs_write, require=require_landlock
+    )
+    if landlock_report.applied:
+        report.landlock = True
+        report.landlock_rules = landlock_report.rules
+    else:
+        report.skipped.append(f"landlock:{landlock_report.skipped}")
+
+
 def apply_confinement(
     *,
     mem_bytes: int | None = None,
     cpu_seconds: int | None = None,
+    fs_read: list[str] | None = None,
+    fs_write: list[str] | None = None,
     seccomp: bool = True,
     require_seccomp: bool = False,
+    require_landlock: bool = False,
 ) -> ConfinementReport:
     """Confine the *current* process before it runs guest code.
 
-    Resource limits are always attempted (best-effort, recorded in the report).
-    The seccomp filter is installed when ``seccomp`` is true and the platform
-    supports it; ``require_seccomp`` turns an unsupported platform or a failed
-    install into a raised error instead of a skip.
+    Order matters: ``no_new_privs`` is set first (required by both Landlock and
+    seccomp), then resource limits, then the Landlock filesystem ruleset, and
+    finally the seccomp filter as the last lockdown step. ``require_*`` turns an
+    unsupported platform or a failed install into a raised error instead of a
+    best-effort skip recorded in the report.
     """
     report = ConfinementReport()
+    report.no_new_privs = _set_no_new_privs()
+
     _apply_rlimits(report, mem_bytes=mem_bytes, cpu_seconds=cpu_seconds)
+    _apply_landlock(
+        report,
+        fs_read=fs_read,
+        fs_write=fs_write,
+        require_landlock=require_landlock,
+    )
 
     if not seccomp:
         report.skipped.append("seccomp_disabled")

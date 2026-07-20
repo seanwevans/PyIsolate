@@ -489,6 +489,7 @@ class Supervisor:
                     backend="process",
                     mem_bytes=mem_bytes,
                     require_seccomp=self._rollout_mode == "hardened",
+                    require_landlock=self._rollout_mode == "hardened",
                 )
             except Exception:
                 if usage_reserved and tenant:

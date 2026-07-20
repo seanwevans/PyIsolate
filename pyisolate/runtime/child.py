@@ -194,7 +194,10 @@ def _serve(sock: socket.socket) -> None:
         report = apply_confinement(
             mem_bytes=bootstrap.get("mem_bytes"),
             cpu_seconds=bootstrap.get("cpu_seconds"),
+            fs_read=bootstrap.get("fs_read"),
+            fs_write=bootstrap.get("fs_write"),
             require_seccomp=bool(bootstrap.get("require_seccomp", False)),
+            require_landlock=bool(bootstrap.get("require_landlock", False)),
         )
         _send_frame(
             sock,
@@ -203,6 +206,8 @@ def _serve(sock: socket.socket) -> None:
                 "seccomp": report.seccomp,
                 "seccomp_denied": report.seccomp_denied,
                 "rlimits": report.rlimits,
+                "landlock": report.landlock,
+                "landlock_rules": report.landlock_rules,
                 "skipped": report.skipped,
             },
         )
