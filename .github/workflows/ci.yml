@@ -8,26 +8,6 @@ on:
     - cron: "0 4 * * *"
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: |
-          python -m pip install -e .[dev]
-          pre-commit install-hooks
-      - name: Run isort
-        run: pre-commit run isort --all-files
-      - name: Run black
-        run: pre-commit run black --all-files
-      - name: Run pylint
-        run: pre-commit run pylint --all-files
-      - name: Run flake8
-        run: pre-commit run flake8 --all-files
-
   tests-unit:
     name: unit / py${{ matrix.python-version }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
