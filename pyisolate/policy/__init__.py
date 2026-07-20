@@ -4,6 +4,7 @@ import logging
 import os
 import socket
 import tempfile
+import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -276,6 +277,11 @@ def _is_timeout_error(exc: Exception) -> bool:
     return False
 
 
+# Policy documents are small YAML files; the bound exists because the response
+# body comes from the network and is buffered in full before validation.
+_MAX_REMOTE_POLICY_BYTES = 1 << 20  # 1 MiB
+
+
 def refresh_remote(
     url: str,
     token: str,
@@ -284,13 +290,23 @@ def refresh_remote(
     *,
     dry_run: bool = False,
 ):
-    """Fetch policy YAML from *url* and apply it."""
+    """Fetch policy YAML from *url* over HTTP(S) and apply it."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(f"policy URL scheme must be http or https, got {scheme!r}")
+
     attempts = max(1, max_retries + 1)
 
     for attempt in range(attempts):
         try:
             with urllib.request.urlopen(url, timeout=timeout) as fh:
-                text = fh.read().decode("utf-8")
+                raw = fh.read(_MAX_REMOTE_POLICY_BYTES + 1)
+            if len(raw) > _MAX_REMOTE_POLICY_BYTES:
+                raise ValueError(
+                    f"remote policy from {url} exceeds "
+                    f"{_MAX_REMOTE_POLICY_BYTES} bytes"
+                )
+            text = raw.decode("utf-8")
             break
         except Exception as exc:  # narrow to timeout conditions only
             if _is_timeout_error(exc):
