@@ -127,3 +127,44 @@ def test_refresh_remote_timeout_error(tmp_path):
     finally:
         httpd.shutdown()
         thread.join()
+
+
+def test_refresh_remote_rejects_non_http_scheme(tmp_path):
+    # urllib would happily open file:// (or ftp://) URLs; the policy fetch is
+    # documented as HTTP and must not turn into a local-file read primitive.
+    doc = tmp_path / "policy.yml"
+    doc.write_text("version: 0.1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="scheme"):
+        policy.refresh_remote(doc.as_uri(), token="tok")
+
+
+class OversizedHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"#" * (policy._MAX_REMOTE_POLICY_BYTES + 1)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:  # pragma: no cover - client may bail early
+            pass
+
+    def log_message(self, format, *args):  # pragma: no cover - quiet test output
+        return
+
+
+def test_refresh_remote_rejects_oversized_response():
+    addr = ("127.0.0.1", 0)
+    httpd = HTTPServer(addr, OversizedHandler)
+    port = httpd.server_address[1]
+
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(ValueError, match="exceeds"):
+            policy.refresh_remote(f"http://127.0.0.1:{port}", token="tok")
+    finally:
+        httpd.shutdown()
+        thread.join()
