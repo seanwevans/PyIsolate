@@ -42,10 +42,10 @@ except (
     if isinstance(exc, ImportError) and "cryptography" not in str(exc):
         raise
 
-    def checkpoint(*args, **kwargs):  # type: ignore[no-redef]
+    def checkpoint(sandbox: "Sandbox", key: bytes) -> bytes:  # type: ignore[no-redef]
         raise ModuleNotFoundError("cryptography is required for checkpoint support")
 
-    def restore(*args, **kwargs):  # type: ignore[no-redef]
+    def restore(blob: bytes, key: bytes) -> "Sandbox":  # type: ignore[no-redef]
         raise ModuleNotFoundError("cryptography is required for checkpoint support")
 
 
@@ -91,7 +91,9 @@ except (
     if isinstance(exc, ImportError) and "cryptography" not in str(exc):
         raise
 
-    def migrate(*args, **kwargs):  # type: ignore[no-redef]
+    def migrate(  # type: ignore[no-redef]
+        sandbox: "Sandbox", host: str, key: bytes
+    ) -> "MigrationResponse":
         raise ModuleNotFoundError("cryptography is required for migration support")
 
 

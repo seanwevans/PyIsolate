@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import platform
 import shutil
 import subprocess
 import sys
 import sysconfig
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -348,8 +348,10 @@ class ConformanceSuite:
         if created:
             cgroup.attach_current(cg_path)
             threads_file = Path(cg_path) / "cgroup.threads"
+            # attach_current writes threading.get_native_id(), so read back the
+            # same identifier; os.gettid() is unavailable on some libc builds.
             attached = threads_file.exists() and str(
-                os.gettid()
+                threading.get_native_id()
             ) in threads_file.read_text(encoding="utf-8")
             cgroup.delete(cg_path)
             deleted = not Path(cg_path).exists()

@@ -40,7 +40,7 @@ class Authority(Capability[str]):
 
     kind: str
 
-    def to_policy_rule(self) -> dict[str, Any]:
+    def to_policy_rule(self) -> dict[str, Any] | str:
         """Return a YAML-serializable representation of this authority."""
         raise NotImplementedError
 

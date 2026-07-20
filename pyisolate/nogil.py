@@ -50,7 +50,7 @@ def _module_origin(module: ModuleType) -> str | None:
 
 
 def _is_native_origin(origin: str | None) -> bool:
-    return bool(origin) and origin.endswith(_NATIVE_SUFFIXES)
+    return origin is not None and origin.endswith(_NATIVE_SUFFIXES)
 
 
 def imported_native_extensions() -> list[dict[str, Any]]:

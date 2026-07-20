@@ -23,11 +23,16 @@ repos:
     rev: v1.10.0
     hooks:
       - id: mypy
-        additional_dependencies: []
+        # types-PyYAML: mypy reports missing PyYAML stubs even with
+        # ignore_missing_imports, because typeshed tracks them separately.
+        additional_dependencies: [types-PyYAML]
   - repo: local
     hooks:
       - id: pytest
         name: pytest
-        entry: pytest -q
+        # python -m pytest keeps the hook on the interpreter the package is
+        # installed into; a bare ``pytest`` can resolve to an unrelated
+        # standalone install on PATH.
+        entry: python -m pytest -q
         language: system
         pass_filenames: false
