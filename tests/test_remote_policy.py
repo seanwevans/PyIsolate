@@ -10,7 +10,20 @@ from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import pytest
 
+import pyisolate
 import pyisolate.policy as policy
+
+
+@pytest.fixture
+def policy_token():
+    # refresh_remote ends in Supervisor.reload_policy, which authorizes against
+    # the global supervisor's policy token. Set it here (and restore afterwards)
+    # so this file does not depend on an earlier test file having set it.
+    sup = pyisolate.supervisor._get_supervisor()
+    old = sup._policy_token
+    pyisolate.set_policy_token("tok")
+    yield "tok"
+    sup._policy_token = old
 
 
 class PolicyHandler(BaseHTTPRequestHandler):
@@ -25,7 +38,7 @@ class PolicyHandler(BaseHTTPRequestHandler):
         return
 
 
-def test_refresh_remote(tmp_path):
+def test_refresh_remote(tmp_path, policy_token):
     addr = ("127.0.0.1", 0)
     httpd = HTTPServer(addr, PolicyHandler)
     port = httpd.server_address[1]
@@ -66,7 +79,7 @@ class SlowFirstHandler(BaseHTTPRequestHandler):
         return
 
 
-def test_refresh_remote_retries_on_timeout(tmp_path):
+def test_refresh_remote_retries_on_timeout(tmp_path, policy_token):
     addr = ("127.0.0.1", 0)
     httpd = ThreadingHTTPServer(addr, SlowFirstHandler)
     port = httpd.server_address[1]
