@@ -150,3 +150,48 @@ def test_endpoint_rejects_unauthenticated_checkpoint():
     assert response["ok"] is False
     assert "authenticator" in response["error"]
     assert restored == []
+
+
+def test_endpoint_rejects_oversized_checkpoint_before_reading_it():
+    # blob_len is peer-controlled and read into memory before the HMAC can be
+    # checked, so the endpoint must reject an oversized declaration up front
+    # instead of buffering whatever the peer streams.
+    server, client = socket.socketpair()
+    restored = []
+    result = []
+
+    def restore_fn(seen_blob, seen_key):  # pragma: no cover - should never run
+        restored.append((seen_blob, seen_key))
+        return object()
+
+    def run_server():
+        with server:
+            result.append(
+                migration.handle_migration_connection(
+                    server, KEY, restore_fn=restore_fn, max_blob_len=1024
+                )
+            )
+
+    thread = threading.Thread(target=run_server)
+    thread.start()
+    try:
+        migration._send_json(
+            client,
+            {
+                "magic": "PYISOMIG1",
+                "version": 1,
+                "blob_len": 1025,
+                "auth": "0" * 64,
+            },
+        )
+        response = migration._recv_json(client)
+    finally:
+        client.close()
+        thread.join(timeout=1)
+
+    assert response["ok"] is False
+    assert "maximum size" in response["error"]
+    assert result == [
+        migration.MigrationResponse(ok=False, error="checkpoint exceeds maximum size")
+    ]
+    assert restored == []
