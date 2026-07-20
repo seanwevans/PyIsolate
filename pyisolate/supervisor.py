@@ -364,6 +364,7 @@ class Supervisor:
                     mode=cast(cgroup.RolloutMode, self._rollout_mode),
                 )
                 cg_path = cg_status.path
+                self._apply_kernel_policy(cg_path, policy)
                 temp_dir = recovery.allocate_temp_dir(name)
                 reset_config = {
                     "policy": policy,
@@ -448,6 +449,32 @@ class Supervisor:
         # leaking state across sandboxes.
         NAME_PATTERN = DEFAULT_NAME_PATTERN
         return Sandbox(thread, self)
+
+    def _apply_kernel_policy(self, cg_path: Any, policy: Any) -> None:
+        """Publish this sandbox's coarse deny-mask to the eBPF ``sandbox_policy``
+        map, keyed by its cgroup id, so the LSM program enforces it.
+
+        Best-effort in dev/compatibility rollout; in hardened mode a failure to
+        program the kernel map propagates so the spawn fails closed.
+        """
+        if cg_path is None:
+            return
+        from .bpf.contract import cgroup_id_for_path, compile_deny_mask
+
+        strict = self._rollout_mode == "hardened"
+        cgroup_id = cgroup_id_for_path(cg_path)
+        if cgroup_id is None:
+            if strict:
+                raise RuntimeError(f"cannot resolve cgroup id for {cg_path}")
+            return
+        try:
+            self._bpf.set_sandbox_policy(
+                cgroup_id, compile_deny_mask(policy), strict=strict
+            )
+        except Exception:
+            if strict:
+                raise
+            logger.debug("sandbox_policy map update skipped for %s", cg_path)
 
     def _spawn_process(
         self,
