@@ -333,6 +333,7 @@ class Supervisor:
                 name,
                 policy=policy,
                 allowed_imports=allowed_imports,
+                mem_bytes=mem_bytes,
                 tenant=tenant,
                 tenant_quota=tenant_quota,
             )
@@ -454,6 +455,7 @@ class Supervisor:
         *,
         policy: Any,
         allowed_imports: Optional[list[str]],
+        mem_bytes: Optional[int],
         tenant: Optional[str],
         tenant_quota: Optional[int],
     ) -> Sandbox:
@@ -485,6 +487,8 @@ class Supervisor:
                     policy=policy,
                     allowed_imports=allowed_imports,
                     backend="process",
+                    mem_bytes=mem_bytes,
+                    require_seccomp=self._rollout_mode == "hardened",
                 )
             except Exception:
                 if usage_reserved and tenant:

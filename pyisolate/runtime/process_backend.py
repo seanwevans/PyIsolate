@@ -80,6 +80,10 @@ class ProcessSandbox:
         policy: Any = None,
         allowed_imports: Optional[list[str]] = None,
         backend: str = "process",
+        mem_bytes: Optional[int] = None,
+        cpu_seconds: Optional[int] = None,
+        confine: bool = True,
+        require_seccomp: bool = False,
     ) -> None:
         self.name = name
         self._backend = backend
@@ -100,6 +104,9 @@ class ProcessSandbox:
         self._quarantine_reason: Optional[str] = None
         self._ops = 0
         self._errors = 0
+        # Populated from the child's "confinement" frame during startup.
+        self.confinement: Optional[dict[str, Any]] = None
+        self._confined = threading.Event()
 
         fs, tcp = _extract_fs_tcp(policy)
 
@@ -126,6 +133,10 @@ class ProcessSandbox:
                 "allowed_imports": allowed_imports,
                 "fs": fs,
                 "tcp": tcp,
+                "confine": confine,
+                "mem_bytes": mem_bytes,
+                "cpu_seconds": cpu_seconds,
+                "require_seccomp": require_seccomp,
             }
         )
 
@@ -133,6 +144,8 @@ class ProcessSandbox:
             target=self._read_loop, name=f"pyisolate-proc-{name}", daemon=True
         )
         self._reader.start()
+        if not confine:
+            self._confined.set()
 
     # -- transport ---------------------------------------------------------
 
@@ -171,7 +184,16 @@ class ProcessSandbox:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
             self._dispatch(frame)
-        self._closed = True
+        # The channel closed. If this was not a caller-initiated stop, the guest
+        # process died on its own -- e.g. a seccomp-denied syscall killed it --
+        # so surface that to any waiter instead of letting recv() hang to
+        # timeout.
+        if not self._closed:
+            self._closed = True
+            self._confined.set()
+            self._outbox.put(
+                errors.SandboxError("guest process terminated unexpectedly")
+            )
 
     def _dispatch(self, frame: dict[str, Any]) -> None:
         ev = frame.get("ev")
@@ -180,6 +202,9 @@ class ProcessSandbox:
         elif ev == "error":
             self._errors += 1
             self._outbox.put(self._rebuild_exception(frame))
+        elif ev == "confinement":
+            self.confinement = frame
+            self._confined.set()
         # "ready", "done", "log", and "metric" are lifecycle/telemetry frames
         # that do not feed recv(); logging/metrics routing is added with the
         # observability wiring for this backend.
@@ -194,6 +219,11 @@ class ProcessSandbox:
         if isinstance(cls, type) and issubclass(cls, Exception):
             return cls(message)
         return errors.SandboxError(f"{exc_type}: {message}")
+
+    def wait_confined(self, timeout: float | None = None) -> Optional[dict[str, Any]]:
+        """Block until the child reports its confinement, returning the report."""
+        self._confined.wait(timeout)
+        return self.confinement
 
     # -- cell ABI ----------------------------------------------------------
 
@@ -224,6 +254,14 @@ class ProcessSandbox:
 
     def is_alive(self) -> bool:
         return self._proc.poll() is None
+
+    @property
+    def returncode(self) -> Optional[int]:
+        """Child exit status: ``None`` if running, else exit code or ``-signal``.
+
+        A guest killed by its seccomp filter reports ``-signal.SIGSYS``.
+        """
+        return self._proc.poll()
 
     def cancel(self, timeout: float = 0.2) -> bool:
         with self._lock:

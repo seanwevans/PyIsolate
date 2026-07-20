@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import errors
+from .confine import apply_confinement
 from .thread import _SAFE_BUILTINS, _blocked_open, _make_importer, _thread_local
 
 _LEN = struct.Struct("!I")
@@ -185,6 +186,27 @@ def _serve(sock: socket.socket) -> None:
     )
     channel = _GuestChannel(sock)
     guest_globals = _build_guest_globals(channel, allowed_imports)
+
+    # Confine the process *before* any guest code runs. Everything this module
+    # needs is already imported; guest imports (openat/mmap/read) are unaffected
+    # by the deny-list, but execve/ptrace/module-load/etc. now kill the process.
+    if bootstrap.get("confine", True):
+        report = apply_confinement(
+            mem_bytes=bootstrap.get("mem_bytes"),
+            cpu_seconds=bootstrap.get("cpu_seconds"),
+            require_seccomp=bool(bootstrap.get("require_seccomp", False)),
+        )
+        _send_frame(
+            sock,
+            {
+                "ev": "confinement",
+                "seccomp": report.seccomp,
+                "seccomp_denied": report.seccomp_denied,
+                "rlimits": report.rlimits,
+                "skipped": report.skipped,
+            },
+        )
+
     _send_frame(sock, {"ev": "ready"})
 
     while True:
