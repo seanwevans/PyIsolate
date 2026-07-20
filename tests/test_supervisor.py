@@ -186,13 +186,13 @@ def test_spawn_backend_is_explicit_subinterpreter():
     try:
         assert sb.backend == "subinterpreter"
         assert iso.SUPPORTED_BACKENDS == ("subinterpreter", "process", "microvm")
-        assert iso.IMPLEMENTED_BACKENDS == ("subinterpreter",)
+        assert iso.IMPLEMENTED_BACKENDS == ("subinterpreter", "process")
     finally:
         sb.close()
 
 
-@pytest.mark.parametrize("backend", ["process", "microvm"])
-def test_spawn_explicit_boundary_backends_fail_closed(backend):
+@pytest.mark.parametrize("backend", ["microvm"])
+def test_spawn_unimplemented_boundary_backends_fail_closed(backend):
     with pytest.raises(NotImplementedError, match=backend):
         iso.spawn(f"backend-{backend}", backend=backend)
 

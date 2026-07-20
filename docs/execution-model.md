@@ -7,6 +7,21 @@ frozen to seven operation names.
 ## Minimal cell ABI v1
 The public API names the isolation backend explicitly: `backend="subinterpreter"` is the execution-cell mode, `backend="process"` is the process-boundary mode, and `backend="microvm"` is the microVM-boundary mode. These modes change the containment boundary, not the seven cell operations below.
 
+### Backend implementation status
+
+`subinterpreter` and `process` are implemented; `microvm` is reserved and fails
+closed until a launcher is available.
+
+The `process` backend runs guest code in a separate OS process, so in-process
+Python escapes (for example recovering an unrestricted `__import__` by walking
+`object.__subclasses__()`) can no longer reach the supervisor's address space —
+they are confined to the guest process. Because the supervisor must never
+deserialize attacker-controlled bytes, values crossing the boundary (the
+argument to `post`, and `call` results) must be JSON-serializable; non-JSON
+payloads surface as an error to the caller rather than crossing the boundary.
+Kernel-level confinement of the guest process (no-new-privs, seccomp, rlimits,
+Landlock, cgroups) is layered on top of this boundary.
+
 ## Allowed operations
 
 1. **`exec(source)`**

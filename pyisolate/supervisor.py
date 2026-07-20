@@ -13,7 +13,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Dict, Literal, Optional, cast
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 from . import cgroup, recovery
 from .capabilities import ROOT, RootCapability
@@ -21,6 +21,7 @@ from .errors import PolicyAuthError, TenantQuotaExceeded
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .policy import resolve_policy
+from .runtime.process_backend import ProcessSandbox
 from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
 from .telemetry import DenialEvent
@@ -39,7 +40,7 @@ SUPPORTED_BACKENDS: tuple[BackendMode, ...] = (
     "process",
     "microvm",
 )
-IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = ("subinterpreter",)
+IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = ("subinterpreter", "process")
 
 
 def _normalize_backend(backend: str) -> BackendMode:
@@ -60,9 +61,20 @@ def _require_implemented_backend(backend: BackendMode) -> None:
 
 
 class Sandbox:
-    """Handle to a sandbox thread."""
+    """Handle to a sandbox.
 
-    def __init__(self, thread: SandboxThread, supervisor: "Supervisor"):
+    Wraps either a :class:`~pyisolate.runtime.thread.SandboxThread`
+    (``backend="subinterpreter"``) or a
+    :class:`~pyisolate.runtime.process_backend.ProcessSandbox`
+    (``backend="process"``); both expose the same cell-ABI surface this handle
+    delegates to.
+    """
+
+    def __init__(
+        self,
+        thread: "Union[SandboxThread, ProcessSandbox]",
+        supervisor: "Supervisor",
+    ):
         self._thread = thread
         self._supervisor = supervisor
 
@@ -174,6 +186,10 @@ class Supervisor:
         rollout_mode: str = "dev",
     ):
         self._sandboxes: Dict[str, SandboxThread] = {}
+        # Process-backed sandboxes live in a parallel registry: they are not
+        # SandboxThread instances, so the watchdog/warm-pool/cgroup machinery
+        # that iterates ``_sandboxes`` must not see them.
+        self._process_sandboxes: Dict[str, ProcessSandbox] = {}
         self._lock = threading.Lock()
         self._alerts = AlertManager()
         self._tracer = Tracer()
@@ -226,13 +242,18 @@ class Supervisor:
             handle.write(f"{tenant},{delta}\n")
 
     def _mark_tenant_reservation(
-        self, thread: SandboxThread, tenant: str | None, tenant_quota: int | None
+        self,
+        thread: "Union[SandboxThread, ProcessSandbox]",
+        tenant: str | None,
+        tenant_quota: int | None,
     ) -> None:
         thread._tenant = tenant
         thread._tenant_quota = tenant_quota
         thread._tenant_quota_reserved = bool(tenant and tenant_quota is not None)
 
-    def _release_tenant_reservation(self, thread: SandboxThread) -> bool:
+    def _release_tenant_reservation(
+        self, thread: "Union[SandboxThread, ProcessSandbox]"
+    ) -> bool:
         tenant = getattr(thread, "_tenant", None)
         if tenant and getattr(thread, "_tenant_quota_reserved", False):
             self._record_tenant_usage(tenant, -1)
@@ -307,9 +328,21 @@ class Supervisor:
                 imports.update(allowed_imports)
             allowed_imports = list(imports)
 
+        if backend == "process":
+            return self._spawn_process(
+                name,
+                policy=policy,
+                allowed_imports=allowed_imports,
+                tenant=tenant,
+                tenant_quota=tenant_quota,
+            )
+
         with self._lock:
             existing = self._sandboxes.get(name)
-            if existing is not None and existing.is_alive():
+            existing_proc = self._process_sandboxes.get(name)
+            if (existing is not None and existing.is_alive()) or (
+                existing_proc is not None and existing_proc.is_alive()
+            ):
                 raise RuntimeError(f"sandbox '{name}' already exists")
             usage_reserved = False
             if tenant and tenant_quota is not None:
@@ -415,15 +448,71 @@ class Supervisor:
         NAME_PATTERN = DEFAULT_NAME_PATTERN
         return Sandbox(thread, self)
 
+    def _spawn_process(
+        self,
+        name: str,
+        *,
+        policy: Any,
+        allowed_imports: Optional[list[str]],
+        tenant: Optional[str],
+        tenant_quota: Optional[int],
+    ) -> Sandbox:
+        """Spawn a sandbox behind a real OS-process boundary.
+
+        This path deliberately skips the SandboxThread-specific machinery
+        (warm pool, in-process quota watchdog, per-thread cgroup attach). Kernel
+        confinement of the guest process (seccomp/rlimits/Landlock/cgroups) is
+        layered on in follow-up work.
+        """
+        with self._lock:
+            existing_thread = self._sandboxes.get(name)
+            existing_proc = self._process_sandboxes.get(name)
+            if (existing_thread is not None and existing_thread.is_alive()) or (
+                existing_proc is not None and existing_proc.is_alive()
+            ):
+                raise RuntimeError(f"sandbox '{name}' already exists")
+
+            usage_reserved = False
+            if tenant and tenant_quota is not None:
+                if self._tenant_usage.get(tenant, 0) >= tenant_quota:
+                    raise TenantQuotaExceeded()
+                self._record_tenant_usage(tenant, 1)
+                usage_reserved = True
+
+            try:
+                proc = ProcessSandbox(
+                    name,
+                    policy=policy,
+                    allowed_imports=allowed_imports,
+                    backend="process",
+                )
+            except Exception:
+                if usage_reserved and tenant:
+                    self._record_tenant_usage(tenant, -1)
+                raise
+
+            self._mark_tenant_reservation(proc, tenant, tenant_quota)
+            self._process_sandboxes[name] = proc
+        self._cleanup()
+        return Sandbox(proc, self)
+
     def list_active(self) -> Dict[str, Sandbox]:
         """Return currently active sandboxes."""
         self._cleanup()
         with self._lock:
-            return {
+            active: Dict[str, Sandbox] = {
                 name: Sandbox(t, self)
                 for name, t in self._sandboxes.items()
                 if t.is_alive()
             }
+            active.update(
+                {
+                    name: Sandbox(p, self)
+                    for name, p in self._process_sandboxes.items()
+                    if p.is_alive()
+                }
+            )
+            return active
 
     def get_active_threads(self) -> list[SandboxThread]:
         """Return active sandbox threads for internal consumers."""
@@ -490,8 +579,11 @@ class Supervisor:
             sandboxes = list(self._sandboxes.values())
             warm = list(self._warm_pool)
             self._warm_pool.clear()
+            procs = list(self._process_sandboxes.values())
         for sb in sandboxes + warm:
             sb.stop()
+        for proc in procs:
+            proc.stop()
         self._cleanup()
 
     def quarantine(self, name: str, reason: str) -> None:
@@ -558,6 +650,14 @@ class Supervisor:
                 self._release_tenant_reservation(thread)
                 del self._sandboxes[n]
             self._warm_pool = [t for t in self._warm_pool if t.is_alive()]
+            dead_procs = [
+                n for n, p in self._process_sandboxes.items() if not p.is_alive()
+            ]
+            for n in dead_procs:
+                proc = self._process_sandboxes[n]
+                proc.reap()
+                self._release_tenant_reservation(proc)
+                del self._process_sandboxes[n]
 
 
 _supervisor: Supervisor | None = None
