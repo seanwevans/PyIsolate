@@ -1,4 +1,5 @@
 import threading
+import time
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -96,7 +97,18 @@ def test_concurrent_roundtrip():
     def worker(i: int) -> None:
         msg = f"hi{i}".encode()
         frame = a.frame(msg)
-        results[i] = b.unframe(frame)
+        # The receive counter is strictly ordered (docs/protocol.md), so the
+        # receiver only accepts the next expected frame.  Threads race to
+        # deliver, so retry until this thread's frame is the expected one.
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                results[i] = b.unframe(frame)
+                return
+            except ValueError:
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(100)]
     for t in threads:

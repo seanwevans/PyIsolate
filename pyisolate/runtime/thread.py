@@ -48,7 +48,7 @@ from ..capabilities import (
 from ..numa import bind_current_thread
 from ..observability.trace import Tracer
 from ..policy.model import RuntimePolicy, from_sandbox_policy
-from ..telemetry import DenialEvent
+from ..telemetry import Decision, DenialEvent
 from .protocol import (
     AttachCgroupRequest,
     BrokerRequest,
@@ -123,8 +123,8 @@ def _deny(
     policy_rule: str,
     message: str,
     *,
-    kernel_decision: str = "not_evaluated",
-    broker_decision: str = "deny",
+    kernel_decision: Decision = "not_evaluated",
+    broker_decision: Decision = "deny",
 ) -> errors.PolicyError:
     sandbox = _active_sandbox()
     cell = sandbox.name if sandbox is not None else "<unknown>"
@@ -670,12 +670,12 @@ def _check_network_destination(address: Iterable[str]) -> None:
             raise errors.NetworkExceeded()
 
 
-def _guarded_connect(self_socket: socket.socket, address: Iterable[str]):
+def _guarded_connect(self_socket: socket.socket, address: Any):
     _check_network_destination(address)
     return _ORIG_SOCKET_CONNECT(self_socket, address)
 
 
-def _guarded_connect_ex(self_socket: socket.socket, address: Iterable[str]):
+def _guarded_connect_ex(self_socket: socket.socket, address: Any):
     _check_network_destination(address)
     return _ORIG_SOCKET_CONNECT_EX(self_socket, address)
 
@@ -771,7 +771,7 @@ def _make_sandbox_thread_class(sandbox: "SandboxThread"):
     return SandboxedThread
 
 
-def _module_proxy(name: str, module) -> types.ModuleType:
+def _module_proxy(name: str, module) -> Any:
     proxy = types.ModuleType(name, getattr(module, "__doc__", None))
     proxy.__dict__.update({k: getattr(module, k) for k in dir(module)})
     proxy.__dict__["__name__"] = name
@@ -840,7 +840,7 @@ def _wrap_module(name: str, module):
         return mod
     if base == "time":
 
-        def _require_clock() -> ClockCapability:
+        def _require_clock() -> ClockCapability | None:
             cap = getattr(_thread_local, "clock_capability", None)
             return cap
 
@@ -885,7 +885,8 @@ def _wrap_module(name: str, module):
 
             connect = _guarded_connect
             connect_ex = _guarded_connect_ex
-            sendto = _guarded_sendto
+            # The guard collapses socket.sendto's overloads into one signature.
+            sendto = _guarded_sendto  # type: ignore[assignment]
 
         def _create_connection(
             address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None
@@ -936,7 +937,7 @@ def _wrap_module(name: str, module):
     if base == "pathlib":
         mod = _module_proxy("pathlib", module)
 
-        class SandboxedPath(type(module.Path())):
+        class SandboxedPath(type(module.Path())):  # type: ignore[misc]
             def open(
                 self,
                 mode="r",
@@ -1048,6 +1049,12 @@ class Stats:
 class SandboxThread(threading.Thread):
     """Thread that runs guest code and communicates via a queue."""
 
+    # Assigned by the supervisor after construction/reset rather than in
+    # ``__init__``; declared here so the attributes are part of the class
+    # contract.
+    _backend: str
+    _temp_dir: Path
+
     @staticmethod
     def _merge_allowed_imports(policy, allowed_imports: Optional[Iterable[str]]):
         imports: set[str] = set()
@@ -1066,7 +1073,7 @@ class SandboxThread(threading.Thread):
             imports.update(runtime_policy.imports)
 
         allowed_imports_provided = allowed_imports is not None
-        if allowed_imports_provided:
+        if allowed_imports is not None:
             imports.update(allowed_imports)
 
         if not imports and not allowed_imports_provided:
@@ -1116,7 +1123,7 @@ class SandboxThread(threading.Thread):
         self.child_work_max = child_work_max
         self.allowed_imports = self._merge_allowed_imports(policy, allowed_imports)
         self.numa_node = numa_node
-        self._bound_numa_node = None
+        self._bound_numa_node: Optional[int] = None
         self._cgroup_path = cgroup_path
         self.quota_enforcement = enforcement_status
         self._capabilities = deserialize_capabilities(capabilities)
@@ -1145,15 +1152,15 @@ class SandboxThread(threading.Thread):
         self._cpu_time = 0.0
         self._mem_peak = 0
         self._mem_base = 0
-        self._start_time = None
+        self._start_time: Optional[float] = None
         self._ops = 0
         self._errors = 0
         self._latency = {"0.5": 0, "1": 0, "5": 0, "10": 0, "inf": 0}
         self._latency_sum = 0.0
         self._trace_enabled = False
         self._syscall_log: list[str] = []
-        self._quarantine_reason = None
-        self.termination_reason = None
+        self._quarantine_reason: Optional[str] = None
+        self.termination_reason: Optional[str] = None
         self._open_files = 0
         self._network_ops = 0
         self._output_bytes = 0
@@ -1172,7 +1179,7 @@ class SandboxThread(threading.Thread):
         output_bytes_max: Optional[int] = None,
         child_work_max: Optional[int] = None,
         allowed_imports: Optional[list[str]] = None,
-        on_violation: Optional[Callable[[str, Exception], None]] = None,
+        on_violation: Optional[Callable[[str, Exception], object]] = None,
         tracer: Optional["Tracer"] = None,
         numa_node: Optional[int] = None,
         cgroup_path=None,

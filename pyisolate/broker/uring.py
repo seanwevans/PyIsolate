@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any
 
 try:
     import uring  # type: ignore
@@ -20,7 +21,7 @@ class IOUring:
     """Minimal wrapper around ``io_uring`` for async file descriptor I/O."""
 
     def __init__(self, entries: int = 8):
-        self._ring = None
+        self._ring: Any = None
         if uring is not None:
             ring = uring.io_uring()
             # handle API differences across wrapper versions

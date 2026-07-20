@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING
 
 from . import errors
@@ -29,7 +29,7 @@ class ResourceWatchdog(threading.Thread):
         self._supervisor = supervisor
         self._interval = interval
         self._stop_event = threading.Event()
-        self._rb_iter = None
+        self._rb_iter: Iterator[object] | None = None
 
     def stop(self, timeout: float = 0.2) -> None:
         self._stop_event.set()
@@ -56,6 +56,8 @@ class ResourceWatchdog(threading.Thread):
                 continue
 
             name = event.get("name")
+            if not isinstance(name, str):
+                continue
             cpu_ms = event.get("cpu_ms", 0)
             rss = event.get("rss_bytes", 0)
             # The quota comparisons below run outside their try/except blocks, so

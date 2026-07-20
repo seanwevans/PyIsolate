@@ -1,15 +1,18 @@
 import logging
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+AlertCallback = Callable[[str, Exception], object]
 
 
 class AlertManager:
     """Dispatch callbacks on policy violations."""
 
     def __init__(self) -> None:
-        self._subs: list[callable] = []
+        self._subs: list[AlertCallback] = []
 
-    def register(self, callback) -> None:
+    def register(self, callback: AlertCallback) -> None:
         self._subs.append(callback)
 
     def notify(self, sandbox: str, error: Exception) -> list[Exception]:

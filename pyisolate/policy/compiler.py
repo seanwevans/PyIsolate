@@ -299,10 +299,10 @@ def compile_policy(path: str | Path) -> CompiledPolicy:
                 capabilities.append(ReadPath(rule.path))
             elif rule.action == "write":
                 capabilities.append(WritePath(rule.path))
-        for rule in tcp_compiled:
-            if rule.action == "connect":
+        for tcp_rule in tcp_compiled:
+            if tcp_rule.action == "connect":
                 try:
-                    capabilities.append(ConnectTCP.from_address(rule.addr))
+                    capabilities.append(ConnectTCP.from_address(tcp_rule.addr))
                 except ValueError:
                     pass
         capabilities.extend(Import(module) for module in imports)

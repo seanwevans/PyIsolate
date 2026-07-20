@@ -59,6 +59,9 @@ class CryptoBroker:
     threads; counter and key updates are protected by an internal lock.
     """
 
+    _tx_ctr: int
+    _rx_ctr: int
+
     def __init__(
         self,
         private_key: bytes,

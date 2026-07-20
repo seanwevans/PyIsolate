@@ -5,6 +5,7 @@ import os
 import socket
 import tempfile
 import urllib.request
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -42,8 +43,8 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
                     from typing import cast
 
                     assert isinstance(result[current], list)
-                    lst = cast(list[str], result[current])
-                    lst.append(_unquote(item))
+                    str_lst = cast(list[str], result[current])
+                    str_lst.append(_unquote(item))
                 continue
 
             if ":" not in line:
@@ -66,7 +67,7 @@ except ModuleNotFoundError:  # minimal fallback when PyYAML is unavailable
                 return _mini_load(stream.read())
             return _mini_load(stream)
 
-    yaml = _MiniYaml()
+    yaml = _MiniYaml()  # type: ignore[assignment]
 
 
 from ..capabilities import ConnectTCP, CpuBudget, Import, ReadPath, WritePath
@@ -188,11 +189,13 @@ class Policy:
         lines = ["version: 1.0", "sandboxes:", f"  {name}:"]
         sandbox = data["sandboxes"][name]  # type: ignore[index]
 
-        def append_rule_list(section: str, rules: object) -> None:
+        def append_rule_list(
+            section: str, rules: Iterable[Mapping[str, object]] | None
+        ) -> None:
             if not rules:
                 return
             lines.append(f"    {section}:")
-            for rule in rules:  # type: ignore[union-attr]
+            for rule in rules:
                 key, value = next(iter(rule.items()))
                 lines.append(f"      - {key}: {value!r}")
 

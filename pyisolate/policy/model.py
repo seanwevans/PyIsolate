@@ -280,11 +280,11 @@ def from_sandbox_policy(policy: Any) -> RuntimePolicy:
         if isinstance(item, str):
             allow_tcp.append(NetworkRule("connect", item))
             continue
-        rule = _coerce_compiled_tcp(item)
-        if rule.action == "connect":
-            allow_tcp.append(rule)
+        tcp_rule = _coerce_compiled_tcp(item)
+        if tcp_rule.action == "connect":
+            allow_tcp.append(tcp_rule)
         else:
-            deny_tcp.append(rule)
+            deny_tcp.append(tcp_rule)
 
     imports = tuple(str(module) for module in (getattr(policy, "imports", None) or ()))
     return RuntimePolicy(
@@ -382,13 +382,13 @@ def to_bpf_map_entries(policy_set: RuntimePolicySet) -> list[tuple[str, str, str
             entries.append(("policy_fs_allow", f"{sandbox_name}:{index}", rule.path))
         for index, rule in enumerate(policy.deny_fs):
             entries.append(("policy_fs_deny", f"{sandbox_name}:{index}", rule.path))
-        for index, rule in enumerate(policy.allow_tcp):
+        for index, net_rule in enumerate(policy.allow_tcp):
             entries.append(
-                ("policy_net_allow", f"{sandbox_name}:{index}", rule.destination)
+                ("policy_net_allow", f"{sandbox_name}:{index}", net_rule.destination)
             )
-        for index, rule in enumerate(policy.deny_tcp):
+        for index, net_rule in enumerate(policy.deny_tcp):
             entries.append(
-                ("policy_net_deny", f"{sandbox_name}:{index}", rule.destination)
+                ("policy_net_deny", f"{sandbox_name}:{index}", net_rule.destination)
             )
         for index, module in enumerate(policy.imports):
             entries.append(("policy_import_allow", f"{sandbox_name}:{index}", module))

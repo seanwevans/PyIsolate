@@ -44,7 +44,7 @@ class DummyBPFManager:
         return iter(())
 
 
-bpf_manager.BPFManager = DummyBPFManager
+setattr(bpf_manager, "BPFManager", DummyBPFManager)
 
 # Install the stub while this module imports the rest of the package, but keep a
 # reference to the real module so it can be restored.  The supervisor imports

@@ -13,7 +13,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal, Optional, cast
 
 from . import cgroup, recovery
 from .capabilities import ROOT, RootCapability
@@ -324,7 +324,10 @@ class Supervisor:
             reused_warm = False
             try:
                 cg_status = cgroup.create(
-                    name, cpu_ms, mem_bytes, mode=self._rollout_mode
+                    name,
+                    cpu_ms,
+                    mem_bytes,
+                    mode=cast(cgroup.RolloutMode, self._rollout_mode),
                 )
                 cg_path = cg_status.path
                 temp_dir = recovery.allocate_temp_dir(name)

@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict
+from typing import TYPE_CHECKING, Dict
 
 from ..supervisor import Supervisor
+
+if TYPE_CHECKING:
+    from ..supervisor import Sandbox
 
 __all__ = ["run_operator", "scale_sandboxes"]
 
@@ -19,7 +22,7 @@ def run_operator(namespace: str = "default") -> None:
     api = client.CustomObjectsApi()
     w = watch.Watch()
     sup = Supervisor()
-    sandboxes: Dict[str, object] = {}
+    sandboxes: Dict[str, "Sandbox"] = {}
     for event in w.stream(
         api.list_namespaced_custom_object,
         group="pyisolate.dev",
