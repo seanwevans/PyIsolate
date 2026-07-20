@@ -391,6 +391,43 @@ class BPFManager:
         # paths have one representation.
         self.policy_maps = new_policy_maps
 
+    def set_sandbox_policy(
+        self,
+        cgroup_id: int,
+        deny_mask: int,
+        *,
+        audit_only: bool = False,
+        strict: bool = False,
+    ) -> bool:
+        """Write one sandbox's coarse deny-mask into the pinned ``sandbox_policy``
+        map, keyed by its cgroup id, so the LSM program enforces it.
+
+        Returns whether the update succeeded. When ``strict`` is set (hardened
+        rollout), a failure raises instead of being reported as ``False``.
+        """
+        from .contract import (
+            SANDBOX_POLICY_MAP,
+            encode_sandbox_policy_key,
+            encode_sandbox_policy_value,
+        )
+
+        pinned = self._bpffs_root / SANDBOX_POLICY_MAP
+        return self._run(
+            [
+                "bpftool",
+                "map",
+                "update",
+                "pinned",
+                str(pinned),
+                "key",
+                *encode_sandbox_policy_key(cgroup_id),
+                "value",
+                *encode_sandbox_policy_value(deny_mask, audit_only),
+                "any",
+            ],
+            raise_on_error=strict,
+        )
+
     def _update_bpf_map(self, map_name: str, key: str, value: str) -> None:
         self._run(
             [
