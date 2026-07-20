@@ -1,23 +1,46 @@
 # PyIsolate Threat Model (Frozen)
 
-**Status:** Normative, frozen baseline  
-**Effective date:** April 21, 2026  
-**Applies to:** `main` runtime (`pyisolate.supervisor`, `pyisolate.runtime.thread`, `pyisolate.bpf.*`, `pyisolate.broker.*`)
+**Status:** Normative baseline  
+**Effective date:** July 20, 2026 (supersedes April 21, 2026)  
+**Applies to:** `main` runtime (`pyisolate.supervisor`, `pyisolate.runtime.thread`, `pyisolate.runtime.process_backend`, `pyisolate.runtime.confine`, `pyisolate.runtime.landlock`, `pyisolate.bpf.*`, `pyisolate.broker.*`)
 
 This document is the single source of truth for what PyIsolate **does** and **does not** defend against.
 If a guarantee is not listed here, it is **not** guaranteed.
 
 ---
 
-## Security boundary summary
+## The boundary depends on the backend
 
-PyIsolate is a **single-process sandboxing system** that uses:
+PyIsolate's security posture is **not uniform** across backends. Read every
+answer below as conditional on the backend you select.
 
-- CPython sub-interpreters for workload separation.
-- eBPF/LSM/cgroup controls for syscall, filesystem, network, and resource policy enforcement.
-- A brokered control/data path with authenticated encryption and replay counters.
+- **`backend="subinterpreter"`** (the default) is an *execution cell*, **not** a
+  security boundary against hostile Python. Guest code runs in a sub-interpreter
+  in the supervisor's own process; the restricted builtins and import allow-list
+  are ergonomic guardrails that adversarial Python can bypass (for example by
+  walking `object.__subclasses__()` to recover an unrestricted `__import__` and
+  reaching the real `os`/`open`). Use it for trusted code, or for scheduling and
+  organization — not to contain code you do not trust.
 
-PyIsolate provides **defense in depth**, not a cryptographic VM boundary.
+- **`backend="process"`** is the boundary mode. The guest runs in a **separate
+  OS process** (so those in-process escapes can no longer touch supervisor
+  memory), confined in depth by the host kernel:
+  - `PR_SET_NO_NEW_PRIVS` + a **seccomp** deny-list that kills the process on
+    dangerous syscalls (`execve`, `ptrace`, mount/namespace ops, `bpf`, kernel
+    module load, `process_vm_*`, …) — x86-64 Linux;
+  - **Landlock** filesystem rules derived from policy, where the kernel supports
+    it;
+  - a **coarse per-cgroup eBPF/LSM deny-mask** (deny whole capability classes),
+    where BPF-LSM is available;
+  - `rlimit` and cgroup resource caps.
+
+Each kernel layer is applied **best-effort** and recorded in the sandbox's
+confinement report; a host missing a layer keeps the others. In **hardened**
+rollout mode a required-but-unavailable layer fails closed. Even at full
+strength this is **defense in depth, not a hardware VM boundary** — for
+high-assurance multitenancy, run one sandbox per process inside a VM or microVM.
+
+- **`backend="microvm"`** is reserved and not yet implemented; it fails closed.
 
 ---
 
@@ -25,16 +48,28 @@ PyIsolate provides **defense in depth**, not a cryptographic VM boundary.
 
 ## 1) Hostile Python code
 
-**Answer: DEFENDED (within stated limits).**
+**Answer: depends on the backend.**
 
-PyIsolate is designed to run arbitrary, hostile Python bytecode and constrain it with policy:
+- **`backend="subinterpreter"`: NOT DEFENDED.** The restricted builtins and
+  import allow-list are guardrails, not a boundary; adversarial Python can
+  bypass them and reach the real interpreter, filesystem, and network from
+  inside the supervisor's process. Do not run untrusted code in this mode.
 
-- restricted builtins/import surface,
-- broker-mediated privileged operations,
-- kernel-enforced policy for FS/network/syscalls,
-- per-sandbox quotas and watchdog enforcement.
+- **`backend="process"`: DEFENDED IN DEPTH (conditional on kernel features).**
+  Hostile Python runs in a separate process and is constrained by:
+  - process isolation from the supervisor's address space,
+  - a seccomp deny-list that kills the process on dangerous syscalls,
+  - Landlock filesystem rules from policy (where supported),
+  - a coarse per-cgroup eBPF/LSM deny-mask (where BPF-LSM is available),
+  - broker-mediated privileged operations and per-sandbox resource limits.
 
-**Not covered under this item:** kernel 0-days, CPU side channels, and any path that depends on loading untrusted native code.
+  The strength of this answer scales with the kernel features present on the
+  host (see the confinement report / `pyisolate doctor --grade`). On a host
+  with none of the kernel layers, the process boundary still isolates memory
+  but syscall/FS/network policy degrades toward the broker and userspace guards.
+
+**Not covered under either backend:** kernel 0-days, CPU/microarchitectural side
+channels, and any path that loads untrusted native code (see §2).
 
 ---
 
@@ -124,10 +159,16 @@ PyIsolate includes hardening to reduce likelihood (broker authentication, policy
 
 These assumptions must hold for the defended claims above:
 
-1. Trusted host kernel and hardware (no active kernel compromise).
-2. Correct deployment of required eBPF/LSM/cgroup features.
-3. Hardened policy configuration (especially denying untrusted native extension paths).
-4. Supervisor process integrity is maintained.
+1. **Untrusted code runs under `backend="process"`.** The defended answers for
+   hostile Python assume the process backend; the sub-interpreter backend is not
+   a boundary against it.
+2. Trusted host kernel and hardware (no active kernel compromise).
+3. The kernel provides the confinement features the deployment relies on
+   (seccomp, Landlock, BPF-LSM, cgroup v2). Missing features degrade the
+   boundary; hardened rollout mode fails closed rather than degrading silently.
+4. Hardened policy configuration (especially denying untrusted native extension
+   paths).
+5. Supervisor process integrity is maintained.
 
 If any assumption is false, guarantees degrade accordingly.
 
@@ -147,9 +188,17 @@ PyIsolate does not claim to defend against:
 
 ## Change control
 
-This threat model is frozen as of **April 21, 2026**.
 Any semantic change to defended/not-defended status requires:
 
 1. an explicit update to this file,
 2. corresponding updates to `SECURITY.md` and user-facing docs,
 3. a release note entry calling out the boundary change.
+
+### History
+
+- **2026-07-20** — Made the hostile-Python answer backend-conditional. Landed a
+  real `backend="process"` boundary: separate-process isolation, a seccomp
+  deny-list with `no_new_privs`, Landlock filesystem enforcement from policy,
+  and end-to-end wiring of the coarse per-cgroup eBPF/LSM deny-mask. Clarified
+  that `backend="subinterpreter"` is not a boundary against hostile Python.
+- **2026-04-21** — Initial frozen baseline.

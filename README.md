@@ -219,18 +219,36 @@ See [docs/execution-model.md](docs/execution-model.md). We keep this model small
 
 ---
 
-## Security model
+## Security model
 
-* **Execution cell** – `backend="subinterpreter"`; each guest runs in its own sub‑interpreter, hosted by one sandbox thread.
-* **Process boundary** – `backend="process"`; each guest is intended to run in its own OS process with kernel policy applied outside the Python runtime.
-* **MicroVM boundary** – `backend="microvm"`; each guest is intended to run inside a process launched behind a microVM boundary for stronger blast-radius isolation.
-* **Security boundary (authoritative)** – enforcement lives at the kernel/process layer (cgroups + eBPF/LSM), not at the Python sub‑interpreter boundary.
-* **Kernel boundary** – every sandbox thread enters its own cgroup; CO‑RE eBPF programs enforce FS/net/syscall policy.
-* **Broker** – sole path to privileged syscalls, sealed with AEAD and strict replay protection.
-* **Fallback hardening** – for stronger blast‑radius isolation (or kernels with reduced features), run one sandbox per process and place that process inside a container or microVM.
-* **Verified eBPF modules** – roadmap/hardened-mode requirement: bytecode is disassembled with `llvm-objdump -d` and must succeed `bpftool prog load` so the kernel verifier approves it before any sandbox runs.
+**The boundary is the backend.** Pick the backend to match your trust level:
 
-See **SECURITY.md** for a full threat‑model walkthrough.
+* **`backend="subinterpreter"`** (default) - an **execution cell**, not a
+  boundary against hostile Python. The guest runs in a sub-interpreter in the
+  supervisor's own process; restricted builtins and the import allow-list are
+  bypassable guardrails (adversarial Python can walk `object.__subclasses__()`
+  to reach the real `os`/`open`). Use it for **trusted** code, or for scheduling
+  and organization.
+* **`backend="process"`** - the **boundary mode**. The guest runs in a separate
+  OS process, confined in depth by the kernel before any guest code runs:
+  * `PR_SET_NO_NEW_PRIVS` + a seccomp deny-list that kills the process on
+    dangerous syscalls (`execve`, `ptrace`, mount/namespace ops, `bpf`, module
+    load, `process_vm_*`, ...) - x86-64 Linux;
+  * **Landlock** filesystem rules from policy, where the kernel supports it;
+  * a coarse per-cgroup **eBPF/LSM** `deny_mask`, where BPF-LSM is available;
+  * `rlimit` and cgroup resource caps.
+  Each kernel layer is best-effort and recorded in the sandbox's confinement
+  report; hardened rollout mode fails closed when a required layer is missing.
+* **`backend="microvm"`** - reserved; not yet implemented (fails closed).
+* **Broker** - sole path to privileged syscalls, sealed with AEAD (X25519 to
+  ChaCha20-Poly1305) and strict per-direction replay counters.
+* **Fallback hardening** - even the process backend is defense-in-depth, not a
+  hardware-VM boundary. For hostile multi-tenant workloads, run one sandbox per
+  process inside a container or microVM.
+
+See **[SECURITY.md](SECURITY.md)** and the normative
+**[threat model](docs/threat-model.md)** for the full, backend-conditional
+boundary statement.
 
 ---
 

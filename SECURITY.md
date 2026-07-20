@@ -1,127 +1,184 @@
 # SECURITY.md
 
+> Canonical boundary definition: see [`docs/threat-model.md`](docs/threat-model.md) (normative baseline).
 
-> Canonical boundary definition: see `docs/threat-model.md` (frozen baseline).
+**The security boundary depends on the backend you choose.** This is the single
+most important thing to understand before deploying PyIsolate:
 
-## 1  Threat model
+- `backend="subinterpreter"` (the default) is an **execution cell**, not a
+  boundary against hostile Python. Run only trusted code in it.
+- `backend="process"` is the **boundary mode**: the guest runs in a separate OS
+  process confined in depth by the kernel.
+- `backend="microvm"` is reserved and not yet implemented.
 
-| Actor                                           | Capabilities                                                         | Goal                                                 |
-| ----------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------- |
-| **Guest attacker**                              | Executes arbitrary Python bytecode inside a sandbox sub‑interpreter. | • Escalate into supervisor or host OS                |
-| • Read/modify data belonging to other sandboxes |                                                                      |                                                      |
-| • Exhaust shared resources (CPU / RAM / I/O)    |                                                                      |                                                      |
-| **Network adversary**                           | Can capture, replay, or inject broker frames over IPC/TCP.           | Hijack privileged RPCs; tamper or spoof audit trails |
-| **Malicious extension author**                  | Crafts a wheel with native code to break isolation.                  | Load arbitrary ELF, bypass policies                  |
+## 1  Threat model
 
-We **assume** the kernel and hardware are trusted and un‑compromised.  Kernel exploits or speculative‑execution side channels are *out of scope* (see §6).
+| Actor | Capabilities | Goal |
+| ----- | ------------ | ---- |
+| **Guest attacker** | Executes arbitrary Python bytecode inside a sandbox. | Escalate into the supervisor or host OS; read/modify other sandboxes' data; exhaust shared CPU/RAM/I/O. |
+| **Network adversary** | Can capture, replay, or inject broker frames over IPC/TCP. | Hijack privileged RPCs; tamper with or spoof audit trails. |
+| **Malicious extension author** | Crafts a wheel with native code to break isolation. | Load arbitrary ELF, bypass policies. |
+
+We **assume** the kernel and hardware are trusted and un-compromised. Kernel
+exploits and speculative-execution side channels are *out of scope* (see §4).
 
 ---
 
-## 2  Security guarantees
+## 2  Security guarantees
 
 ### Authoritative boundary statement
 
-PyIsolate uses **sub‑interpreters as execution cells** for scheduling and lifecycle, while the **actual security boundary is kernel/process level enforcement** (cgroups, eBPF/LSM, and broker mediation). Sub‑interpreters alone are not treated as a hard isolation boundary in production.
+The guarantees below apply to **`backend="process"`**. The sub-interpreter
+backend provides none of them against adversarial Python — its restricted
+builtins and import allow-list are bypassable guardrails, not a boundary.
 
-1. **Process containment** — Guest code cannot execute syscalls outside the eBPF allow‑list.
-2. **Memory safety** — Each interpreter is hard‑capped to its RAM quota at the allocator level; no guest can corrupt another’s heap.
-3. **Broker integrity & replay protection** — All control‑plane frames are AEAD‑sealed (X25519 → ChaCha20‑Poly1305) with strictly increasing counters; forged or replayed frames are dropped.
-4. **Policy hot‑reload atomicity** — Policy updates are applied with a RCU‑style swap; a sandbox sees either the old *or* the new rule‑set, never a mix.
-5. **Crash isolation** — Double‑faulting or segfault‑inducing code inside a sandboxed thread cannot bring down the supervisor (guarded by `pthread_sigmask` & alt‑stack guards).
+Each kernel layer is applied **best-effort** and recorded in the sandbox's
+confinement report; a host that lacks a layer keeps the others. In **hardened**
+rollout mode, a required-but-unavailable layer fails closed rather than degrading
+silently.
 
-Anything not listed above is *not* guaranteed.
+1. **Address-space isolation** — Guest code runs in a separate process and cannot
+   read or corrupt supervisor or sibling-sandbox memory. In-process Python
+   escapes (e.g. recovering the real `__import__` via `object.__subclasses__()`)
+   stay inside the guest process.
+2. **Syscall reduction** — `PR_SET_NO_NEW_PRIVS` plus a seccomp deny-list
+   (`SECCOMP_RET_KILL_PROCESS`) kills the guest on dangerous syscalls: `execve`,
+   `ptrace`, mount/namespace operations, `bpf`, kernel-module load,
+   `process_vm_readv`/`writev`, and others. x86-64 Linux. This is a robust
+   deny-list, **not** a proof that only a fixed syscall allow-list is reachable.
+3. **Filesystem policy** — Landlock confines the guest to the policy's read/write
+   paths, on kernels that support Landlock.
+4. **Coarse capability gating** — A per-cgroup eBPF/LSM `deny_mask` denies whole
+   capability classes (process creation, ptrace/mount/bpf, and filesystem or
+   network when the policy grants nothing in that class), on kernels with
+   BPF-LSM. This is coarse: it cannot express per-path allow-lists — that is
+   Landlock's job (§2.3) and the broker's.
+5. **Broker integrity & replay protection** — Control-plane frames are AEAD-sealed
+   (X25519 → HKDF-SHA-256 → ChaCha20-Poly1305, optional Kyber-768 hybrid) with a
+   strictly increasing per-direction counter; forged, reordered, or replayed
+   frames are rejected.
+6. **Crash isolation** — A crash in a guest process cannot bring down the
+   supervisor.
 
----
-
-## 3  Layered defence‑in‑depth
-
-### 3.1 Kernel eBPF guards
-
-* **LSM hooks** (`file_open`, `inode_unlink`, `socket_connect`) — path‑aware FS & net gating.
-* **cgroup programs** — per‑sandbox memory (`cgroup/mem`), CPU (`perf‑event`) & bandwidth limits.
-* **Tracepoint programs** — instant kill on `execve`, `ptrace`, `bpf()`, or other high‑risk syscalls.
-
-### 3.2 CPython hardening
-
-* **No‑GIL build** — removes the global interpreter lock; each sandbox runs on its own OS thread.
-* **Per‑interpreter arenas** — allocator instances are never shared; freelists are local.
-* **Stack canaries** — CPython compiled with `-fstack-protector-strong`.
-* **Control‑flow integrity** — built with `-fsanitize=cfi` to detect code‑reuse attacks.
-* **Builtin shrink‑wrap** — `__import__`, `open`, `ctypes`, `cffi`, `dlopen`, `mmap`, and `pickle` removed unless explicitly re‑enabled via policy.
-
-### 3.3 Crypto‑sealed broker
-
-* Noise‑like 1‑RTT handshake: `X25519` + optional `Kyber‑768` hybrid → HKDF‑SHA‑256.
-* Per‑frame AEAD: `ChaCha20‑Poly1305` (96‑bit nonce, 16‑byte tag).
-* 64‑bit monotone counter, stored in a lock‑free slab per channel; any rollback closes the channel.
-* Keys can be rotated by repeating the handshake; counters reset on success.
-
-### 3.4 Supervisor watchdog
-
-* Reads a perf‑ring buffer from `resource_guard.bpf`; sends `SIGXCPU` or `SIGTERM` on quota breach.
-* *Fail‑closed*: if the ringbuffer stalls → sandbox thread is cancelled.
+Resource quotas (CPU/RAM/I/O) are enforced by `rlimit` and cgroup v2 controls
+where available. Anything not listed above is *not* guaranteed.
 
 ---
 
-## 4  Out of scope / known limitations
+## 3  Layered defence-in-depth
 
-| Item                                                      | Rationale / Mitigation                                                            |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **Kernel exploits**                                       | Run PyIsolate inside a VM or micro‑VM if attacker is assumed to have 0‑day power. |
-| **Side‑channel leakage (L1/L3 cache, branch predictors)** | Use one process per tenant on highly sensitive workloads.                         |
-| **Cooperative multithreading abuse**                      | Scheduler starvation possible; employ cgroup CPU quotas.                          |
-| **Spectre v2**                                            | Mitigations inherit from host kernel; PyIsolate adds none.                        |
+### 3.1 Process boundary (`backend="process"`)
+
+The guest runs in a fresh interpreter in its own OS process, speaking a
+length-framed JSON protocol to the supervisor. Values crossing the boundary are
+JSON only — the supervisor never unpickles bytes produced by untrusted guest
+code. Confinement is applied before any guest code runs, in order:
+`no_new_privs` → `rlimit` → Landlock → seccomp.
+
+### 3.2 Kernel enforcement
+
+* **seccomp** deny-list — kills the process on high-risk syscalls; inherited
+  across `fork`/`clone` and irremovable once `no_new_privs` is set.
+* **Landlock** — filesystem access restricted to the policy's paths (kernels
+  with Landlock support).
+* **eBPF/LSM** — a per-cgroup `deny_mask` on `file_open`, `socket_connect`,
+  `task_alloc`, `bprm_check_security`, `ptrace`, `sb_mount`, and `bpf` hooks,
+  keyed by the sandbox's cgroup id (kernels with BPF-LSM).
+* **cgroup v2 / rlimit** — CPU, memory, and address-space caps; a supervisor
+  watchdog reads the `resource_guard` ring buffer and terminates sandboxes on
+  quota breach (fail-closed if the ring stalls).
+
+### 3.3 Crypto-sealed broker
+
+* X25519 key agreement (optional Kyber-768 hybrid) → HKDF-SHA-256, direction-
+  separated keys.
+* Per-frame ChaCha20-Poly1305 (96-bit counter nonce, 16-byte tag).
+* Strictly increasing per-direction counter; a rollback or gap rejects the frame.
+* Keys rotate by repeating the handshake; counters reset on success.
+
+### 3.4 Userspace guards (both backends)
+
+Import allow-listing and blocked builtins (`open`, `eval`, `exec`, …) are applied
+in every backend. Treat them as defense-in-depth and ergonomics, **not** as the
+boundary: in the sub-interpreter backend they are the *only* layer and are
+bypassable.
+
+### 3.5 Roadmap (not currently guaranteed)
+
+The following are targets, not present guarantees, and must not be relied on:
+no-GIL/free-threaded per-sandbox parallelism, per-interpreter allocator arenas,
+CPython built with `-fstack-protector-strong`/`-fsanitize=cfi`, path-aware
+(rather than coarse) eBPF filesystem/network matching, and the microVM backend.
+
+---
+
+## 4  Out of scope / known limitations
+
+| Item | Rationale / mitigation |
+| ---- | ---------------------- |
+| **Hostile Python under `backend="subinterpreter"`** | Not a boundary; use `backend="process"` or an external VM/container. |
+| **Hostile native extensions** (`ctypes`, `cffi`, `dlopen`, native wheels) | Deny by default; only allow vetted code. Native code can subvert interpreter-level assumptions. |
+| **Kernel exploits / verifier bypass** | Run inside a VM or microVM if the attacker is assumed to have 0-day power. |
+| **Side-channel leakage** (cache, branch predictor, Spectre) | Use one process per tenant on highly sensitive workloads; PyIsolate adds no microarchitectural mitigations. |
+| **Supervisor compromise** | The model is broken for all sandboxes in that process; no recovery guarantee. |
+| **Missing kernel features** | Each confinement layer degrades independently; use hardened rollout mode to fail closed instead. |
 
 ---
 
 ### Isolation hierarchy (recommended interpretation)
 
-1. **Sub‑interpreter**: execution cell only.
-2. **Thread**: scheduling/accounting unit.
-3. **Process + kernel policy**: primary production security boundary.
-4. **Container/microVM**: stronger boundary and recommended fallback for hostile multi‑tenant environments.
+1. **Sub-interpreter** — execution cell only; not a boundary against hostile code.
+2. **Thread** — scheduling/accounting unit.
+3. **Process + kernel policy** (`backend="process"`) — the production security
+   boundary.
+4. **Container / microVM** — stronger boundary and recommended for hostile
+   multi-tenant environments.
 
 ---
 
-## 5  Supported platforms
+## 5  Supported platforms
 
-* **Linux ≥ 6.6** (BPF‑LSM + BPF tokens).  CO‑RE objects ensure portability.
-* **x86‑64 & aarch64** tested in CI.
-* **cBPF‑only kernels** → fallback to Landlock + rlimit mode (reduced guarantees).
+* **seccomp deny-list**: x86-64 Linux.
+* **Landlock**: Linux kernels that expose the Landlock ABI (skipped otherwise).
+* **eBPF/LSM `deny_mask`**: kernels with BPF-LSM and cgroup v2.
+* Where a feature is unavailable, that layer is skipped and recorded in the
+  confinement report; the remaining layers still apply.
 
----
-
-## 6  Secure build & supply chain
-
-1. **Reproducible builds** — `nix flake` and Dockerfile produce identical SHA‑256 artefacts.
-2. **Statically‑linked libsodium** — version pinned; signatures verified.
-3. **eBPF bytecode** — compiled with `clang‑17`, stripped, SHA‑256 recorded in `bpf/manifest.lock`.
-4. **GitHub Actions** — signed artefacts (`cosign`), provenance uploaded to Supply‑Chain Levels for Software Artifacts (SLSA) workflow.
+Use `python -m pyisolate.conformance --grade` (or `pyisolate doctor --grade`) to
+see which guarantees are actually active on a given host.
 
 ---
 
-## 7  Vulnerability disclosure
+## 6  Secure build & supply chain
 
-*Email:* `security@pyisolate.dev`  (GPG key `0xBEEFDEADCAFEBABE`).
-
-We follow **RFC 9116**:
-`├── /.well‑known/security.txt` with contact & encryption info.
-
-| Severity                           | Response                              | Public disclosure         |
-| ---------------------------------- | ------------------------------------- | ------------------------- |
-| **Critical** (RCE, sandbox escape) | 24 h acknowledge, patch within 7 days | ≤ 72 h after fix released |
-| **High**                           | 72 h acknowledge, 14 days patch       | after next minor release  |
-| **Low / Informational**            | Best‑effort                           | Quarterly roll‑up         |
+`pyisolate-doctor` records installation provenance (Python build hash, no-GIL
+status, kernel features, BPF toolchain availability, deterministic-wheel policy
+flags). Reproducible-build, artifact-signing, and eBPF-bytecode-pinning
+workflows are roadmap items; do not assume signed or reproducible artifacts
+unless your own pipeline provides them.
 
 ---
 
-## 8  FAQ
+## 7  Vulnerability disclosure
+
+Please report suspected vulnerabilities through the repository's private security
+advisory process on GitHub rather than a public issue. Include a minimal
+reproduction and the affected backend and kernel features. We aim to acknowledge
+promptly and to disclose after a fix is available.
+
+---
+
+## 8  FAQ
 
 > **Q: Why not seccomp only?**
-> *A:* eBPF‑LSM lets us filter on path & arguments, not just syscall numbers.  See [Design](README.md#security‑model).
+> *A:* seccomp filters syscall numbers/arguments but not paths. Landlock adds
+> path-scoped filesystem enforcement, and eBPF/LSM adds per-cgroup capability
+> gating. The layers are complementary.
 
-> **Q: Does crypto add noticeable latency?**
-> *A:* Handshake ≈ 18 µs; per‑frame overhead < 400 ns on AVX2.
+> **Q: Is the sub-interpreter backend safe for untrusted code?**
+> *A:* No. Use `backend="process"`, ideally inside a VM or microVM for hostile
+> multi-tenant workloads.
 
 > **Q: Can I disable the broker and talk directly to the FS?**
-> *A:* No. That defeats the trust boundary. Write a plugin that proxies the operation through approved opcodes.
+> *A:* No. That defeats the trust boundary. Route the operation through an
+> approved broker capability.
