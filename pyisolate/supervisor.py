@@ -1,8 +1,11 @@
 """Supervisor agent.
 
-This module manages sandbox threads and serves as the entry point for spawning
-sandboxes. It is intentionally minimal and not security hardened. Real isolation
-requires eBPF enforcement which is not implemented here.
+This module manages sandboxes and is the entry point for spawning them. The
+security boundary depends on the backend: ``backend="subinterpreter"`` runs guest
+code in this process and is NOT a boundary against hostile Python, while
+``backend="process"`` runs it in a separate OS process confined by seccomp,
+Landlock, and a coarse eBPF/LSM deny-mask (see ``docs/threat-model.md``). Kernel
+layers are best-effort and degrade on hosts that lack them.
 """
 
 from __future__ import annotations
