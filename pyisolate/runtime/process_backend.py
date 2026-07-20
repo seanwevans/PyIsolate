@@ -27,6 +27,7 @@ import threading
 from typing import Any, Optional
 
 from .. import errors
+from ..policy.model import RuntimePolicy
 from .thread import Stats
 
 _LEN = struct.Struct("!I")
@@ -52,15 +53,15 @@ def _extract_fs_tcp(policy: Any) -> tuple[Optional[list[str]], Optional[list[str
     fs: Optional[list[str]] = None
     tcp: Optional[list[str]] = None
 
-    allow_fs = getattr(policy, "allow_fs", None)
-    allow_tcp = getattr(policy, "allow_tcp", None)
-    if allow_fs is not None or allow_tcp is not None:
-        if allow_fs:
-            fs = [rule.path for rule in allow_fs]
-        if allow_tcp:
-            tcp = [rule.destination for rule in allow_tcp]
+    if isinstance(policy, RuntimePolicy):
+        if policy.allow_fs:
+            fs = [rule.path for rule in policy.allow_fs]
+        if policy.allow_tcp:
+            tcp = [rule.destination for rule in policy.allow_tcp]
         return fs, tcp
 
+    # Legacy Policy: ``allow_fs``/``allow_tcp`` are *methods*, not rule
+    # collections, so read the plain ``.fs``/``.tcp`` string attributes.
     p_fs = getattr(policy, "fs", None)
     p_tcp = getattr(policy, "tcp", None)
     if p_fs:
@@ -68,6 +69,54 @@ def _extract_fs_tcp(policy: Any) -> tuple[Optional[list[str]], Optional[list[str
     if p_tcp:
         tcp = [str(item) for item in p_tcp]
     return fs, tcp
+
+
+def _extract_fs_read_write(
+    policy: Any,
+) -> tuple[Optional[list[str]], Optional[list[str]]]:
+    """Split policy filesystem paths into read-only and writable sets.
+
+    Used to build a Landlock ruleset that grants read on read paths and
+    read+write on write paths. Handles the compiled ``RuntimePolicy``
+    (``allow_fs`` rules with an ``access`` mode) and the legacy ``Policy``
+    (``ReadPath``/``WritePath`` capabilities plus ``.fs`` read+write paths).
+    """
+    if policy is None:
+        return None, None
+
+    read: list[str] = []
+    write: list[str] = []
+
+    if isinstance(policy, RuntimePolicy):
+        for rule in policy.allow_fs:
+            if getattr(rule, "access", "readwrite") == "read":
+                read.append(rule.path)
+            else:
+                write.append(rule.path)
+        return _dedupe_read_write(read, write)
+
+    for cap in getattr(policy, "capabilities", None) or []:
+        path = getattr(cap, "path", None)
+        if path is None:
+            continue
+        if getattr(cap, "kind", None) == "write_path":
+            write.append(str(path))
+        elif getattr(cap, "kind", None) == "read_path":
+            read.append(str(path))
+    for item in getattr(policy, "fs", None) or []:
+        write.append(str(item))
+    return _dedupe_read_write(read, write)
+
+
+def _dedupe_read_write(
+    read: list[str], write: list[str]
+) -> tuple[Optional[list[str]], Optional[list[str]]]:
+    # A write grant already implies read, so drop any read path that is also
+    # writable and de-duplicate each set (order-preserving).
+    write_unique = list(dict.fromkeys(write))
+    write_set = set(write_unique)
+    read_unique = [p for p in dict.fromkeys(read) if p not in write_set]
+    return (read_unique or None, write_unique or None)
 
 
 class ProcessSandbox:
@@ -84,6 +133,7 @@ class ProcessSandbox:
         cpu_seconds: Optional[int] = None,
         confine: bool = True,
         require_seccomp: bool = False,
+        require_landlock: bool = False,
     ) -> None:
         self.name = name
         self._backend = backend
@@ -109,6 +159,7 @@ class ProcessSandbox:
         self._confined = threading.Event()
 
         fs, tcp = _extract_fs_tcp(policy)
+        fs_read, fs_write = _extract_fs_read_write(policy)
 
         parent_sock, child_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
@@ -133,10 +184,13 @@ class ProcessSandbox:
                 "allowed_imports": allowed_imports,
                 "fs": fs,
                 "tcp": tcp,
+                "fs_read": fs_read,
+                "fs_write": fs_write,
                 "confine": confine,
                 "mem_bytes": mem_bytes,
                 "cpu_seconds": cpu_seconds,
                 "require_seccomp": require_seccomp,
+                "require_landlock": require_landlock,
             }
         )
 
