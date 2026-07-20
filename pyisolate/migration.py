@@ -16,6 +16,11 @@ from .supervisor import Sandbox
 _MAGIC = b"PYISOMIG1"
 _HEADER_LIMIT = 16 * 1024
 _DEFAULT_PORT = 8765
+# Checkpoints are JSON sandbox state plus AEAD overhead, so even generous
+# deployments stay far below this. The bound exists because the peer-declared
+# ``blob_len`` is read into memory *before* the HMAC can be verified; without
+# it an unauthenticated peer could make the endpoint buffer arbitrary amounts.
+DEFAULT_MAX_BLOB_LEN = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -126,6 +131,7 @@ def handle_migration_connection(
     key: bytes,
     *,
     restore_fn: Callable[[bytes, bytes], Sandbox] = restore,
+    max_blob_len: int = DEFAULT_MAX_BLOB_LEN,
 ) -> MigrationResponse:
     """Restore one checkpoint received from *conn* and send a response."""
     if len(key) != 32:
@@ -138,6 +144,8 @@ def handle_migration_connection(
         auth = header.get("auth")
         if isinstance(blob_len, bool) or not isinstance(blob_len, int) or blob_len < 0:
             raise MigrationProtocolError("invalid checkpoint length")
+        if blob_len > max_blob_len:
+            raise MigrationProtocolError("checkpoint exceeds maximum size")
         if not isinstance(auth, str):
             raise MigrationProtocolError("missing migration authenticator")
         blob = _read_exact(conn, blob_len)
@@ -154,14 +162,20 @@ def handle_migration_connection(
 
 
 def serve_migration_once(
-    host: str, key: bytes, *, restore_fn: Callable[[bytes, bytes], Sandbox] = restore
+    host: str,
+    key: bytes,
+    *,
+    restore_fn: Callable[[bytes, bytes], Sandbox] = restore,
+    max_blob_len: int = DEFAULT_MAX_BLOB_LEN,
 ) -> MigrationResponse:
     """Listen on *host* and handle a single migration request."""
     address = _parse_host(host)
     with socket.create_server(address) as server:
         conn, _peer = server.accept()
         with conn:
-            return handle_migration_connection(conn, key, restore_fn=restore_fn)
+            return handle_migration_connection(
+                conn, key, restore_fn=restore_fn, max_blob_len=max_blob_len
+            )
 
 
 def migrate(sandbox: Sandbox, host: str, key: bytes) -> MigrationResponse:
