@@ -57,6 +57,7 @@ pyisolate-doctor = "pyisolate.doctor:main"
 
 [project.optional-dependencies]
 pqcrypto = ["pqcrypto"]
+operator = ["kubernetes"]
 release = [
     "build",
     "twine",

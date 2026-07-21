@@ -3,6 +3,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 
 def load_operator():
     pkg = types.ModuleType("pyisolate")
@@ -32,6 +34,18 @@ def test_operator_module():
     assert hasattr(op, "run_operator")
     assert callable(op.run_operator)
     assert hasattr(op, "scale_sandboxes")
+
+
+def test_run_operator_without_kubernetes_gives_actionable_error():
+    try:
+        import kubernetes  # noqa: F401
+
+        pytest.skip("kubernetes is installed; missing-dependency path not exercised")
+    except ImportError:
+        pass
+    op = load_operator()
+    with pytest.raises(RuntimeError, match=r"pyisolate\[operator\]"):
+        op.run_operator()
 
 
 def test_operator_handles_relisted_added_and_modified(monkeypatch):
