@@ -1,0 +1,70 @@
+name: Release
+
+# Build the sdist + wheel on every tag, validate them, and publish to PyPI via
+# Trusted Publishing (OIDC — no long-lived API token stored in the repo). The
+# publish job is gated on the ``pypi`` GitHub Environment, so it does nothing
+# until a maintainer configures that environment and the matching Trusted
+# Publisher on PyPI; until then tagging still produces validated, downloadable
+# artifacts without pushing anything to the index.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build + validate distributions
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: python -m pip install -e .[release]
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(python -c 'import importlib.metadata as m; print(m.version("pyisolate"))')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "tag $tag does not match package version $version" >&2
+            exit 1
+          fi
+      - name: Check distribution metadata
+        run: python -m twine check dist/*
+      - name: Capture release provenance
+        run: pyisolate-doctor --json > dist/provenance.json || true
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: publish to PyPI (Trusted Publishing)
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pyisolate/
+    permissions:
+      id-token: write # required for OIDC Trusted Publishing
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Remove non-distribution artifacts
+        run: rm -f dist/provenance.json
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
