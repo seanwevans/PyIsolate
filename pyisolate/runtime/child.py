@@ -84,8 +84,13 @@ class _GuestChannel:
     """Guest-side implementations of the ``post``/``log``/``metric``/``request``
     cell operations that frame back to the supervisor process."""
 
-    def __init__(self, sock: socket.socket) -> None:
+    def __init__(
+        self, sock: socket.socket, capabilities: list[str] | None = None
+    ) -> None:
         self._sock = sock
+        # Names of the broker capabilities granted to this guest. ``request``
+        # is gated on membership, mirroring SandboxThread._request.
+        self._capabilities = set(capabilities or [])
 
     def post(self, message: Any) -> None:
         _send_frame(self._sock, {"ev": "post", "message": message})
@@ -103,11 +108,20 @@ class _GuestChannel:
         )
 
     def request(self, capability: str, action: str, payload: Any = None) -> None:
-        # Broker mediation for the process backend is not yet wired; deny by
-        # default rather than silently succeeding.
-        raise errors.PolicyError(
-            f"broker request {capability!r}/{action!r} is not available "
-            "for the process backend"
+        # Capability-gated broker mediation, mirroring SandboxThread._request:
+        # an ungranted capability is denied here; a granted one is framed across
+        # the boundary as a BrokerRequest the supervisor receives via recv().
+        # The guest never performs the privileged action itself.
+        if capability not in self._capabilities:
+            raise errors.PolicyError(f"capability request blocked: {capability}")
+        _send_frame(
+            self._sock,
+            {
+                "ev": "request",
+                "capability": capability,
+                "action": action,
+                "payload": payload or {},
+            },
         )
 
 
@@ -203,7 +217,7 @@ def _serve(sock: socket.socket) -> None:
         fs=bootstrap.get("fs"),
         tcp=bootstrap.get("tcp"),
     )
-    channel = _GuestChannel(sock)
+    channel = _GuestChannel(sock, bootstrap.get("capabilities"))
     guest_globals = _build_guest_globals(channel, allowed_imports)
 
     # Confine the process *before* any guest code runs. Everything this module
