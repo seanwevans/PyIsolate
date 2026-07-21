@@ -498,9 +498,11 @@ class Supervisor:
         support = _microvm.require_microvm_support()
         raise NotImplementedError(
             f"backend='microvm' prerequisites are present (VMM: "
-            f"{support.vmm_kind} at {support.vmm_path}, /dev/kvm accessible), but "
-            "the guest launcher and vsock transport are not yet implemented. "
-            "Use backend='process' for kernel-level confinement in the meantime."
+            f"{support.vmm_kind} at {support.vmm_path}, /dev/kvm accessible), and "
+            "the VMM launcher (MicroVMLauncher) can boot a guest, but the in-guest "
+            "agent and vsock cell transport are not yet implemented, so no cell "
+            "channel exists. Use backend='process' for kernel-level confinement "
+            "in the meantime."
         )
 
     def _spawn_process(

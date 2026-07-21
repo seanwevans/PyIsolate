@@ -22,9 +22,12 @@ which treats microVM as reserved and fail-closed.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -210,3 +213,104 @@ class MicroVMConfig:
                 "uds_path": self.vsock_uds_path,
             },
         }
+
+
+@dataclass
+class LaunchedMicroVM:
+    """A running VMM process and the on-disk artifacts backing it."""
+
+    process: "subprocess.Popen[bytes]"
+    workdir: str
+    config_path: str
+    api_socket: str
+    vsock_uds_path: str
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
+
+    def is_alive(self) -> bool:
+        return self.process.poll() is None
+
+
+class MicroVMLauncher:
+    """Materialize a guest config and manage the VMM process lifecycle.
+
+    This is the mechanical layer beneath a running microVM: it writes the
+    machine configuration to a per-VM working directory, builds the VMM command
+    line, spawns the process, and tears it down. It does **not** yet complete the
+    guest handshake -- the in-guest agent and the vsock cell transport are the
+    next increment -- so a launched VM has no cell channel and the supervisor
+    still refuses to hand back a usable sandbox.
+
+    Only Firecracker's command line is implemented; a ready host running another
+    supported VMM is reported as unimplemented rather than mis-launched.
+    """
+
+    def __init__(self, support: MicroVMSupport) -> None:
+        self._support = support
+
+    def build_command(self, config_path: str, api_socket: str) -> list[str]:
+        """Return the argv that boots *config_path* on the detected VMM."""
+        if self._support.vmm_path is None:
+            raise MicroVMUnavailable("no VMM available to launch")
+        if self._support.vmm_kind != "firecracker":
+            raise MicroVMUnavailable(
+                f"launching {self._support.vmm_kind!r} is not implemented yet; "
+                "only Firecracker is wired up"
+            )
+        return [
+            self._support.vmm_path,
+            "--api-sock",
+            api_socket,
+            "--config-file",
+            config_path,
+        ]
+
+    def _materialize_config(self, config: MicroVMConfig, workdir: str) -> str:
+        config_path = os.path.join(workdir, "vm-config.json")
+        with open(config_path, "w", encoding="utf-8") as handle:
+            json.dump(config.to_firecracker_json(), handle, indent=2, sort_keys=True)
+        return config_path
+
+    def launch(
+        self, config: MicroVMConfig, *, workdir: Optional[str] = None
+    ) -> LaunchedMicroVM:
+        """Write the config and start the VMM, returning a handle to it.
+
+        The caller owns the returned VM and must call :meth:`terminate` to stop
+        the process and remove the working directory.
+        """
+        owns_workdir = workdir is None
+        workdir = workdir or tempfile.mkdtemp(prefix="pyisolate-vm-")
+        try:
+            config_path = self._materialize_config(config, workdir)
+            api_socket = os.path.join(workdir, "firecracker.socket")
+            command = self.build_command(config_path, api_socket)
+            process: "subprocess.Popen[bytes]" = subprocess.Popen(
+                command, close_fds=True
+            )
+        except BaseException:
+            if owns_workdir:
+                shutil.rmtree(workdir, ignore_errors=True)
+            raise
+        return LaunchedMicroVM(
+            process=process,
+            workdir=workdir,
+            config_path=config_path,
+            api_socket=api_socket,
+            vsock_uds_path=config.vsock_uds_path,
+        )
+
+    @staticmethod
+    def terminate(vm: LaunchedMicroVM, *, timeout: float = 5.0) -> None:
+        """Stop the VMM process and remove its working directory."""
+        process = vm.process
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        shutil.rmtree(vm.workdir, ignore_errors=True)

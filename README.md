@@ -244,9 +244,10 @@ See [docs/execution-model.md](docs/execution-model.md). We keep this model small
 * **`backend="microvm"`** - the reserved hardware-VM boundary. The supervisor
   probes the host for a supported VMM (Firecracker, Cloud Hypervisor, QEMU) and
   an accessible `/dev/kvm`, and **fails closed** with a diagnostic naming what is
-  missing; when the host is capable it still refuses, because the guest launcher
-  and vsock transport are not yet implemented. It never degrades to a weaker
-  boundary.
+  missing. The VMM launcher (config materialization + process lifecycle) now
+  exists, but even on a capable host the backend still refuses, because the
+  in-guest agent and vsock cell transport are not yet implemented. It never
+  degrades to a weaker boundary.
 * **Broker** - sole path to privileged syscalls, sealed with AEAD (X25519 to
   ChaCha20-Poly1305) and strict per-direction replay counters.
 * **Fallback hardening** - even the process backend is defense-in-depth, not a

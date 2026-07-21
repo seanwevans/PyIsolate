@@ -44,8 +44,9 @@ high-assurance multitenancy, run one sandbox per process inside a VM or microVM.
 - **`backend="microvm"`** is the reserved hardware-VM boundary. The supervisor
   probes for a supported VMM (Firecracker, Cloud Hypervisor, QEMU) and an
   accessible `/dev/kvm` and **fails closed** with a diagnostic when they are
-  missing; even on a capable host it refuses, because the guest launcher and
-  vsock transport are not yet implemented. It never downgrades to a weaker
+  missing. The VMM launcher (config materialization + process lifecycle) now
+  exists, but even on a capable host it refuses, because the in-guest agent and
+  vsock cell transport are not yet implemented. It never downgrades to a weaker
   boundary.
 
 ---
