@@ -41,7 +41,12 @@ rollout mode a required-but-unavailable layer fails closed. Even at full
 strength this is **defense in depth, not a hardware VM boundary** — for
 high-assurance multitenancy, run one sandbox per process inside a VM or microVM.
 
-- **`backend="microvm"`** is reserved and not yet implemented; it fails closed.
+- **`backend="microvm"`** is the reserved hardware-VM boundary. The supervisor
+  probes for a supported VMM (Firecracker, Cloud Hypervisor, QEMU) and an
+  accessible `/dev/kvm` and **fails closed** with a diagnostic when they are
+  missing; even on a capable host it refuses, because the guest launcher and
+  vsock transport are not yet implemented. It never downgrades to a weaker
+  boundary.
 
 ---
 
