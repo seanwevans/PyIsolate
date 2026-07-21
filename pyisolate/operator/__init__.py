@@ -1,4 +1,5 @@
 """Kubernetes operator for PyIsolate sandboxes."""
+
 from __future__ import annotations
 
 import logging
@@ -15,8 +16,19 @@ logger = logging.getLogger(__name__)
 
 
 def run_operator(namespace: str = "default") -> None:
-    """Start the operator watch loop."""
-    from kubernetes import client, config, watch  # type: ignore
+    """Start the operator watch loop.
+
+    Requires the optional ``kubernetes`` client, which is not a core dependency.
+    Install it with ``pip install pyisolate[operator]``.
+    """
+    try:
+        from kubernetes import client, config, watch  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "the PyIsolate Kubernetes operator requires the 'kubernetes' "
+            "package, which is not installed. Install it with "
+            "`pip install pyisolate[operator]`."
+        ) from exc
 
     config.load_incluster_config()
     api = client.CustomObjectsApi()
