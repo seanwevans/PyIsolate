@@ -52,9 +52,8 @@ jobs:
         run: pytest -q tests/test_matrix_hardening.py -m "${{ matrix.slice }}"
 
   tests-no-gil:
-    name: no-gil race / py3.13t
+    name: no-gil axis + race / py3.13t
     runs-on: ubuntu-24.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -64,14 +63,23 @@ jobs:
         # cryptography/cffi cannot yet build wheels for the free-threaded 3.13
         # build, so a normal ``.[dev]`` install aborts before any test runs.
         # Install pyisolate without that dependency and rely on the suite's
-        # crypto stub (tests/conftest.py) so the race tests actually execute.
+        # crypto stub (tests/conftest.py) so the tests actually execute.
         # ``--no-deps`` skips *all* runtime deps, so re-add the pure-Python ones
         # the import path needs (pyyaml, platformdirs) -- everything declared in
         # ``project.dependencies`` except the unbuildable cryptography.
         run: |
           python -m pip install -e . --no-deps
           python -m pip install pytest pyyaml platformdirs
+      - name: Validate no-GIL readiness axis (must pass on the free-threaded build)
+        # Deterministic: asserts the axis classifies parallel-cell vs scheduled-
+        # compartment correctly and that the free-threaded build reports itself
+        # as such. A regression here is a real release-gate bug, not flakiness.
+        run: pytest -q tests/test_nogil.py
       - name: Run race tests under free-threaded build
+        # Concurrency stress can be timing-sensitive under free-threading; keep
+        # it advisory so a flaky race does not block, while the axis check above
+        # stays authoritative.
+        continue-on-error: true
         run: pytest -q tests/test_matrix_hardening.py -m "race and no_gil"
 
   tests-soak:
