@@ -29,7 +29,8 @@ answer below as conditional on the backend you select.
     dangerous syscalls (`execve`, `ptrace`, mount/namespace ops, `bpf`, kernel
     module load, `process_vm_*`, …) — x86-64 Linux;
   - **Landlock** filesystem rules derived from policy, where the kernel supports
-    it;
+    it, plus **Landlock TCP-egress** rules that allow-list the connect ports in
+    the policy (Landlock ABI >= 4 / Linux 6.7+; keyed on port, not address);
   - a **coarse per-cgroup eBPF/LSM deny-mask** (deny whole capability classes),
     where BPF-LSM is available;
   - `rlimit` and cgroup resource caps.
@@ -60,6 +61,9 @@ high-assurance multitenancy, run one sandbox per process inside a VM or microVM.
   - process isolation from the supervisor's address space,
   - a seccomp deny-list that kills the process on dangerous syscalls,
   - Landlock filesystem rules from policy (where supported),
+  - Landlock TCP-egress rules that deny connect() to any port the policy did
+    not allow-list (ABI >= 4; port-granular, a coarse backstop beneath the
+    userspace host:port guard),
   - a coarse per-cgroup eBPF/LSM deny-mask (where BPF-LSM is available),
   - broker-mediated privileged operations and per-sandbox resource limits.
 
@@ -196,6 +200,11 @@ Any semantic change to defended/not-defended status requires:
 
 ### History
 
+- **2026-07-21** — Added a Landlock TCP-egress layer to `backend="process"`:
+  where the kernel's Landlock ABI is >= 4, the policy's TCP allow-list is mapped
+  to allowed connect ports and the kernel denies egress to every other port,
+  backstopping the userspace host:port guard. Recorded in the confinement report
+  (`landlock_net` / `landlock_net_ports`).
 - **2026-07-20** — Made the hostile-Python answer backend-conditional. Landed a
   real `backend="process"` boundary: separate-process isolation, a seccomp
   deny-list with `no_new_privs`, Landlock filesystem enforcement from policy,

@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import errors
+from . import landlock as _landlock
 from .confine import apply_confinement
 from .thread import _SAFE_BUILTINS, _blocked_open, _make_importer, _thread_local
 
@@ -108,6 +109,24 @@ class _GuestChannel:
             f"broker request {capability!r}/{action!r} is not available "
             "for the process backend"
         )
+
+
+def _net_connect_ports(tcp: list[str] | None) -> list[int] | None:
+    """Derive the Landlock TCP-egress allow-list from the policy destinations.
+
+    Returns the list of allowed connect ports, or ``None`` to leave network
+    egress unrestricted by Landlock. Egress is restricted only when the policy
+    names a TCP allow-list *and* every destination carries a parseable port:
+    Landlock keys on port and is default-deny for ports it does not name, so an
+    allow-list we cannot represent exactly is left to the userspace host:port
+    guard rather than silently blocking a permitted destination.
+    """
+    if not tcp:
+        return None
+    ports, exact = _landlock.connect_ports_from_destinations(tcp)
+    if exact and ports:
+        return ports
+    return None
 
 
 def _install_guest_context(
@@ -196,6 +215,7 @@ def _serve(sock: socket.socket) -> None:
             cpu_seconds=bootstrap.get("cpu_seconds"),
             fs_read=bootstrap.get("fs_read"),
             fs_write=bootstrap.get("fs_write"),
+            net_connect_ports=_net_connect_ports(bootstrap.get("tcp")),
             require_seccomp=bool(bootstrap.get("require_seccomp", False)),
             require_landlock=bool(bootstrap.get("require_landlock", False)),
         )
@@ -208,6 +228,8 @@ def _serve(sock: socket.socket) -> None:
                 "rlimits": report.rlimits,
                 "landlock": report.landlock,
                 "landlock_rules": report.landlock_rules,
+                "landlock_net": report.landlock_net,
+                "landlock_net_ports": report.landlock_net_ports,
                 "skipped": report.skipped,
             },
         )
