@@ -118,5 +118,9 @@ def test_process_backend_unsupported_features_raise_not_implemented():
 
 
 def test_microvm_backend_remains_unimplemented():
-    with pytest.raises(RuntimeError):
+    # microVM is routed to a dedicated fail-closed admission path: it refuses
+    # with a diagnostic (MicroVMUnavailable, a SandboxError, when the host lacks
+    # a VMM/KVM; NotImplementedError when capable but the launcher is pending)
+    # rather than ever returning a working guest.
+    with pytest.raises((iso.SandboxError, NotImplementedError)):
         iso.spawn("proc-vm", backend="microvm")

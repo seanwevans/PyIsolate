@@ -193,7 +193,10 @@ def test_spawn_backend_is_explicit_subinterpreter():
 
 @pytest.mark.parametrize("backend", ["microvm"])
 def test_spawn_unimplemented_boundary_backends_fail_closed(backend):
-    with pytest.raises(NotImplementedError, match=backend):
+    # microVM fails closed with a diagnostic: MicroVMUnavailable (a SandboxError)
+    # when the host lacks a VMM/KVM, or NotImplementedError when the host is
+    # capable but the guest launcher is still pending.
+    with pytest.raises((iso.SandboxError, NotImplementedError), match=backend):
         iso.spawn(f"backend-{backend}", backend=backend)
 
 

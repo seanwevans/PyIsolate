@@ -24,6 +24,7 @@ from .errors import PolicyAuthError, TenantQuotaExceeded
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .policy import resolve_policy
+from .runtime import microvm as _microvm
 from .runtime.process_backend import ProcessSandbox
 from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
@@ -313,6 +314,11 @@ class Supervisor:
         """
         global NAME_PATTERN
         backend = _normalize_backend(backend)
+        if backend == "microvm":
+            # Dedicated fail-closed path: probe for a real VMM/KVM boundary and
+            # refuse with an actionable diagnostic rather than the generic
+            # not-implemented error. The launcher itself is still pending.
+            return self._spawn_microvm(name)
         _require_implemented_backend(backend)
         if not isinstance(name, str) or not name:
             raise ValueError("Sandbox name must be non-empty string")
@@ -478,6 +484,24 @@ class Supervisor:
             if strict:
                 raise
             logger.debug("sandbox_policy map update skipped for %s", cg_path)
+
+    def _spawn_microvm(self, name: str) -> Sandbox:
+        """Admit a microVM sandbox, failing closed until the launcher lands.
+
+        Probes the host for a usable VMM and KVM. When the boundary cannot be
+        established the caller gets a precise :class:`MicroVMUnavailable` naming
+        every missing prerequisite. When the host *is* capable, we still refuse
+        with :class:`NotImplementedError`, because the guest boot and vsock
+        transport are not yet wired -- but the refusal is honest about why,
+        instead of degrading to a weaker boundary.
+        """
+        support = _microvm.require_microvm_support()
+        raise NotImplementedError(
+            f"backend='microvm' prerequisites are present (VMM: "
+            f"{support.vmm_kind} at {support.vmm_path}, /dev/kvm accessible), but "
+            "the guest launcher and vsock transport are not yet implemented. "
+            "Use backend='process' for kernel-level confinement in the meantime."
+        )
 
     def _spawn_process(
         self,
@@ -709,7 +733,10 @@ def _get_supervisor() -> Supervisor:
 def spawn(*args, **kwargs):
     if "backend" in kwargs:
         backend = _normalize_backend(kwargs["backend"])
-        _require_implemented_backend(backend)
+        # microVM has a dedicated fail-closed path in Supervisor.spawn that
+        # reports *why* it is unavailable; let it through the generic guard.
+        if backend != "microvm":
+            _require_implemented_backend(backend)
         kwargs["backend"] = backend
     return _get_supervisor().spawn(*args, **kwargs)
 
