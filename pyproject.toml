@@ -2,12 +2,45 @@
 name = "pyisolate"
 version = "0.0.1"
 description = "Prototype PyIsolate sandbox; kernel enforcement and no-GIL support are experimental roadmap items"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "PyIsolate" }]
 requires-python = ">=3.11"
+keywords = [
+    "sandbox",
+    "isolation",
+    "security",
+    "seccomp",
+    "landlock",
+    "ebpf",
+    "sub-interpreter",
+    "no-gil",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+]
 dependencies = ["pyyaml", "cryptography", "platformdirs"]
 
+[project.urls]
+Homepage = "https://github.com/seanwevans/pyisolate"
+Repository = "https://github.com/seanwevans/pyisolate"
+Issues = "https://github.com/seanwevans/pyisolate/issues"
+Changelog = "https://github.com/seanwevans/pyisolate/blob/main/ROADMAP.md"
+
 [build-system]
-requires = ["setuptools>=64"]
+# setuptools >= 77 emits PEP 639 license metadata (License-Expression /
+# License-File) that twine check and modern PyPI validate cleanly.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

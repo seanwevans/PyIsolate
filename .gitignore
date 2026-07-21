@@ -4,3 +4,5 @@ __pycache__/
 *.bpf.o
 *.egg-info/
 .env/
+/dist/
+/build/

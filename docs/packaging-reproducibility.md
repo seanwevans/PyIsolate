@@ -78,3 +78,29 @@ Suggested release flow:
 
 Persist `pyisolate-doctor` output next to signatures to tie artifacts back to an
 exact interpreter + kernel environment.
+
+## 7) Automated PyPI publishing
+
+`.github/workflows/release.yml` builds, validates, and (optionally) publishes the
+package. It runs on any `v*` tag and on manual `workflow_dispatch`:
+
+- **build job** — installs `.[release]`, runs `python -m build`, asserts the tag
+  matches the package version, runs `twine check dist/*`, captures
+  `pyisolate-doctor --json` provenance, and uploads `dist/` as a workflow
+  artifact. This job needs no secrets, so tagging always yields validated,
+  downloadable distributions.
+- **publish job** — runs only for tag pushes, is gated on the `pypi` GitHub
+  Environment, and uploads via **PyPI Trusted Publishing** (OIDC). No API token
+  is stored in the repository.
+
+To enable publishing:
+
+1. On PyPI, add a *Trusted Publisher* for the project pointing at this repo,
+   the `Release` workflow, and the `pypi` environment.
+2. In GitHub, create an Environment named `pypi` (add reviewers/branch
+   protection if you want a manual approval gate before upload).
+3. Bump `version` in `pyproject.toml`, commit, then push a matching `vX.Y.Z`
+   tag. The version-match check fails the build if the tag and metadata differ.
+
+Until the Trusted Publisher and environment exist, the publish job is a no-op
+gate and only the build/validation job runs.
