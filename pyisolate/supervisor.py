@@ -57,10 +57,9 @@ def _normalize_backend(backend: str) -> BackendMode:
 def _require_implemented_backend(backend: BackendMode) -> None:
     if backend in IMPLEMENTED_BACKENDS:
         return
+    implemented = ", ".join(repr(b) for b in IMPLEMENTED_BACKENDS)
     raise NotImplementedError(
-        f"backend={backend!r} is an explicit isolation mode, but this build only "
-        "implements backend='subinterpreter'. Use an external process or microVM "
-        "launcher until the native backend is available."
+        f"backend={backend!r} is not implemented; this build implements {implemented}."
     )
 
 
