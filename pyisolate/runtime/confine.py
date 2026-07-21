@@ -118,6 +118,8 @@ class ConfinementReport:
     rlimits: list[str] = field(default_factory=list)
     landlock: bool = False
     landlock_rules: int = 0
+    landlock_net: bool = False
+    landlock_net_ports: int = 0
     skipped: list[str] = field(default_factory=list)
 
 
@@ -220,20 +222,31 @@ def _apply_landlock(
     *,
     fs_read: list[str] | None,
     fs_write: list[str] | None,
+    net_connect_ports: list[int] | None,
     require_landlock: bool,
 ) -> None:
-    # Only restrict the filesystem when the policy actually names paths; without
-    # an allow-list a default-deny ruleset would just break the interpreter.
-    if not fs_read and not fs_write:
+    # Only handle an access class when the policy actually names an allow-list;
+    # without one a default-deny ruleset would break the interpreter (FS) or
+    # sever egress the policy meant to permit (network).
+    if not fs_read and not fs_write and not net_connect_ports:
         return
     landlock_report = _landlock.apply_landlock(
-        fs_read, fs_write, require=require_landlock
+        fs_read,
+        fs_write,
+        connect_ports=net_connect_ports,
+        require=require_landlock,
     )
     if landlock_report.applied:
         report.landlock = True
         report.landlock_rules = landlock_report.rules
-    else:
+    elif fs_read or fs_write:
         report.skipped.append(f"landlock:{landlock_report.skipped}")
+    if landlock_report.net_applied:
+        report.landlock_net = True
+        report.landlock_net_ports = landlock_report.net_rules
+    elif net_connect_ports:
+        reason = landlock_report.net_skipped or landlock_report.skipped
+        report.skipped.append(f"landlock_net:{reason}")
 
 
 def apply_confinement(
@@ -242,6 +255,7 @@ def apply_confinement(
     cpu_seconds: int | None = None,
     fs_read: list[str] | None = None,
     fs_write: list[str] | None = None,
+    net_connect_ports: list[int] | None = None,
     seccomp: bool = True,
     require_seccomp: bool = False,
     require_landlock: bool = False,
@@ -249,8 +263,8 @@ def apply_confinement(
     """Confine the *current* process before it runs guest code.
 
     Order matters: ``no_new_privs`` is set first (required by both Landlock and
-    seccomp), then resource limits, then the Landlock filesystem ruleset, and
-    finally the seccomp filter as the last lockdown step. ``require_*`` turns an
+    seccomp), then resource limits, then the Landlock filesystem/TCP-egress
+    ruleset, and finally the seccomp filter as the last lockdown step. ``require_*`` turns an
     unsupported platform or a failed install into a raised error instead of a
     best-effort skip recorded in the report.
     """
@@ -262,6 +276,7 @@ def apply_confinement(
         report,
         fs_read=fs_read,
         fs_write=fs_write,
+        net_connect_ports=net_connect_ports,
         require_landlock=require_landlock,
     )
 

@@ -18,6 +18,7 @@ import pytest
 
 import pyisolate as iso
 from pyisolate.runtime import landlock
+from pyisolate.runtime.child import _net_connect_ports
 from pyisolate.runtime.process_backend import (
     _extract_fs_read_write,
     _extract_fs_tcp,
@@ -26,6 +27,20 @@ from pyisolate.runtime.process_backend import (
 requires_landlock = pytest.mark.skipif(
     not landlock.landlock_supported(),
     reason="kernel does not support Landlock",
+)
+
+requires_landlock_net = pytest.mark.skipif(
+    not landlock.net_supported(),
+    reason="kernel does not support Landlock network rules (ABI < 4)",
+)
+
+live_landlock_net = pytest.mark.skipif(
+    not (
+        landlock.net_supported()
+        and os.environ.get("PYISOLATE_LIVE_LANDLOCK_TESTS") == "1"
+    ),
+    reason="live Landlock network test requires ABI >= 4 and "
+    "PYISOLATE_LIVE_LANDLOCK_TESTS=1",
 )
 
 live_landlock = pytest.mark.skipif(
@@ -124,6 +139,134 @@ def _real_open(path):
     raise RuntimeError("no real open")
 post(_real_open({path!r}).read())
 """
+
+
+def test_handled_access_net_is_masked_by_abi():
+    # TCP network rules only exist from ABI 4; requesting them earlier makes
+    # landlock_create_ruleset reject the ruleset.
+    assert landlock.handled_access_net(3) == 0
+    assert landlock.handled_access_net(4) == landlock.ACCESS_NET["CONNECT_TCP"]
+    assert landlock.handled_access_net(6) & landlock.ACCESS_NET["CONNECT_TCP"]
+    # Only egress (connect) is confined by this layer; bind is out of scope.
+    assert not landlock.handled_access_net(4) & landlock.ACCESS_NET["BIND_TCP"]
+
+
+def test_net_port_attr_and_ruleset_attr_net_layout():
+    import ctypes
+
+    # struct landlock_net_port_attr is two u64s (allowed_access, port).
+    assert ctypes.sizeof(landlock._NetPortAttr) == 16
+    # struct landlock_ruleset_attr with handled_access_net is two u64s; passing
+    # this larger struct is only valid on an ABI >= 4 kernel.
+    assert ctypes.sizeof(landlock._RulesetAttrNet) == 16
+
+
+def test_net_supported_matches_abi():
+    assert landlock.net_supported() == (landlock.abi_version() >= 4)
+
+
+def test_connect_ports_from_destinations_parses_and_dedupes():
+    ports, exact = landlock.connect_ports_from_destinations(
+        ["1.2.3.4:443", "example.com:80", "10.0.0.1:443"]
+    )
+    # 443 appears twice but is de-duplicated; order is preserved.
+    assert ports == [443, 80]
+    assert exact is True
+
+
+def test_connect_ports_from_destinations_flags_unparseable():
+    # A bare hostname has no port to allow-list, so the result is inexact and
+    # the caller must not build a default-deny network ruleset from it.
+    ports, exact = landlock.connect_ports_from_destinations(
+        ["example.com", "1.2.3.4:443"]
+    )
+    assert ports == [443]
+    assert exact is False
+
+
+def test_connect_ports_from_destinations_rejects_out_of_range():
+    ports, exact = landlock.connect_ports_from_destinations(["h:0", "h:70000"])
+    assert ports == []
+    assert exact is False
+
+
+def test_net_connect_ports_helper_gates_on_exactness():
+    # No allow-list -> no network Landlock at all.
+    assert _net_connect_ports(None) is None
+    assert _net_connect_ports([]) is None
+    # A fully-parseable allow-list yields the port set.
+    assert _net_connect_ports(["1.2.3.4:443", "h:80"]) == [443, 80]
+    # Any unrepresentable entry degrades to the userspace guard (None), rather
+    # than a kernel rule that would block the permitted-but-portless entry.
+    assert _net_connect_ports(["example.com", "1.2.3.4:443"]) is None
+
+
+def test_apply_landlock_net_required_but_unsupported_raises():
+    if landlock.net_supported():
+        pytest.skip("kernel supports Landlock net; skip the required-failure check")
+    with pytest.raises(RuntimeError):
+        landlock.apply_landlock(None, None, connect_ports=[443], require=True)
+
+
+@requires_landlock_net
+def test_process_sandbox_reports_landlock_net_applied():
+    policy = iso.policy.Policy().allow_tcp("127.0.0.1:9")
+    with iso.spawn("ll-net-applied", policy=policy, backend="process") as sb:
+        report = sb._thread.wait_confined(timeout=5)
+        assert report is not None
+        assert report["landlock_net"] is True
+        assert report["landlock_net_ports"] >= 1
+
+
+# Recover a real socket and attempt a TCP connect, bypassing the userspace
+# network guard, so the test exercises Landlock (the kernel layer) rather than
+# the Python guard.
+_REAL_CONNECT = """
+import socket
+def _connect(host, port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2)
+    try:
+        s.connect((host, port))
+    finally:
+        s.close()
+_connect({host!r}, {port!r})
+post("connected")
+"""
+
+
+@live_landlock_net
+def test_landlock_blocks_disallowed_ports_but_allows_permitted():
+    import socket as _socket
+    import threading
+
+    server = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    allowed_port = server.getsockname()[1]
+
+    def _accept_loop():
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            conn.close()
+
+    threading.Thread(target=_accept_loop, daemon=True).start()
+
+    policy = iso.policy.Policy().allow_tcp(f"127.0.0.1:{allowed_port}")
+    with iso.spawn(
+        "ll-net-enforce", policy=policy, backend="process", allowed_imports=["socket"]
+    ) as sb:
+        # Connecting to the allow-listed port is permitted by Landlock.
+        sb.exec(_REAL_CONNECT.format(host="127.0.0.1", port=allowed_port))
+        assert sb.recv(timeout=5) == "connected"
+        # A port the policy never named is denied at the kernel level.
+        sb.exec(_REAL_CONNECT.format(host="127.0.0.1", port=allowed_port + 1))
+        with pytest.raises(iso.SandboxError):
+            sb.recv(timeout=5)
+    server.close()
 
 
 @live_landlock

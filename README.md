@@ -234,7 +234,9 @@ See [docs/execution-model.md](docs/execution-model.md). We keep this model small
   * `PR_SET_NO_NEW_PRIVS` + a seccomp deny-list that kills the process on
     dangerous syscalls (`execve`, `ptrace`, mount/namespace ops, `bpf`, module
     load, `process_vm_*`, ...) - x86-64 Linux;
-  * **Landlock** filesystem rules from policy, where the kernel supports it;
+  * **Landlock** filesystem rules from policy, plus **Landlock TCP-egress**
+    rules (ABI ≥ 4) that deny `connect()` to any port outside the policy's
+    allow-list, where the kernel supports it;
   * a coarse per-cgroup **eBPF/LSM** `deny_mask`, where BPF-LSM is available;
   * `rlimit` and cgroup resource caps.
   Each kernel layer is best-effort and recorded in the sandbox's confinement

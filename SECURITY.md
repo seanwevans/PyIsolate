@@ -48,16 +48,21 @@ silently.
    deny-list, **not** a proof that only a fixed syscall allow-list is reachable.
 3. **Filesystem policy** — Landlock confines the guest to the policy's read/write
    paths, on kernels that support Landlock.
-4. **Coarse capability gating** — A per-cgroup eBPF/LSM `deny_mask` denies whole
+4. **Network-egress policy** — On Landlock ABI >= 4 (Linux 6.7+) the policy's TCP
+   allow-list is mapped to allowed `connect()` ports and the kernel denies egress
+   to every other port. Landlock keys network rules on port, not address, so this
+   is a coarse kernel backstop beneath the userspace host:port guard; it is
+   applied only when every allow-listed destination carries a parseable port.
+5. **Coarse capability gating** — A per-cgroup eBPF/LSM `deny_mask` denies whole
    capability classes (process creation, ptrace/mount/bpf, and filesystem or
    network when the policy grants nothing in that class), on kernels with
    BPF-LSM. This is coarse: it cannot express per-path allow-lists — that is
    Landlock's job (§2.3) and the broker's.
-5. **Broker integrity & replay protection** — Control-plane frames are AEAD-sealed
+6. **Broker integrity & replay protection** — Control-plane frames are AEAD-sealed
    (X25519 → HKDF-SHA-256 → ChaCha20-Poly1305, optional Kyber-768 hybrid) with a
    strictly increasing per-direction counter; forged, reordered, or replayed
    frames are rejected.
-6. **Crash isolation** — A crash in a guest process cannot bring down the
+7. **Crash isolation** — A crash in a guest process cannot bring down the
    supervisor.
 
 Resource quotas (CPU/RAM/I/O) are enforced by `rlimit` and cgroup v2 controls
@@ -79,7 +84,8 @@ code. Confinement is applied before any guest code runs, in order:
 
 * **seccomp** deny-list — kills the process on high-risk syscalls; inherited
   across `fork`/`clone` and irremovable once `no_new_privs` is set.
-* **Landlock** — filesystem access restricted to the policy's paths (kernels
+* **Landlock** — filesystem access restricted to the policy's paths, and (ABI
+  >= 4) TCP `connect()` restricted to the policy's allow-listed ports (kernels
   with Landlock support).
 * **eBPF/LSM** — a per-cgroup `deny_mask` on `file_open`, `socket_connect`,
   `task_alloc`, `bprm_check_security`, `ptrace`, `sb_mount`, and `bpf` hooks,
