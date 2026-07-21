@@ -112,11 +112,13 @@ class ConformanceSuite:
         quota_enforcement = self._probe_timeout_and_kill_behavior()
         ebpf_lsm = self._probe_ebpf_lsm(bpf_availability)
         landlock_fallback = self._probe_landlock_fallback(ebpf_lsm.passed)
+        landlock_net_egress = self._probe_landlock_net_egress()
         no_gil_extension_safety = self._probe_no_gil_extension_safety(
             python_build, policy_enforcement
         )
         broker_crypto = self._probe_broker_crypto()
         crash_isolation = self._probe_crash_isolation()
+        microvm_ready = self._probe_microvm_readiness()
 
         probe_components = [
             (
@@ -133,6 +135,12 @@ class ConformanceSuite:
                 "Landlock fallback",
                 landlock_fallback,
                 landlock_fallback.passed,
+            ),
+            (
+                "landlock_net_egress",
+                "Landlock network egress",
+                landlock_net_egress,
+                landlock_net_egress.passed,
             ),
             (
                 "no_gil_extension_safety",
@@ -152,6 +160,12 @@ class ConformanceSuite:
                 "crash isolation",
                 crash_isolation,
                 crash_isolation.passed,
+            ),
+            (
+                "microvm_ready",
+                "microVM readiness",
+                microvm_ready,
+                microvm_ready.passed,
             ),
         ]
         components = [
@@ -334,6 +348,41 @@ class ConformanceSuite:
                 "fallback_active": available and not ebpf_lsm_active,
                 "ebpf_lsm_active": ebpf_lsm_active,
             },
+        )
+
+    def _probe_landlock_net_egress(self) -> ProbeResult:
+        from pyisolate.runtime import landlock
+
+        abi = landlock.abi_version()
+        supported = landlock.net_supported()
+        return ProbeResult(
+            name="landlock_net_egress",
+            passed=supported,
+            required=False,
+            details=(
+                "Landlock TCP-egress rules confine process-backend connect() to "
+                "the policy's ports (Landlock ABI >= 4)"
+            ),
+            evidence={
+                "landlock_abi": abi,
+                "net_supported": supported,
+                "min_abi": 4,
+            },
+        )
+
+    def _probe_microvm_readiness(self) -> ProbeResult:
+        from pyisolate.runtime import microvm
+
+        support = microvm.detect_microvm_support()
+        return ProbeResult(
+            name="microvm_ready",
+            passed=support.ready,
+            required=False,
+            details=(
+                "A supported VMM and an accessible /dev/kvm are present, so the "
+                "microVM hardware boundary can be launched"
+            ),
+            evidence=support.as_dict(),
         )
 
     def _probe_cgroup_behavior(self) -> ProbeResult:
