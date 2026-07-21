@@ -261,7 +261,13 @@ boundary statement.
 
 ---
 
-## Performance snapshot *(Ryzen 7950X, Linux 6.9)*
+## Performance snapshot
+
+These are indicative figures from one reference machine *(Ryzen 7950X, Linux
+6.9, sub-interpreter backend)* — hardware-, kernel-, and build-dependent, and
+**not** a benchmark to copy into a comparison. Reproduce them on your own host
+with `python scripts/benchmark.py` (add `--backend process` for the process
+boundary); the encrypted-throughput and RSS rows are not yet covered by it.
 
 | Metric                  | Value   |
 | ----------------------- | ------- |
