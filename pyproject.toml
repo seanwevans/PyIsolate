@@ -35,7 +35,7 @@ dependencies = ["pyyaml", "cryptography", "platformdirs"]
 Homepage = "https://github.com/seanwevans/pyisolate"
 Repository = "https://github.com/seanwevans/pyisolate"
 Issues = "https://github.com/seanwevans/pyisolate/issues"
-Changelog = "https://github.com/seanwevans/pyisolate/blob/main/ROADMAP.md"
+Changelog = "https://github.com/seanwevans/pyisolate/blob/main/CHANGELOG.md"
 
 [build-system]
 # setuptools >= 77 emits PEP 639 license metadata (License-Expression /
