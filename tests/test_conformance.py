@@ -125,13 +125,25 @@ def test_grade_report_scores_named_guarantees(monkeypatch):
         "_probe_crash_isolation",
         lambda self: ProbeResult("crash_isolation", True, True, "crash ok", {}),
     )
+    monkeypatch.setattr(
+        ConformanceSuite,
+        "_probe_landlock_net_egress",
+        lambda self: ProbeResult(
+            "landlock_net_egress", False, False, "no net egress", {}
+        ),
+    )
+    monkeypatch.setattr(
+        ConformanceSuite,
+        "_probe_microvm_readiness",
+        lambda self: ProbeResult("microvm_ready", False, False, "no kvm", {}),
+    )
     monkeypatch.setattr("pyisolate.conformance.sys.version_info", (3, 13, 0))
 
     report = ConformanceSuite().grade()
     payload = report.to_dict()
 
     assert report.score == 7
-    assert report.max_score == 8
+    assert report.max_score == 10
     assert payload["active_guarantees"] == [
         "free_threading",
         "ebpf_lsm",
@@ -141,17 +153,65 @@ def test_grade_report_scores_named_guarantees(monkeypatch):
         "quota_enforcement",
         "crash_isolation",
     ]
-    assert payload["inactive_guarantees"] == ["landlock_fallback"]
+    assert payload["inactive_guarantees"] == [
+        "landlock_fallback",
+        "landlock_net_egress",
+        "microvm_ready",
+    ]
     assert [component["label"] for component in payload["components"]] == [
         "free-threading",
         "eBPF-LSM",
         "cgroup v2",
         "Landlock fallback",
+        "Landlock network egress",
         "no-GIL extension safety",
         "broker crypto",
         "quota enforcement",
         "crash isolation",
+        "microVM readiness",
     ]
+
+
+def test_probe_landlock_net_egress_reflects_support(monkeypatch):
+    from pyisolate.runtime import landlock
+
+    suite = ConformanceSuite()
+    monkeypatch.setattr(landlock, "abi_version", lambda: 4)
+    monkeypatch.setattr(landlock, "net_supported", lambda: True)
+    result = suite._probe_landlock_net_egress()
+    assert result.name == "landlock_net_egress"
+    assert result.passed is True
+    assert result.evidence["landlock_abi"] == 4
+    assert result.evidence["min_abi"] == 4
+
+    monkeypatch.setattr(landlock, "net_supported", lambda: False)
+    assert suite._probe_landlock_net_egress().passed is False
+
+
+def test_probe_microvm_readiness_reflects_support(monkeypatch):
+    from pyisolate.runtime import microvm
+
+    suite = ConformanceSuite()
+    monkeypatch.setattr(
+        microvm,
+        "detect_microvm_support",
+        lambda: microvm.MicroVMSupport(
+            vmm_kind="firecracker", vmm_path="/usr/bin/firecracker", kvm=True
+        ),
+    )
+    result = suite._probe_microvm_readiness()
+    assert result.name == "microvm_ready"
+    assert result.passed is True
+    assert result.evidence["vmm_kind"] == "firecracker"
+
+    monkeypatch.setattr(
+        microvm,
+        "detect_microvm_support",
+        lambda: microvm.MicroVMSupport(
+            vmm_kind=None, vmm_path=None, kvm=False, reasons=("no vmm",)
+        ),
+    )
+    assert suite._probe_microvm_readiness().passed is False
 
 
 def test_conformance_cli_grade(monkeypatch, capsys):

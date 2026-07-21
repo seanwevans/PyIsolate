@@ -156,11 +156,12 @@ python -m pyisolate.conformance --grade
 pyisolate-doctor --grade
 ```
 
-The `--grade` output replaces a vague secure/insecure claim with an 8-point
+The `--grade` output replaces a vague secure/insecure claim with a 10-point
 score over the guarantees that are actually active on the host: free-threading,
-eBPF-LSM, cgroup v2, Landlock fallback, no-GIL extension safety, broker crypto,
-quota enforcement, and crash isolation. Use it in CI or admission checks to
-attach evidence to each guarantee rather than relying on a single pass/fail bit.
+eBPF-LSM, cgroup v2, Landlock fallback, Landlock network egress, no-GIL extension
+safety, broker crypto, quota enforcement, crash isolation, and microVM readiness.
+Use it in CI or admission checks to attach evidence to each guarantee rather than
+relying on a single pass/fail bit.
 
 ### Policy editor
 
