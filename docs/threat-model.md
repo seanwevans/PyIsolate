@@ -205,6 +205,13 @@ Any semantic change to defended/not-defended status requires:
 
 ### History
 
+- **2026-07-21** — Wired capability-gated broker mediation into
+  `backend="process"`: the guest's `request` cell op is denied unless the named
+  capability was granted, and a permitted request crosses the boundary as a
+  `BrokerRequest` for supervisor mediation (previously the process backend
+  denied all `request` calls). This makes the "broker-mediated privileged
+  operations" layer real for the process backend, matching the sub-interpreter
+  backend's semantics.
 - **2026-07-21** — Added a Landlock TCP-egress layer to `backend="process"`:
   where the kernel's Landlock ABI is >= 4, the policy's TCP allow-list is mapped
   to allowed connect ports and the kernel denies egress to every other port,

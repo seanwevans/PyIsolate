@@ -28,6 +28,7 @@ from typing import Any, Optional
 
 from .. import errors
 from ..policy.model import RuntimePolicy
+from .protocol import BrokerRequest
 from .thread import Stats
 
 _LEN = struct.Struct("!I")
@@ -128,6 +129,7 @@ class ProcessSandbox:
         *,
         policy: Any = None,
         allowed_imports: Optional[list[str]] = None,
+        capabilities: Optional[dict[str, Any]] = None,
         backend: str = "process",
         mem_bytes: Optional[int] = None,
         cpu_seconds: Optional[int] = None,
@@ -160,6 +162,10 @@ class ProcessSandbox:
 
         fs, tcp = _extract_fs_tcp(policy)
         fs_read, fs_write = _extract_fs_read_write(policy)
+        # The child gates broker ``request`` on the granted capability names,
+        # mirroring the sub-interpreter backend; only the names cross the
+        # boundary, never the capability's secret material.
+        capability_names = sorted(capabilities) if capabilities else []
 
         parent_sock, child_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
@@ -182,6 +188,7 @@ class ProcessSandbox:
                 "op": "bootstrap",
                 "name": name,
                 "allowed_imports": allowed_imports,
+                "capabilities": capability_names,
                 "fs": fs,
                 "tcp": tcp,
                 "fs_read": fs_read,
@@ -256,6 +263,17 @@ class ProcessSandbox:
         elif ev == "error":
             self._errors += 1
             self._outbox.put(self._rebuild_exception(frame))
+        elif ev == "request":
+            # A capability-gated broker request from the guest. Surface it as a
+            # BrokerRequest via recv(), matching the sub-interpreter backend, so
+            # the supervisor mediates the privileged action instead of the guest.
+            self._outbox.put(
+                BrokerRequest(
+                    capability=frame.get("capability", ""),
+                    action=frame.get("action", ""),
+                    payload=frame.get("payload") or {},
+                )
+            )
         elif ev == "confinement":
             self.confinement = frame
             self._confined.set()

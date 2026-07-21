@@ -117,6 +117,38 @@ def test_process_backend_unsupported_features_raise_not_implemented():
             sb.snapshot()
 
 
+def test_process_backend_broker_request_granted():
+    from pyisolate.runtime.protocol import BrokerRequest
+
+    caps = {"network": {"destinations": ["example.com:443"]}}
+    with iso.spawn("proc-broker", backend="process", capabilities=caps) as sb:
+        sb.exec("request('network', 'connect', {'host': 'example.com', 'port': 443})")
+        req = sb.recv(timeout=5)
+        assert isinstance(req, BrokerRequest)
+        assert req.capability == "network"
+        assert req.action == "connect"
+        assert req.payload == {"host": "example.com", "port": 443}
+
+
+def test_process_backend_broker_request_denied_without_capability():
+    # No capabilities granted: the guest's request is refused at the boundary
+    # with a PolicyError rather than performing the privileged action.
+    with iso.spawn("proc-broker-deny", backend="process") as sb:
+        sb.exec("request('network', 'connect', {})")
+        with pytest.raises(iso.PolicyError, match="network"):
+            sb.recv(timeout=5)
+
+
+def test_process_backend_broker_request_denied_for_ungranted_capability():
+    caps = {"network": {}}
+    with iso.spawn("proc-broker-scope", backend="process", capabilities=caps) as sb:
+        # A capability the guest was not granted stays denied even though other
+        # capabilities are present.
+        sb.exec("request('secret', 'read', {})")
+        with pytest.raises(iso.PolicyError, match="secret"):
+            sb.recv(timeout=5)
+
+
 def test_microvm_backend_remains_unimplemented():
     # microVM is routed to a dedicated fail-closed admission path: it refuses
     # with a diagnostic (MicroVMUnavailable, a SandboxError, when the host lacks

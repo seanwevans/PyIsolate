@@ -80,6 +80,12 @@ JSON only — the supervisor never unpickles bytes produced by untrusted guest
 code. Confinement is applied before any guest code runs, in order:
 `no_new_privs` → `rlimit` → Landlock → seccomp.
 
+Privileged operations are not performed by the guest: the `request` cell op is
+gated on the sandbox's granted capability names (an ungranted capability is
+denied at the boundary with a `PolicyError`) and a permitted request is framed
+to the supervisor as a `BrokerRequest` for mediation, matching the
+sub-interpreter backend.
+
 ### 3.2 Kernel enforcement
 
 * **seccomp** deny-list — kills the process on high-risk syscalls; inherited
