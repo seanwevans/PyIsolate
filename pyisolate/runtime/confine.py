@@ -118,6 +118,9 @@ class ConfinementReport:
     rlimits: list[str] = field(default_factory=list)
     landlock: bool = False
     landlock_rules: int = 0
+    # True when the guest is confined to the interpreter's runtime paths only,
+    # because the policy named no filesystem paths of its own.
+    landlock_default_deny_fs: bool = False
     landlock_net: bool = False
     landlock_net_ports: int = 0
     skipped: list[str] = field(default_factory=list)
@@ -224,22 +227,31 @@ def _apply_landlock(
     fs_write: list[str] | None,
     net_connect_ports: list[int] | None,
     require_landlock: bool,
+    default_deny_fs: bool = True,
 ) -> None:
-    # Only handle an access class when the policy actually names an allow-list;
-    # without one a default-deny ruleset would break the interpreter (FS) or
-    # sever egress the policy meant to permit (network).
-    if not fs_read and not fs_write and not net_connect_ports:
+    """Apply the Landlock filesystem and TCP-egress layers to this process.
+
+    The filesystem layer is applied even when the policy names no paths: the
+    guest is then confined to the interpreter's own runtime paths, which is the
+    deny-by-default posture the import allow-list already takes. The network
+    layer is only handled when the policy names ports, because Landlock's
+    network rules are default-deny per port and handling that class with no
+    allow-list would sever egress the policy never meant to restrict.
+    """
+    if not fs_read and not fs_write and not default_deny_fs and not net_connect_ports:
         return
     landlock_report = _landlock.apply_landlock(
         fs_read,
         fs_write,
         connect_ports=net_connect_ports,
         require=require_landlock,
+        default_deny_fs=default_deny_fs,
     )
     if landlock_report.applied:
         report.landlock = True
         report.landlock_rules = landlock_report.rules
-    elif fs_read or fs_write:
+        report.landlock_default_deny_fs = landlock_report.default_deny_fs
+    elif fs_read or fs_write or default_deny_fs:
         report.skipped.append(f"landlock:{landlock_report.skipped}")
     if landlock_report.net_applied:
         report.landlock_net = True
@@ -259,6 +271,7 @@ def apply_confinement(
     seccomp: bool = True,
     require_seccomp: bool = False,
     require_landlock: bool = False,
+    default_deny_fs: bool = True,
 ) -> ConfinementReport:
     """Confine the *current* process before it runs guest code.
 
@@ -278,6 +291,7 @@ def apply_confinement(
         fs_write=fs_write,
         net_connect_ports=net_connect_ports,
         require_landlock=require_landlock,
+        default_deny_fs=default_deny_fs,
     )
 
     if not seccomp:

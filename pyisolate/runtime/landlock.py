@@ -129,6 +129,10 @@ class LandlockReport:
     applied: bool = False
     abi: int = 0
     rules: int = 0
+    # True when the filesystem layer was applied without any policy paths, i.e.
+    # the guest is confined to the interpreter's own runtime paths and nothing
+    # else. Distinguishes "confined to policy" from "confined to bare minimum".
+    default_deny_fs: bool = False
     skipped: str | None = None
     denied_paths: list[str] = field(default_factory=list)
     net_applied: bool = False
@@ -343,6 +347,7 @@ def apply_landlock(
     *,
     connect_ports: list[int] | None = None,
     require: bool = False,
+    default_deny_fs: bool = False,
 ) -> LandlockReport:
     """Restrict the current process's filesystem and TCP-egress access to policy.
 
@@ -350,9 +355,18 @@ def apply_landlock(
     interpreter's runtime paths are granted read+execute so it can keep running.
     ``connect_ports`` (Landlock ABI >= 4, Linux 6.7+) allow-lists the TCP ports
     the guest may ``connect()`` to; every other port is denied by the kernel.
-    Both layers share a single ruleset. A layer whose allow-list is empty/None
-    is not handled at all, so a default-deny ruleset never breaks the
-    interpreter or blocks egress the policy did not mean to restrict.
+    Both layers share a single ruleset.
+
+    ``default_deny_fs`` handles the filesystem access classes even when the
+    policy names no paths at all. The interpreter's own runtime paths are still
+    granted, so the guest keeps working, but everything else -- home
+    directories, ``/root``, ``/var``, and *all* writes -- is denied by the
+    kernel. Without it, a policy-free sandbox gets no filesystem confinement
+    whatsoever.
+
+    The network layer is never defaulted on: Landlock keys network rules on
+    port and is default-deny for ports it does not name, so handling that class
+    with no allow-list would sever egress the policy never meant to restrict.
 
     On a kernel without Landlock this is a no-op unless ``require`` is set, in
     which case it raises. When network confinement is requested but the kernel's
@@ -368,7 +382,7 @@ def apply_landlock(
         report.skipped = "unsupported"
         return report
 
-    handle_fs = bool(read_paths or write_paths)
+    handle_fs = bool(read_paths or write_paths or default_deny_fs)
     want_net = connect_ports is not None
     handle_net = want_net and abi >= _NET_ABI
     if want_net and not handle_net:
@@ -380,8 +394,8 @@ def apply_landlock(
         report.net_skipped = f"net_unsupported_abi:{abi}"
 
     if not handle_fs and not handle_net:
-        # Nothing to restrict. A ruleset that handled an access class with no
-        # allow-list rules would be default-deny and break the guest.
+        # Nothing to restrict. Reachable only when the caller opted out of the
+        # filesystem default-deny and named no network ports.
         report.skipped = "no_rules"
         return report
 
@@ -426,5 +440,6 @@ def apply_landlock(
         os.close(ruleset_fd)
 
     report.applied = handle_fs
+    report.default_deny_fs = handle_fs and not (read_paths or write_paths)
     report.net_applied = handle_net
     return report
