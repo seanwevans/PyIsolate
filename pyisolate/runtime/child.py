@@ -233,6 +233,7 @@ def _serve(sock: socket.socket) -> None:
             net_connect_ports=_net_connect_ports(bootstrap.get("tcp")),
             require_seccomp=bool(bootstrap.get("require_seccomp", False)),
             require_landlock=bool(bootstrap.get("require_landlock", False)),
+            default_deny_fs=bool(bootstrap.get("default_deny_fs", True)),
         )
         _send_frame(
             sock,
@@ -243,6 +244,7 @@ def _serve(sock: socket.socket) -> None:
                 "rlimits": report.rlimits,
                 "landlock": report.landlock,
                 "landlock_rules": report.landlock_rules,
+                "landlock_default_deny_fs": report.landlock_default_deny_fs,
                 "landlock_net": report.landlock_net,
                 "landlock_net_ports": report.landlock_net_ports,
                 "skipped": report.skipped,

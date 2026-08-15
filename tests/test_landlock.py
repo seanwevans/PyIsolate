@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 import pytest
 
 import pyisolate as iso
-from pyisolate.runtime import landlock
+from pyisolate.runtime import confine, landlock
 from pyisolate.runtime.child import _net_connect_ports
 from pyisolate.runtime.process_backend import (
     _extract_fs_read_write,
@@ -286,3 +286,204 @@ def test_landlock_blocks_disallowed_reads_but_allows_permitted(tmp_path):
         sb.exec(_REAL_READ.format(path=str(secret)))
         with pytest.raises(iso.SandboxError):
             sb.recv(timeout=5)
+
+
+# -- filesystem default-deny ------------------------------------------------
+#
+# A sandbox whose policy names no filesystem paths used to get no filesystem
+# confinement at all: confine._apply_landlock returned early, so the guest kept
+# full read access to the host (/root, $HOME, /var) and could write anywhere.
+# That contradicted the deny-by-default posture the import allow-list already
+# takes, and it also meant hardened rollout mode could not fail closed, because
+# require_landlock was never consulted on that path.
+
+
+def test_default_deny_handles_the_fs_class_without_policy_paths():
+    # The decision that matters: with no policy paths and default_deny_fs on,
+    # the filesystem access class is still handled, so Landlock denies
+    # everything outside the interpreter's own runtime paths.
+    if landlock.landlock_supported():
+        pytest.skip("kernel supports Landlock; would confine the test process")
+    report = landlock.apply_landlock(None, None, default_deny_fs=True)
+    # Unsupported kernel, so nothing is applied -- but the attempt was made and
+    # recorded, rather than skipped as "no_rules" before reaching the kernel.
+    assert report.skipped == "unsupported"
+
+
+def test_opting_out_of_default_deny_skips_the_fs_class():
+    if landlock.landlock_supported():
+        pytest.skip("kernel supports Landlock; would confine the test process")
+    report = landlock.apply_landlock(None, None, default_deny_fs=False)
+    assert report.skipped == "unsupported"
+
+
+def test_no_rules_is_only_reachable_with_default_deny_off(monkeypatch):
+    # Force the "kernel supports Landlock" branch without touching the real
+    # kernel, to prove which combination reaches the no-op path.
+    monkeypatch.setattr(landlock, "abi_version", lambda: 1)
+    report = landlock.apply_landlock(None, None, default_deny_fs=False)
+    assert report.skipped == "no_rules"
+    assert report.applied is False
+
+
+def test_hardened_mode_fails_closed_without_policy_paths():
+    # The regression this guards: require_landlock=True with no policy paths
+    # used to return silently, leaving a "hardened" guest with unrestricted
+    # filesystem access on a kernel that cannot enforce Landlock.
+    if landlock.landlock_supported():
+        pytest.skip("kernel supports Landlock; would confine the test process")
+    report = confine.ConfinementReport()
+    with pytest.raises((RuntimeError, OSError)):
+        confine._apply_landlock(
+            report,
+            fs_read=None,
+            fs_write=None,
+            net_connect_ports=None,
+            require_landlock=True,
+        )
+
+
+def test_missing_landlock_is_recorded_even_without_policy_paths():
+    # Best-effort mode must still say the layer is absent. Previously the report
+    # was silent, so a no-policy sandbox looked confined when it was not.
+    if landlock.landlock_supported():
+        pytest.skip("kernel supports Landlock; would confine the test process")
+    report = confine.ConfinementReport()
+    confine._apply_landlock(
+        report,
+        fs_read=None,
+        fs_write=None,
+        net_connect_ports=None,
+        require_landlock=False,
+    )
+    assert any(item.startswith("landlock:") for item in report.skipped)
+
+
+@requires_landlock
+def test_policy_free_sandbox_reports_default_deny_filesystem():
+    with iso.spawn("ll-default-deny", backend="process") as sb:
+        report = sb._thread.wait_confined(timeout=5)
+        assert report is not None
+        assert report["landlock"] is True
+        assert report["landlock_default_deny_fs"] is True
+        # The interpreter's own runtime paths are still granted, or the guest
+        # could not import anything.
+        assert report["landlock_rules"] >= 1
+
+
+@requires_landlock
+def test_sandbox_with_policy_paths_is_not_flagged_default_deny(tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    policy = iso.policy.Policy().allow_fs(str(allowed))
+    with iso.spawn("ll-policy-deny", policy=policy, backend="process") as sb:
+        report = sb._thread.wait_confined(timeout=5)
+        assert report["landlock"] is True
+        assert report["landlock_default_deny_fs"] is False
+
+
+@live_landlock
+def test_policy_free_sandbox_cannot_read_outside_the_interpreter(tmp_path):
+    # The actual hole: with no policy, guest code that bypasses the Python open
+    # guard used to read any host file. The interpreter's runtime paths stay
+    # readable so the guest still works; a file outside them does not.
+    secret = tmp_path / "secret.txt"
+    secret.write_text("secret", encoding="utf-8")
+    with iso.spawn("ll-default-read", backend="process") as sb:
+        sb.exec(_REAL_READ.format(path=str(secret)))
+        with pytest.raises(iso.SandboxError):
+            sb.recv(timeout=5)
+
+
+@live_landlock
+def test_policy_free_sandbox_can_still_import_the_stdlib():
+    # Default-deny is only correct if it does not break the interpreter.
+    with iso.spawn(
+        "ll-default-import", allowed_imports=["json"], backend="process"
+    ) as sb:
+        sb.exec("import json; post(json.dumps({'ok': True}))")
+        assert sb.recv(timeout=5) == '{"ok": true}'
+
+
+@live_landlock
+def test_policy_free_sandbox_cannot_write_outside_the_interpreter(tmp_path):
+    target = tmp_path / "written.txt"
+    write_src = """
+def _real_open(path, mode):
+    for cls in ().__class__.__base__.__subclasses__():
+        if cls.__name__ == "catch_warnings":
+            return cls()._module.__builtins__["open"](path, mode)
+    raise RuntimeError("no real open")
+handle = _real_open({path!r}, "w")
+handle.write("owned")
+handle.close()
+post("WROTE")
+"""
+    with iso.spawn("ll-default-write", backend="process") as sb:
+        sb.exec(write_src.format(path=str(target)))
+        with pytest.raises(iso.SandboxError):
+            sb.recv(timeout=5)
+    assert not target.exists()
+
+
+class _FakeLibc:
+    """Records the Landlock syscalls a real kernel would receive.
+
+    Lets the default-deny ruleset construction be verified on hosts without
+    Landlock (including CI runners on older kernels), where the live tests
+    above can only skip.
+    """
+
+    def __init__(self):
+        self.created_attrs = []
+        self.path_rules = 0
+        self.restricted = False
+
+    def syscall(self, number, *args):
+        if number == landlock._NR_LANDLOCK_CREATE_RULESET:
+            attr_ref = args[0]
+            self.created_attrs.append(attr_ref._obj.handled_access_fs)
+            # A real fd, because apply_landlock closes it.
+            return os.open(os.devnull, os.O_RDONLY)
+        if number == landlock._NR_LANDLOCK_ADD_RULE:
+            if args[1] == landlock._LANDLOCK_RULE_PATH_BENEATH:
+                self.path_rules += 1
+            return 0
+        if number == landlock._NR_LANDLOCK_RESTRICT_SELF:
+            self.restricted = True
+            return 0
+        raise AssertionError(f"unexpected syscall {number}")
+
+
+def test_default_deny_builds_a_ruleset_granting_only_runtime_paths(monkeypatch):
+    fake = _FakeLibc()
+    monkeypatch.setattr(landlock, "abi_version", lambda: 1)
+    monkeypatch.setattr(landlock, "_libc", lambda: fake)
+
+    report = landlock.apply_landlock(None, None, default_deny_fs=True)
+
+    # The filesystem access class is handled, which is what makes Landlock
+    # deny every path not added as a rule.
+    assert fake.created_attrs and fake.created_attrs[0] != 0
+    # The interpreter's own runtime paths are granted, so the guest still runs.
+    assert fake.path_rules == len(landlock._runtime_read_paths())
+    assert fake.restricted is True
+    assert report.applied is True
+    assert report.default_deny_fs is True
+    assert report.rules == fake.path_rules
+
+
+def test_policy_paths_are_added_on_top_of_runtime_paths(monkeypatch, tmp_path):
+    readable = tmp_path / "r"
+    writable = tmp_path / "w"
+    readable.mkdir()
+    writable.mkdir()
+    fake = _FakeLibc()
+    monkeypatch.setattr(landlock, "abi_version", lambda: 1)
+    monkeypatch.setattr(landlock, "_libc", lambda: fake)
+
+    report = landlock.apply_landlock([str(readable)], [str(writable)])
+
+    assert fake.path_rules == len(landlock._runtime_read_paths()) + 2
+    # A policy was supplied, so this is policy confinement, not the bare default.
+    assert report.default_deny_fs is False

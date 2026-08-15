@@ -1,8 +1,17 @@
-"""Sandbox thread implementation.
+"""Sandbox thread implementation -- the ``backend="subinterpreter"`` runtime.
 
-This is a greatly simplified placeholder that executes code in a dedicated
-thread using the standard interpreter. Real isolation would leverage
-sub‑interpreters and eBPF enforcement as outlined in AGENTS.md.
+Despite that backend name, this executes guest code in a dedicated
+:class:`threading.Thread` of the supervisor's own process, using the standard
+interpreter: guest source is ``exec``'d against a restricted ``__builtins__``
+mapping with thread-local policy state. It is **not** a CPython sub-interpreter,
+and it is not a security boundary against hostile Python -- adversarial code can
+walk ``object.__subclasses__()`` to recover the real ``__import__`` and reach
+``os``/``open``. See "Sub-interpreter status" in the README, and
+``docs/threat-model.md`` for the normative boundary statement.
+
+Use :mod:`pyisolate.runtime.process_backend` (``backend="process"``) for code
+you do not trust. Running guests in real sub-interpreters, and kernel eBPF
+enforcement for this backend, are roadmap items tracked in ROADMAP.md.
 """
 
 from __future__ import annotations

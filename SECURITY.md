@@ -6,7 +6,10 @@
 most important thing to understand before deploying PyIsolate:
 
 - `backend="subinterpreter"` (the default) is an **execution cell**, not a
-  boundary against hostile Python. Run only trusted code in it.
+  boundary against hostile Python. Run only trusted code in it. It currently
+  runs guests in a dedicated thread of the supervisor process, not a CPython
+  sub-interpreter — see "Sub-interpreter status" in the README. Neither is a
+  boundary, so nothing below changes.
 - `backend="process"` is the **boundary mode**: the guest runs in a separate OS
   process confined in depth by the kernel.
 - `backend="microvm"` is reserved and not yet implemented.
@@ -47,7 +50,13 @@ silently.
    `process_vm_readv`/`writev`, and others. x86-64 Linux. This is a robust
    deny-list, **not** a proof that only a fixed syscall allow-list is reachable.
 3. **Filesystem policy** — Landlock confines the guest to the policy's read/write
-   paths, on kernels that support Landlock.
+   paths, on kernels that support Landlock. A policy that names **no** filesystem
+   paths is deny-by-default, not unrestricted: the guest is confined to the
+   interpreter's own runtime paths (so it can still import) and nothing else —
+   home directories, `/root`, `/var`, and all writes are denied by the kernel.
+   `/etc` remains readable, because the loader, TLS trust store, and locale data
+   live there. On a kernel without Landlock the layer is recorded as skipped, and
+   hardened rollout mode fails closed rather than running unconfined.
 4. **Network-egress policy** — On Landlock ABI >= 4 (Linux 6.7+) the policy's TCP
    allow-list is mapped to allowed `connect()` ports and the kernel denies egress
    to every other port. Landlock keys network rules on port, not address, so this
@@ -64,6 +73,11 @@ silently.
    frames are rejected.
 7. **Crash isolation** — A crash in a guest process cannot bring down the
    supervisor.
+8. **Environment scrubbing** — The guest starts from a fixed allow-list of
+   environment variables (interpreter/module resolution and locale only), never
+   a copy of the supervisor's `os.environ`. Cloud credentials, API tokens, and
+   ambient configuration held by the host process are not visible to the guest.
+   Callers pass anything the guest legitimately needs via `env=`.
 
 **Resource quotas.** `cpu_ms`, `mem_bytes`, and `open_files_max` are applied to
 the guest process as `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_NOFILE` before any

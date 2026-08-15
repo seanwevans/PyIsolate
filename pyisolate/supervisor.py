@@ -33,7 +33,12 @@ from .watchdog import ResourceWatchdog
 
 logger = logging.getLogger(__name__)
 
-# Allowed sandbox name pattern: alphanumerics, hyphen, underscore
+# Allowed sandbox name pattern: alphanumerics, hyphen, underscore.
+#
+# ``NAME_PATTERN`` is the process-wide default a Supervisor falls back to when
+# it was not given its own. Prefer ``Supervisor(name_pattern=...)``: a module
+# global cannot express two supervisors with different rules, and rebinding it
+# at runtime races with concurrent spawns.
 DEFAULT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 NAME_PATTERN = DEFAULT_NAME_PATTERN
 
@@ -213,7 +218,12 @@ class Supervisor:
         self,
         warm_pool: int = 0,
         rollout_mode: str = "dev",
+        name_pattern: Optional[re.Pattern[str]] = None,
     ):
+        # None means "use whatever the module-level default is at spawn time",
+        # which keeps the documented global override working for the
+        # process-wide supervisor without this instance owning that decision.
+        self._name_pattern = name_pattern
         self._sandboxes: Dict[str, SandboxThread] = {}
         # Process-backed sandboxes live in a parallel registry: they are not
         # SandboxThread instances, so the watchdog/warm-pool/cgroup machinery
@@ -308,6 +318,11 @@ class Supervisor:
         cgroup.cleanup_orphans(set())
         recovery.cleanup_temp_orphans(set())
 
+    @property
+    def name_pattern(self) -> "re.Pattern[str]":
+        """Pattern sandbox names must match, per supervisor."""
+        return self._name_pattern if self._name_pattern is not None else NAME_PATTERN
+
     def register_alert_handler(self, callback) -> None:
         """Subscribe to policy violation alerts."""
         self._alerts.register(callback)
@@ -337,7 +352,6 @@ class Supervisor:
         ``backend="microvm"`` are explicit boundary modes; they are reserved
         API choices and fail closed until native launchers are available.
         """
-        global NAME_PATTERN
         backend = _normalize_backend(backend)
         if backend == "microvm":
             # Dedicated fail-closed path: probe for a real VMM/KVM boundary and
@@ -349,7 +363,7 @@ class Supervisor:
             raise ValueError("Sandbox name must be non-empty string")
         if len(name) > 64:
             raise ValueError("Sandbox name too long")
-        pattern = NAME_PATTERN
+        pattern = self.name_pattern
         if pattern.fullmatch(name) is None:
             raise ValueError("Sandbox name contains invalid characters")
         self._cleanup()
@@ -487,9 +501,6 @@ class Supervisor:
                 raise
         # Remove references to any terminated sandboxes
         self._cleanup()
-        # Reset any temporary overrides of the name validation pattern to avoid
-        # leaking state across sandboxes.
-        NAME_PATTERN = DEFAULT_NAME_PATTERN
         return Sandbox(thread, self)
 
     def _apply_kernel_policy(self, cg_path: Any, policy: Any) -> None:
