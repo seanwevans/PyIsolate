@@ -13,18 +13,22 @@ boundary: guest code runs in a distinct address space and cannot read or
 corrupt supervisor memory.  Kernel-level confinement of that process
 (no-new-privs, seccomp, rlimits, Landlock, cgroups) is layered on in follow-up
 work; this module establishes the process boundary and transport.
+
+The guest also starts from a scrubbed environment rather than inheriting the
+supervisor's ``os.environ`` -- see :func:`build_child_env`.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import queue
 import socket
 import struct
 import subprocess
 import sys
 import threading
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from .. import errors
 from ..policy.model import RuntimePolicy
@@ -36,6 +40,61 @@ _LEN = struct.Struct("!I")
 # Guest results and errors cross the boundary as JSON. Never unpickle data
 # produced by untrusted guest code in the supervisor process.
 _CHILD_MODULE = "pyisolate.runtime.child"
+
+# The guest process starts from a scrubbed environment, not the supervisor's.
+# ``os.environ`` routinely carries cloud credentials, API tokens, and session
+# secrets; a guest that can read them has exfiltrated them regardless of how
+# well seccomp and Landlock confine the rest of the process. Only variables the
+# child interpreter genuinely needs to boot and to resolve ``pyisolate`` itself
+# are forwarded.
+ENV_PASSTHROUGH: tuple[str, ...] = (
+    # Module resolution: a source checkout or a non-standard layout reaches
+    # ``pyisolate.runtime.child`` through these.
+    "PYTHONPATH",
+    "PYTHONHOME",
+    # Shared-library resolution for the interpreter itself. conda and custom
+    # CPython builds need this to find libpython; dropping it stops the child
+    # from starting at all. It names library directories, not secrets.
+    "LD_LIBRARY_PATH",
+    # Text encoding: dropping these silently changes the guest's default
+    # encoding relative to the supervisor.
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PYTHONIOENCODING",
+    "PYTHONUTF8",
+    # Temporary files: the guest should land in the same place the host chose,
+    # which may be the only writable directory its policy grants.
+    "TMPDIR",
+)
+
+# The child is launched by absolute path (``sys.executable``), so ``PATH`` is
+# never consulted to start it. Forwarding the supervisor's ``PATH`` would leak
+# host layout (home directories, usernames, toolchain locations) for no benefit,
+# so the guest gets a fixed minimal value instead.
+DEFAULT_CHILD_PATH = "/usr/local/bin:/usr/bin:/bin"
+
+
+def build_child_env(
+    extra: Optional[Mapping[str, str]] = None,
+    *,
+    source: Optional[Mapping[str, str]] = None,
+) -> dict[str, str]:
+    """Build the guest process environment: allow-list, never the host's copy.
+
+    ``extra`` is merged last so a caller can hand the guest configuration it
+    actually needs. Anything the caller passes is deliberate, so it overrides
+    the allow-listed values.
+    """
+    env_source = os.environ if source is None else source
+    env = {"PATH": DEFAULT_CHILD_PATH}
+    for key in ENV_PASSTHROUGH:
+        value = env_source.get(key)
+        if value is not None:
+            env[key] = value
+    if extra:
+        env.update({str(k): str(v) for k, v in extra.items()})
+    return env
 
 
 def _extract_fs_tcp(policy: Any) -> tuple[Optional[list[str]], Optional[list[str]]]:
@@ -137,6 +196,7 @@ class ProcessSandbox:
         require_seccomp: bool = False,
         require_landlock: bool = False,
         default_deny_fs: bool = True,
+        env: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.name = name
         self._backend = backend
@@ -174,6 +234,7 @@ class ProcessSandbox:
                 [sys.executable, "-m", _CHILD_MODULE, str(child_sock.fileno())],
                 pass_fds=(child_sock.fileno(),),
                 close_fds=True,
+                env=build_child_env(env),
             )
         except Exception:
             parent_sock.close()

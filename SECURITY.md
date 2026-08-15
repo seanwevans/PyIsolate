@@ -6,7 +6,10 @@
 most important thing to understand before deploying PyIsolate:
 
 - `backend="subinterpreter"` (the default) is an **execution cell**, not a
-  boundary against hostile Python. Run only trusted code in it.
+  boundary against hostile Python. Run only trusted code in it. It currently
+  runs guests in a dedicated thread of the supervisor process, not a CPython
+  sub-interpreter — see "Sub-interpreter status" in the README. Neither is a
+  boundary, so nothing below changes.
 - `backend="process"` is the **boundary mode**: the guest runs in a separate OS
   process confined in depth by the kernel.
 - `backend="microvm"` is reserved and not yet implemented.
@@ -70,6 +73,11 @@ silently.
    frames are rejected.
 7. **Crash isolation** — A crash in a guest process cannot bring down the
    supervisor.
+8. **Environment scrubbing** — The guest starts from a fixed allow-list of
+   environment variables (interpreter/module resolution and locale only), never
+   a copy of the supervisor's `os.environ`. Cloud credentials, API tokens, and
+   ambient configuration held by the host process are not visible to the guest.
+   Callers pass anything the guest legitimately needs via `env=`.
 
 Resource quotas (CPU/RAM/I/O) are enforced by `rlimit` and cgroup v2 controls
 where available. Anything not listed above is *not* guaranteed.
