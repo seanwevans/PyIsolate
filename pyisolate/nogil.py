@@ -89,9 +89,11 @@ def imported_native_extensions() -> list[dict[str, Any]]:
                 ),
                 "no_gil_safe": marked_safe,
                 "status": "declared-safe" if marked_safe else "unknown",
-                "reason": "declared in PYISOLATE_NOGIL_SAFE_MODULES"
-                if marked_safe
-                else "native extension has no PyIsolate no-GIL safety declaration",
+                "reason": (
+                    "declared in PYISOLATE_NOGIL_SAFE_MODULES"
+                    if marked_safe
+                    else "native extension has no PyIsolate no-GIL safety declaration"
+                ),
             }
         )
     return records

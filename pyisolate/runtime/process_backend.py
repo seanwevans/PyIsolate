@@ -136,6 +136,7 @@ class ProcessSandbox:
         confine: bool = True,
         require_seccomp: bool = False,
         require_landlock: bool = False,
+        default_deny_fs: bool = True,
     ) -> None:
         self.name = name
         self._backend = backend
@@ -198,6 +199,7 @@ class ProcessSandbox:
                 "cpu_seconds": cpu_seconds,
                 "require_seccomp": require_seccomp,
                 "require_landlock": require_landlock,
+                "default_deny_fs": default_deny_fs,
             }
         )
 

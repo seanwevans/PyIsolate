@@ -29,8 +29,10 @@ answer below as conditional on the backend you select.
     dangerous syscalls (`execve`, `ptrace`, mount/namespace ops, `bpf`, kernel
     module load, `process_vm_*`, …) — x86-64 Linux;
   - **Landlock** filesystem rules derived from policy, where the kernel supports
-    it, plus **Landlock TCP-egress** rules that allow-list the connect ports in
-    the policy (Landlock ABI >= 4 / Linux 6.7+; keyed on port, not address);
+    it — deny-by-default when the policy names no paths, confining the guest to
+    the interpreter's own runtime paths — plus **Landlock TCP-egress** rules that
+    allow-list the connect ports in the policy (Landlock ABI >= 4 / Linux 6.7+;
+    keyed on port, not address);
   - a **coarse per-cgroup eBPF/LSM deny-mask** (deny whole capability classes),
     where BPF-LSM is available;
   - `rlimit` and cgroup resource caps.
@@ -206,6 +208,15 @@ Any semantic change to defended/not-defended status requires:
 
 ### History
 
+- **2026-08-15** — Made the `backend="process"` filesystem layer deny-by-default.
+  A sandbox whose policy named no filesystem paths previously received no
+  Landlock confinement at all — the guest could read any host file and write
+  anywhere — and because that path returned before consulting `require_landlock`,
+  hardened rollout mode could not fail closed on it either. The filesystem access
+  class is now always handled: the interpreter's runtime paths are granted so the
+  guest still runs, everything else is denied, and a missing Landlock layer is
+  recorded (and fatal under hardened mode). Reported as
+  `landlock_default_deny_fs` in the confinement report.
 - **2026-07-21** — Wired capability-gated broker mediation into
   `backend="process"`: the guest's `request` cell op is denied unless the named
   capability was granted, and a permitted request crosses the boundary as a
