@@ -65,8 +65,20 @@ silently.
 7. **Crash isolation** — A crash in a guest process cannot bring down the
    supervisor.
 
-Resource quotas (CPU/RAM/I/O) are enforced by `rlimit` and cgroup v2 controls
-where available. Anything not listed above is *not* guaranteed.
+**Resource quotas.** `cpu_ms`, `mem_bytes`, and `open_files_max` are applied to
+the guest process as `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_NOFILE` before any
+guest code runs, and appear in the confinement report. `wall_time_ms` is
+enforced by a supervisor-side timer that kills a guest which overruns it —
+necessary because a guest blocked on I/O burns no CPU and `RLIMIT_CPU` never
+fires. `RLIMIT_CPU` has one-second granularity, so a sub-second `cpu_ms` rounds
+up and the weaker effective limit is logged.
+
+Quotas this backend has no way to enforce — `network_ops_max`,
+`output_bytes_max`, `child_work_max`, `numa_node`, which the sub-interpreter
+backend implements with in-process counters — are **rejected at spawn** with
+`NotImplementedError` rather than accepted and ignored.
+
+Anything not listed above is *not* guaranteed.
 
 ---
 

@@ -54,6 +54,32 @@ def _normalize_backend(backend: str) -> BackendMode:
     return backend  # type: ignore[return-value]
 
 
+# Quotas the sub-interpreter backend enforces with in-process counters that have
+# no equivalent in the process backend yet: the guest runs in another address
+# space, so the supervisor cannot see its socket operations, its stdout volume,
+# or the threads it starts. Accepting these silently would hand callers a limit
+# that does nothing, which is worse than refusing them.
+PROCESS_UNSUPPORTED_QUOTAS: tuple[str, ...] = (
+    "network_ops_max",
+    "output_bytes_max",
+    "child_work_max",
+    "numa_node",
+)
+
+
+def _reject_unsupported_process_quotas(**quotas: Optional[int]) -> None:
+    requested = sorted(name for name, value in quotas.items() if value is not None)
+    if not requested:
+        return
+    names = ", ".join(requested)
+    raise NotImplementedError(
+        f"backend='process' cannot enforce {names}; it would be accepted and "
+        "ignored. Use backend='subinterpreter' for in-process counter quotas, "
+        "or express the limit with cpu_ms/mem_bytes/wall_time_ms/open_files_max, "
+        "which this backend enforces in the kernel."
+    )
+
+
 def _require_implemented_backend(backend: BackendMode) -> None:
     if backend in IMPLEMENTED_BACKENDS:
         return
@@ -342,7 +368,14 @@ class Supervisor:
                 policy=policy,
                 allowed_imports=allowed_imports,
                 capabilities=capabilities,
+                cpu_ms=cpu_ms,
                 mem_bytes=mem_bytes,
+                wall_time_ms=wall_time_ms,
+                open_files_max=open_files_max,
+                network_ops_max=network_ops_max,
+                output_bytes_max=output_bytes_max,
+                child_work_max=child_work_max,
+                numa_node=numa_node,
                 tenant=tenant,
                 tenant_quota=tenant_quota,
             )
@@ -512,17 +545,35 @@ class Supervisor:
         policy: Any,
         allowed_imports: Optional[list[str]],
         capabilities: Optional[dict[str, Any]],
-        mem_bytes: Optional[int],
-        tenant: Optional[str],
-        tenant_quota: Optional[int],
+        cpu_ms: Optional[int] = None,
+        mem_bytes: Optional[int] = None,
+        wall_time_ms: Optional[int] = None,
+        open_files_max: Optional[int] = None,
+        network_ops_max: Optional[int] = None,
+        output_bytes_max: Optional[int] = None,
+        child_work_max: Optional[int] = None,
+        numa_node: Optional[int] = None,
+        tenant: Optional[str] = None,
+        tenant_quota: Optional[int] = None,
     ) -> Sandbox:
         """Spawn a sandbox behind a real OS-process boundary.
 
         This path deliberately skips the SandboxThread-specific machinery
-        (warm pool, in-process quota watchdog, per-thread cgroup attach). Kernel
-        confinement of the guest process (seccomp/rlimits/Landlock/cgroups) is
-        layered on in follow-up work.
+        (warm pool, in-process quota watchdog, per-thread cgroup attach).
+
+        Quotas this backend can enforce are forwarded to the guest process:
+        ``cpu_ms`` and ``mem_bytes`` and ``open_files_max`` become rlimits
+        applied before guest code runs, and ``wall_time_ms`` is enforced by a
+        supervisor-side timer. Quotas with no enforcement path here are
+        rejected rather than accepted and ignored -- see
+        :data:`PROCESS_UNSUPPORTED_QUOTAS`.
         """
+        _reject_unsupported_process_quotas(
+            network_ops_max=network_ops_max,
+            output_bytes_max=output_bytes_max,
+            child_work_max=child_work_max,
+            numa_node=numa_node,
+        )
         with self._lock:
             existing_thread = self._sandboxes.get(name)
             existing_proc = self._process_sandboxes.get(name)
@@ -545,7 +596,10 @@ class Supervisor:
                     allowed_imports=allowed_imports,
                     capabilities=capabilities,
                     backend="process",
+                    cpu_ms=cpu_ms,
                     mem_bytes=mem_bytes,
+                    wall_time_ms=wall_time_ms,
+                    open_files_max=open_files_max,
                     require_seccomp=self._rollout_mode == "hardened",
                     require_landlock=self._rollout_mode == "hardened",
                 )

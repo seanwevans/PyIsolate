@@ -227,6 +227,7 @@ def _serve(sock: socket.socket) -> None:
         report = apply_confinement(
             mem_bytes=bootstrap.get("mem_bytes"),
             cpu_seconds=bootstrap.get("cpu_seconds"),
+            open_files_max=bootstrap.get("open_files_max"),
             fs_read=bootstrap.get("fs_read"),
             fs_write=bootstrap.get("fs_write"),
             net_connect_ports=_net_connect_ports(bootstrap.get("tcp")),
