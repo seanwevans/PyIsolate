@@ -277,6 +277,8 @@ def test_supported_quotas_are_not_refused():
         open_files_max=64,
     ) as sb:
         assert sb.backend == "process"
+
+
 # -- guest environment scrubbing ------------------------------------------
 
 
