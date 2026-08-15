@@ -103,3 +103,19 @@ markers = [
 
 [tool.isort]
 profile = "black"
+
+
+[tool.coverage.run]
+# Scope measurement to the package. Without this, coverage also reports the
+# test files themselves, which are ~100% by construction and inflate the total
+# into something that cannot regress meaningfully.
+source = ["pyisolate"]
+
+
+[tool.coverage.report]
+show_missing = true
+# A floor, not a target. The suite sits above this; the point is that a change
+# which drops package coverage substantially fails CI instead of being noticed
+# months later. Kernel-gated tests (Landlock, BPF, cgroup) skip on hosts without
+# those features, so the floor is set below the observed value rather than at it.
+fail_under = 70

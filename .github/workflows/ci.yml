@@ -8,6 +8,25 @@ on:
     - cron: "0 4 * * *"
 
 jobs:
+  lint:
+    name: lint / format / types
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
+      # Runs the same hooks contributors get from `pre-commit install`, at the
+      # same pinned tool versions, so CI and local checks cannot disagree.
+      # pytest is skipped here because the jobs below already run the suite
+      # across the full matrix rather than once.
+      - name: Run pre-commit hooks
+        env:
+          SKIP: pytest
+        run: pre-commit run --all-files --show-diff-on-failure
+
   tests-unit:
     name: unit / py${{ matrix.python-version }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -135,9 +154,16 @@ jobs:
         run: python -m pip install -e .[dev]
       - name: Run tests with coverage
         run: coverage run -m pytest -m "not soak"
+      # Fails when package coverage drops below the fail_under floor in
+      # pyproject.toml. Previously coverage was measured and uploaded but never
+      # checked, so it could regress without CI noticing.
+      - name: Check coverage against the floor
+        run: coverage report
       - name: Generate coverage report
+        if: always()
         run: coverage xml -o coverage.xml
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage-report
           path: coverage.xml

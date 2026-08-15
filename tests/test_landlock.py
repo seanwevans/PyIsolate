@@ -19,10 +19,7 @@ import pytest
 import pyisolate as iso
 from pyisolate.runtime import landlock
 from pyisolate.runtime.child import _net_connect_ports
-from pyisolate.runtime.process_backend import (
-    _extract_fs_read_write,
-    _extract_fs_tcp,
-)
+from pyisolate.runtime.process_backend import _extract_fs_read_write, _extract_fs_tcp
 
 requires_landlock = pytest.mark.skipif(
     not landlock.landlock_supported(),

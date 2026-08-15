@@ -29,7 +29,9 @@ def _kernel_map_names() -> set[str]:
 def _kernel_deny_defines() -> dict[str, int]:
     text = _BPF_SRC.read_text(encoding="utf-8")
     found = {}
-    for name, shift in re.findall(r"#define\s+(PYI_DENY_\w+)\s+\(1U\s*<<\s*(\d+)\)", text):
+    for name, shift in re.findall(
+        r"#define\s+(PYI_DENY_\w+)\s+\(1U\s*<<\s*(\d+)\)", text
+    ):
         found[name] = 1 << int(shift)
     return found
 
@@ -51,12 +53,18 @@ def test_deny_mask_bits_match_kernel_defines():
 def test_compile_deny_mask_denies_everything_without_a_policy():
     mask = contract.compile_deny_mask(None)
     assert mask == (
-        contract.DENY_FS | contract.DENY_NET | contract.DENY_PROCESS | contract.DENY_RISKY
+        contract.DENY_FS
+        | contract.DENY_NET
+        | contract.DENY_PROCESS
+        | contract.DENY_RISKY
     )
 
 
 def test_compile_deny_mask_always_denies_process_and_risky():
-    for policy in (None, iso.policy.Policy().allow_fs("/tmp").allow_tcp("127.0.0.1:80")):
+    for policy in (
+        None,
+        iso.policy.Policy().allow_fs("/tmp").allow_tcp("127.0.0.1:80"),
+    ):
         mask = contract.compile_deny_mask(policy)
         assert mask & contract.DENY_PROCESS
         assert mask & contract.DENY_RISKY
