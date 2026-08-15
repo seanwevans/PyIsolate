@@ -421,3 +421,62 @@ def test_spawn_registry_failure_rolls_back_tenant_usage_and_ledger(
         assert sup_replay._tenant_usage.get("acme", 0) == 0
     finally:
         sup_replay.shutdown()
+
+
+# -- sandbox name validation ------------------------------------------------
+
+
+def test_supervisor_accepts_a_custom_name_pattern():
+    import re
+
+    sup = iso.Supervisor(name_pattern=re.compile(r"^ok\.[a-z]+$"))
+    try:
+        sb = sup.spawn("ok.alpha")
+        sb.close()
+        with pytest.raises(ValueError, match="invalid characters"):
+            sup.spawn("nope!")
+    finally:
+        sup.shutdown()
+
+
+def test_name_pattern_is_per_supervisor_not_global():
+    import re
+
+    from pyisolate import supervisor as supervisor_mod
+
+    permissive = iso.Supervisor(name_pattern=re.compile(r".+"))
+    strict = iso.Supervisor()
+    try:
+        sb = permissive.spawn("has.dots.and.stuff")
+        sb.close()
+        # A second supervisor keeps the default rules: one supervisor's naming
+        # policy must not leak into another's.
+        with pytest.raises(ValueError, match="invalid characters"):
+            strict.spawn("has.dots.and.stuff")
+        assert supervisor_mod.NAME_PATTERN is supervisor_mod.DEFAULT_NAME_PATTERN
+    finally:
+        permissive.shutdown()
+        strict.shutdown()
+
+
+def test_spawn_does_not_rebind_the_module_level_pattern(monkeypatch):
+    # Regression: Supervisor.spawn used to `global NAME_PATTERN` and reset it to
+    # the default on every successful spawn, so a caller that installed a custom
+    # pattern silently lost it after one sandbox -- and two threads spawning
+    # concurrently raced over the value.
+    import re
+
+    from pyisolate import supervisor as supervisor_mod
+
+    custom = re.compile(r".+", re.DOTALL)
+    monkeypatch.setattr(supervisor_mod, "NAME_PATTERN", custom)
+    sup = iso.Supervisor()
+    try:
+        sb = sup.spawn("weird.name with spaces")
+        sb.close()
+        assert supervisor_mod.NAME_PATTERN is custom
+        # Still honored on the next spawn rather than reset behind the caller.
+        sb2 = sup.spawn("another weird one")
+        sb2.close()
+    finally:
+        sup.shutdown()
