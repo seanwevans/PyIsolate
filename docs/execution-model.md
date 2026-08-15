@@ -12,6 +12,12 @@ The public API names the isolation backend explicitly: `backend="subinterpreter"
 `subinterpreter` and `process` are implemented; `microvm` is reserved and fails
 closed until a launcher is available.
 
+The `subinterpreter` backend currently executes guests in a dedicated **thread**
+of the supervisor process rather than a CPython sub-interpreter — the mode is
+named for its intended implementation. The cell ABI below is identical either
+way, and so is the boundary claim (neither is one). See "Sub-interpreter status"
+in the README.
+
 The `process` backend runs guest code in a separate OS process, so in-process
 Python escapes (for example recovering an unrestricted `__import__` by walking
 `object.__subclasses__()`) can no longer reach the supervisor's address space —

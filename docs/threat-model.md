@@ -15,12 +15,16 @@ PyIsolate's security posture is **not uniform** across backends. Read every
 answer below as conditional on the backend you select.
 
 - **`backend="subinterpreter"`** (the default) is an *execution cell*, **not** a
-  security boundary against hostile Python. Guest code runs in a sub-interpreter
-  in the supervisor's own process; the restricted builtins and import allow-list
-  are ergonomic guardrails that adversarial Python can bypass (for example by
-  walking `object.__subclasses__()` to recover an unrestricted `__import__` and
-  reaching the real `os`/`open`). Use it for trusted code, or for scheduling and
-  organization — not to contain code you do not trust.
+  security boundary against hostile Python. Guest code runs in a dedicated
+  **thread** of the supervisor's own process — not, despite the backend's name,
+  in a CPython sub-interpreter; see "Sub-interpreter status" in the README. The
+  restricted builtins and import allow-list are ergonomic guardrails that
+  adversarial Python can bypass (for example by walking
+  `object.__subclasses__()` to recover an unrestricted `__import__` and reaching
+  the real `os`/`open`). This document's answers are unchanged by that
+  distinction: neither a thread nor a sub-interpreter is a boundary against
+  hostile Python. Use it for trusted code, or for scheduling and organization —
+  not to contain code you do not trust.
 
 - **`backend="process"`** is the boundary mode. The guest runs in a **separate
   OS process** (so those in-process escapes can no longer touch supervisor
