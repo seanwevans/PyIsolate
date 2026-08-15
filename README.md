@@ -9,7 +9,7 @@ PyIsolate `0.0.x` is a prototype for API, policy, broker, observability, and tes
 
 ## Features and roadmap
 
-* **Sub-interpreter sandbox API** — available for prototype development and conformance testing.
+* **Sub-interpreter sandbox API** — the API surface is available for prototype development and conformance testing. The backend currently executes guests in a dedicated thread, not a CPython sub-interpreter; see [Sub-interpreter status](#sub-interpreter-status).
 * **Import allow-listing and user-space quotas** — available as prototype guardrails; not a complete adversarial security boundary.
 * **No-GIL/free-threaded CPython support** — experimental roadmap target for CPython 3.13+ `--disable-gil` builds.
 * **Kernel enforcement** — experimental roadmap target; eBPF-LSM, cgroup, and verifier-backed policy enforcement are not guaranteed by the current release.
@@ -210,6 +210,32 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
 
 ---
 
+## Sub-interpreter status
+
+`backend="subinterpreter"` does **not** currently use a CPython sub-interpreter.
+`pyisolate/runtime/thread.py` runs each guest in a `threading.Thread` and
+`exec`s guest source against a restricted `__builtins__` mapping. The backend
+carries the name of its intended implementation.
+
+This does not change any security claim in this repository — that backend is
+documented throughout as an execution cell and *not* a boundary against hostile
+Python, which is equally true of a thread and of a real sub-interpreter. What it
+changes is the mechanism you should assume when reasoning about it:
+
+| | thread (today) | sub-interpreter (intended) |
+| --- | --- | --- |
+| Address space | shared with supervisor | shared with supervisor |
+| `sys.modules` | shared with supervisor | per-interpreter |
+| Boundary vs hostile Python | none | none |
+| GIL | shared | per-interpreter on free-threaded builds |
+
+Landing the real implementation (`concurrent.interpreters` on 3.14, `_interpreters`
+on 3.12+) is roadmap work. Until then, treat "sub-interpreter" as the name of an
+API mode, not a description of the runtime, and use `backend="process"` for any
+guest you do not trust.
+
+---
+
 ## Canonical execution model
 
 A cell is intentionally limited to seven operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.
@@ -225,11 +251,14 @@ See [docs/execution-model.md](docs/execution-model.md). We keep this model small
 **The boundary is the backend.** Pick the backend to match your trust level:
 
 * **`backend="subinterpreter"`** (default) - an **execution cell**, not a
-  boundary against hostile Python. The guest runs in a sub-interpreter in the
-  supervisor's own process; restricted builtins and the import allow-list are
-  bypassable guardrails (adversarial Python can walk `object.__subclasses__()`
-  to reach the real `os`/`open`). Use it for **trusted** code, or for scheduling
-  and organization.
+  boundary against hostile Python. Today the guest runs in a dedicated
+  *thread* of the supervisor's own process, with guest code `exec`'d against a
+  restricted `__builtins__` mapping — **not** in a CPython sub-interpreter; the
+  backend is named for its intended implementation, which is roadmap work (see
+  [Sub-interpreter status](#sub-interpreter-status)). Restricted builtins and
+  the import allow-list are bypassable guardrails (adversarial Python can walk
+  `object.__subclasses__()` to reach the real `os`/`open`). Use it for
+  **trusted** code, or for scheduling and organization.
 * **`backend="process"`** - the **boundary mode**. The guest runs in a separate
   OS process, confined in depth by the kernel before any guest code runs:
   * `PR_SET_NO_NEW_PRIVS` + a seccomp deny-list that kills the process on

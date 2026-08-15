@@ -7,7 +7,8 @@ normative statement.
 
 ## Delivered
 
-- **Backends** — `backend="subinterpreter"` (execution cell) and
+- **Backends** — `backend="subinterpreter"` (execution cell; currently a
+  dedicated thread rather than a CPython sub-interpreter — see below) and
   `backend="process"` (the boundary mode): a real separate-process boundary with
   `no_new_privs` + a seccomp deny-list, Landlock filesystem rules, Landlock
   TCP-egress rules (ABI ≥ 4), a coarse per-cgroup eBPF/LSM deny-mask, and
@@ -30,6 +31,13 @@ normative statement.
 
 ## Now / next
 
+- **Real sub-interpreters for `backend="subinterpreter"`** — the backend is
+  named for its intended implementation but runs guests in a `threading.Thread`
+  today, so guests share `sys.modules` and the GIL with the supervisor. Build it
+  on `concurrent.interpreters` (3.14) / `_interpreters` (3.12+), or rename the
+  backend to `thread` and let this item own the real thing. Either way the
+  boundary claim is unchanged: it is an execution cell, not a boundary against
+  hostile Python.
 - **Broker request execution** — the `request` op currently surfaces a
   `BrokerRequest` to the host but nothing executes it or returns a result. Add a
   request/response round-trip and a pluggable, capability-scoped handler so the

@@ -6,7 +6,10 @@
 most important thing to understand before deploying PyIsolate:
 
 - `backend="subinterpreter"` (the default) is an **execution cell**, not a
-  boundary against hostile Python. Run only trusted code in it.
+  boundary against hostile Python. Run only trusted code in it. It currently
+  runs guests in a dedicated thread of the supervisor process, not a CPython
+  sub-interpreter — see "Sub-interpreter status" in the README. Neither is a
+  boundary, so nothing below changes.
 - `backend="process"` is the **boundary mode**: the guest runs in a separate OS
   process confined in depth by the kernel.
 - `backend="microvm"` is reserved and not yet implemented.
