@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 import pytest
 
 import pyisolate as iso
+from pyisolate.runtime import process_backend
 
 # The object-graph escape that fully defeats the sub-interpreter backend:
 # recover the *real* __import__ from a stdlib module's globals, bypassing the
@@ -156,3 +157,74 @@ def test_microvm_backend_remains_unimplemented():
     # rather than ever returning a working guest.
     with pytest.raises((iso.SandboxError, NotImplementedError)):
         iso.spawn("proc-vm", backend="microvm")
+
+
+# -- guest environment scrubbing ------------------------------------------
+
+
+def test_guest_does_not_inherit_supervisor_environment(monkeypatch):
+    # os.environ routinely holds cloud credentials and API tokens. A guest that
+    # can read them has exfiltrated them no matter how well the kernel confines
+    # the rest of the process.
+    monkeypatch.setenv("PYISOLATE_TEST_SECRET", "hunter2-supersecret")
+    with iso.spawn("proc-env", allowed_imports=["os"], backend="process") as sb:
+        sb.exec("import os; post(os.environ.get('PYISOLATE_TEST_SECRET'))")
+        assert sb.recv(timeout=5) is None
+
+
+def test_guest_environment_is_an_allowlist_not_a_denylist(monkeypatch):
+    # A newly-invented variable must not reach the guest: the child env is built
+    # from a fixed allow-list, so anything unanticipated is withheld by default.
+    monkeypatch.setenv("SOME_FUTURE_CREDENTIAL", "leaked")
+    with iso.spawn("proc-env-allow", allowed_imports=["os"], backend="process") as sb:
+        sb.exec("import os; post(sorted(os.environ))")
+        names = sb.recv(timeout=5)
+    assert "SOME_FUTURE_CREDENTIAL" not in names
+    assert set(names) <= {"PATH", *process_backend.ENV_PASSTHROUGH}
+
+
+def test_guest_path_is_fixed_not_the_supervisors(monkeypatch):
+    monkeypatch.setenv("PATH", "/home/someuser/.secret-toolchain/bin")
+    with iso.spawn("proc-env-path", allowed_imports=["os"], backend="process") as sb:
+        sb.exec("import os; post(os.environ.get('PATH'))")
+        assert sb.recv(timeout=5) == process_backend.DEFAULT_CHILD_PATH
+
+
+def test_build_child_env_forwards_only_allowlisted_variables():
+    source = {
+        "AWS_SECRET_ACCESS_KEY": "nope",
+        "GITHUB_TOKEN": "nope",
+        "LANG": "en_US.UTF-8",
+        "PYTHONPATH": "/opt/src",
+    }
+    env = process_backend.build_child_env(source=source)
+    assert env["LANG"] == "en_US.UTF-8"
+    assert env["PYTHONPATH"] == "/opt/src"
+    assert env["PATH"] == process_backend.DEFAULT_CHILD_PATH
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+    assert "GITHUB_TOKEN" not in env
+
+
+def test_build_child_env_extra_is_deliberate_and_wins():
+    # Anything the caller passes explicitly is intentional configuration, so it
+    # overrides the allow-listed value rather than being dropped.
+    source = {"LANG": "C"}
+    env = process_backend.build_child_env(
+        {"LANG": "en_GB.UTF-8", "APP_MODE": "test"}, source=source
+    )
+    assert env["LANG"] == "en_GB.UTF-8"
+    assert env["APP_MODE"] == "test"
+
+
+def test_explicit_env_reaches_the_guest():
+    proc = process_backend.ProcessSandbox(
+        "proc-env-extra",
+        allowed_imports=["os"],
+        env={"APP_MODE": "production"},
+    )
+    try:
+        proc.wait_confined(timeout=5)
+        proc.exec("import os; post(os.environ.get('APP_MODE'))")
+        assert proc.recv(timeout=5) == "production"
+    finally:
+        proc.stop()
