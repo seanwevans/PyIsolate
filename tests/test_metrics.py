@@ -91,13 +91,16 @@ def test_export_sandbox_order_is_stable():
             sb.close()
 
 
-def test_export_sanitizes_sandbox_name():
+def test_export_sanitizes_sandbox_name(monkeypatch):
     name = 'weird "sand\\box\nname'
     import re
 
     import pyisolate.supervisor as supervisor
 
-    supervisor.NAME_PATTERN = re.compile(r".+", re.DOTALL)
+    # monkeypatch restores the default when the test ends. This used to rely on
+    # Supervisor.spawn resetting the global itself, which meant production code
+    # carried a test affordance and raced with concurrent spawns.
+    monkeypatch.setattr(supervisor, "NAME_PATTERN", re.compile(r".+", re.DOTALL))
     sb = iso.spawn(name)
     try:
         sb.exec("post(1)")
