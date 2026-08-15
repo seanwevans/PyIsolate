@@ -60,6 +60,11 @@ _AUDIT_ARCH_X86_64 = 0xC000003E
 _SECCOMP_DATA_NR_OFFSET = 0
 _SECCOMP_DATA_ARCH_OFFSET = 4
 
+# Descriptors the guest runtime needs regardless of its own quota: stdin/stdout/
+# stderr and the supervisor channel, plus slack for the interpreter's own opens
+# during import.
+_NOFILE_CHANNEL_HEADROOM = 16
+
 # x86-64 syscall numbers for the deny-list. These are a stable ABI and never
 # change for this architecture. A normal compute workload never issues any of
 # them; every entry is an escape, execution, kernel-management, or
@@ -197,6 +202,7 @@ def _apply_rlimits(
     *,
     mem_bytes: int | None,
     cpu_seconds: int | None,
+    open_files_max: int | None,
 ) -> None:
     # Never leak memory contents through a core dump of the guest.
     try:
@@ -218,6 +224,22 @@ def _apply_rlimits(
             report.rlimits.append(f"cpu={cpu_seconds}")
         except (ValueError, OSError):
             report.skipped.append("rlimit_cpu")
+
+    if open_files_max is not None:
+        # The guest inherits the socketpair end it talks to the supervisor on,
+        # plus stdio, so the limit has to leave room for those or the child
+        # cannot even report its confinement. Reserve a small fixed headroom
+        # rather than handing the guest its full requested budget for its own
+        # opens plus the channel.
+        effective = open_files_max + _NOFILE_CHANNEL_HEADROOM
+        try:
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if hard != resource.RLIM_INFINITY:
+                effective = min(effective, hard)
+            resource.setrlimit(resource.RLIMIT_NOFILE, (effective, hard))
+            report.rlimits.append(f"nofile={effective}")
+        except (ValueError, OSError):
+            report.skipped.append("rlimit_nofile")
 
 
 def _apply_landlock(
@@ -265,6 +287,7 @@ def apply_confinement(
     *,
     mem_bytes: int | None = None,
     cpu_seconds: int | None = None,
+    open_files_max: int | None = None,
     fs_read: list[str] | None = None,
     fs_write: list[str] | None = None,
     net_connect_ports: list[int] | None = None,
@@ -284,7 +307,12 @@ def apply_confinement(
     report = ConfinementReport()
     report.no_new_privs = _set_no_new_privs()
 
-    _apply_rlimits(report, mem_bytes=mem_bytes, cpu_seconds=cpu_seconds)
+    _apply_rlimits(
+        report,
+        mem_bytes=mem_bytes,
+        cpu_seconds=cpu_seconds,
+        open_files_max=open_files_max,
+    )
     _apply_landlock(
         report,
         fs_read=fs_read,

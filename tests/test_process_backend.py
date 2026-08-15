@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 import pytest
 
 import pyisolate as iso
-from pyisolate.runtime import process_backend
+from pyisolate.runtime import confine, process_backend
 
 # The object-graph escape that fully defeats the sub-interpreter backend:
 # recover the *real* __import__ from a stdlib module's globals, bypassing the
@@ -159,6 +160,123 @@ def test_microvm_backend_remains_unimplemented():
         iso.spawn("proc-vm", backend="microvm")
 
 
+# -- quota forwarding ------------------------------------------------------
+
+
+def test_wall_time_quota_kills_a_runaway_guest():
+    # A guest that blocks forever burns no CPU, so RLIMIT_CPU never fires; the
+    # supervisor-side wall clock is what bounds it.
+    sb = iso.spawn(
+        "proc-wall", allowed_imports=["time"], backend="process", wall_time_ms=300
+    )
+    try:
+        started = time.monotonic()
+        sb.exec("import time; time.sleep(30); post('finished')")
+        with pytest.raises(iso.WallTimeExceeded):
+            sb.recv(timeout=10)
+        assert time.monotonic() - started < 10
+        assert sb.termination_reason == "wall_time_exceeded"
+        # The guest must already be stopped when the error surfaces, not still
+        # burning CPU while the caller handles the exception.
+        assert not sb._thread.is_alive()
+    finally:
+        sb.close()
+
+
+def test_wall_time_quota_allows_work_that_finishes_in_budget():
+    with iso.spawn(
+        "proc-wall-ok", allowed_imports=["math"], backend="process", wall_time_ms=10_000
+    ) as sb:
+        sb.exec("from math import sqrt; post(sqrt(16))")
+        assert sb.recv(timeout=10) == 4.0
+        # The timer must be disarmed by the completion frame, not left to fire
+        # and kill a guest that already finished.
+        time.sleep(0.2)
+        assert sb._thread.is_alive()
+
+
+def test_wall_time_quota_rearms_across_sequential_operations():
+    with iso.spawn(
+        "proc-wall-seq", allowed_imports=["math"], backend="process", wall_time_ms=5_000
+    ) as sb:
+        for expected in (2.0, 3.0, 4.0):
+            sb.exec(f"from math import sqrt; post(sqrt({expected ** 2}))")
+            assert sb.recv(timeout=10) == expected
+        assert sb._thread.is_alive()
+
+
+def test_open_files_quota_reaches_the_guest_as_an_rlimit():
+    with iso.spawn(
+        "proc-nofile",
+        allowed_imports=["resource"],
+        backend="process",
+        open_files_max=32,
+    ) as sb:
+        report = sb._thread.wait_confined(timeout=5)
+        assert any(item.startswith("nofile=") for item in report["rlimits"])
+        sb.exec("import resource; post(resource.getrlimit(resource.RLIMIT_NOFILE)[0])")
+        soft = sb.recv(timeout=5)
+    # Headroom is added for stdio and the supervisor channel, but the guest is
+    # still bounded rather than inheriting the host's limit.
+    assert soft == 32 + confine._NOFILE_CHANNEL_HEADROOM
+
+
+def test_cpu_quota_reaches_the_guest_as_an_rlimit():
+    with iso.spawn(
+        "proc-cpu", allowed_imports=["resource"], backend="process", cpu_ms=5_000
+    ) as sb:
+        report = sb._thread.wait_confined(timeout=5)
+        assert "cpu=5" in report["rlimits"]
+        sb.exec("import resource; post(resource.getrlimit(resource.RLIMIT_CPU)[0])")
+        assert sb.recv(timeout=5) == 5
+
+
+def test_mem_quota_reaches_the_guest_as_an_rlimit():
+    with iso.spawn(
+        "proc-mem",
+        allowed_imports=["resource"],
+        backend="process",
+        mem_bytes=512 * 1024 * 1024,
+    ) as sb:
+        report = sb._thread.wait_confined(timeout=5)
+        assert f"as={512 * 1024 * 1024}" in report["rlimits"]
+
+
+def test_sub_second_cpu_budget_rounds_up_and_warns(caplog):
+    # RLIMIT_CPU has one-second granularity. Rounding up is honest only if it is
+    # visible, so the weaker-than-requested limit is logged.
+    with caplog.at_level("WARNING", logger="pyisolate.runtime.process_backend"):
+        assert process_backend._cpu_seconds_from_ms(50) == 1
+    assert "below RLIMIT_CPU's one-second granularity" in caplog.text
+    # A budget that fits the granularity rounds without a warning.
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="pyisolate.runtime.process_backend"):
+        assert process_backend._cpu_seconds_from_ms(2_500) == 3
+    assert caplog.text == ""
+    assert process_backend._cpu_seconds_from_ms(None) is None
+
+
+@pytest.mark.parametrize(
+    "quota",
+    ["network_ops_max", "output_bytes_max", "child_work_max", "numa_node"],
+)
+def test_unenforceable_quotas_are_refused_not_silently_ignored(quota):
+    # These used to be accepted and dropped on the floor, leaving callers with a
+    # limit that did nothing in the backend documented as the security boundary.
+    with pytest.raises(NotImplementedError, match=quota):
+        iso.spawn(f"proc-unsupported-{quota}", backend="process", **{quota: 1})
+
+
+def test_supported_quotas_are_not_refused():
+    with iso.spawn(
+        "proc-supported",
+        backend="process",
+        cpu_ms=5_000,
+        mem_bytes=512 * 1024 * 1024,
+        wall_time_ms=10_000,
+        open_files_max=64,
+    ) as sb:
+        assert sb.backend == "process"
 # -- guest environment scrubbing ------------------------------------------
 
 

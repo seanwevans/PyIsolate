@@ -21,6 +21,8 @@ supervisor's ``os.environ`` -- see :func:`build_child_env`.
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import queue
 import socket
@@ -34,6 +36,8 @@ from .. import errors
 from ..policy.model import RuntimePolicy
 from .protocol import BrokerRequest
 from .thread import Stats
+
+logger = logging.getLogger(__name__)
 
 _LEN = struct.Struct("!I")
 
@@ -95,6 +99,30 @@ def build_child_env(
     if extra:
         env.update({str(k): str(v) for k, v in extra.items()})
     return env
+
+
+def _cpu_seconds_from_ms(cpu_ms: Optional[int]) -> Optional[int]:
+    """Convert a millisecond CPU budget to the whole seconds ``RLIMIT_CPU`` takes.
+
+    ``RLIMIT_CPU`` has one-second granularity, so a sub-second budget cannot be
+    expressed exactly and rounds *up* to one second. Rounding up keeps the limit
+    real (the guest is still killed) but weaker than requested, so it is logged
+    rather than applied silently -- a quota that quietly differs from the one
+    the caller asked for is the failure mode this wiring exists to remove.
+    Precise sub-second CPU accounting needs cgroup ``cpu.max``.
+    """
+    if cpu_ms is None:
+        return None
+    seconds = max(1, math.ceil(cpu_ms / 1000))
+    if cpu_ms < 1000:
+        logger.warning(
+            "cpu_ms=%d is below RLIMIT_CPU's one-second granularity; the guest "
+            "process is limited to %ds of CPU instead. Use wall_time_ms for "
+            "finer bounds.",
+            cpu_ms,
+            seconds,
+        )
+    return seconds
 
 
 def _extract_fs_tcp(policy: Any) -> tuple[Optional[list[str]], Optional[list[str]]]:
@@ -191,7 +219,10 @@ class ProcessSandbox:
         capabilities: Optional[dict[str, Any]] = None,
         backend: str = "process",
         mem_bytes: Optional[int] = None,
+        cpu_ms: Optional[int] = None,
         cpu_seconds: Optional[int] = None,
+        wall_time_ms: Optional[int] = None,
+        open_files_max: Optional[int] = None,
         confine: bool = True,
         require_seccomp: bool = False,
         require_landlock: bool = False,
@@ -203,6 +234,21 @@ class ProcessSandbox:
         self._outbox: "queue.Queue[Any]" = queue.Queue()
         self._closed = False
         self._lock = threading.Lock()
+        # Wall-clock enforcement. RLIMIT_CPU bounds CPU time in the guest, but a
+        # guest that blocks forever burns no CPU, so wall time is enforced here
+        # in the supervisor: arm a timer when an operation is dispatched and
+        # kill the guest if it has not reported completion in time.
+        self.wall_time_ms = wall_time_ms
+        self._wall_timer: Optional[threading.Timer] = None
+        self._pending_ops = 0
+        self._timer_lock = threading.Lock()
+        # A dying guest is noticed by two racing observers -- the wall-clock
+        # timer and the reader thread seeing EOF -- and a waiter must get
+        # exactly one error, the specific one.
+        self._termination_lock = threading.Lock()
+        self._termination_surfaced = False
+        if cpu_seconds is None:
+            cpu_seconds = _cpu_seconds_from_ms(cpu_ms)
         # Tenant-quota bookkeeping mirrors SandboxThread so the supervisor's
         # shared reservation helpers can account for process sandboxes too.
         self._tenant: Optional[str] = None
@@ -258,6 +304,7 @@ class ProcessSandbox:
                 "confine": confine,
                 "mem_bytes": mem_bytes,
                 "cpu_seconds": cpu_seconds,
+                "open_files_max": open_files_max,
                 "require_seccomp": require_seccomp,
                 "require_landlock": require_landlock,
                 "default_deny_fs": default_deny_fs,
@@ -315,9 +362,82 @@ class ProcessSandbox:
         if not self._closed:
             self._closed = True
             self._confined.set()
+            self._surface_termination()
+
+    # -- wall-clock enforcement -------------------------------------------
+
+    def _op_started(self) -> None:
+        """Record a dispatched operation and arm the wall-clock timer."""
+        if self.wall_time_ms is None:
+            return
+        with self._timer_lock:
+            self._pending_ops += 1
+            if self._wall_timer is None:
+                self._arm_timer_locked()
+
+    def _op_finished(self) -> None:
+        """Clear one completed operation, re-arming while others are pending."""
+        if self.wall_time_ms is None:
+            return
+        with self._timer_lock:
+            self._pending_ops = max(0, self._pending_ops - 1)
+            self._cancel_timer_locked()
+            if self._pending_ops:
+                # Operations are pipelined: the guest executes them serially, so
+                # the next one starts now and gets its own full budget.
+                self._arm_timer_locked()
+
+    def _arm_timer_locked(self) -> None:
+        assert self.wall_time_ms is not None
+        timer = threading.Timer(self.wall_time_ms / 1000.0, self._on_wall_timeout)
+        timer.daemon = True
+        self._wall_timer = timer
+        timer.start()
+
+    def _cancel_timer_locked(self) -> None:
+        if self._wall_timer is not None:
+            self._wall_timer.cancel()
+            self._wall_timer = None
+
+    def _surface_termination(self) -> None:
+        """Hand a waiting ``recv`` exactly one error for an unexpected death.
+
+        The wall-clock timer and the reader thread can both observe the guest
+        dying, so the first one here wins and the other is a no-op. A quota
+        breach reports its specific error; anything else -- a seccomp kill, a
+        segfault -- reports the generic one.
+        """
+        with self._termination_lock:
+            if self._termination_surfaced:
+                return
+            self._termination_surfaced = True
+        if self.termination_reason == "wall_time_exceeded":
+            self._outbox.put(errors.WallTimeExceeded())
+        else:
             self._outbox.put(
                 errors.SandboxError("guest process terminated unexpectedly")
             )
+
+    def _on_wall_timeout(self) -> None:
+        """Kill a guest that overran its wall-clock budget and report it."""
+        with self._timer_lock:
+            self._wall_timer = None
+            self._pending_ops = 0
+        if not self.is_alive():
+            return
+        self.termination_reason = "wall_time_exceeded"
+        self._errors += 1
+        logger.warning(
+            "sandbox %s exceeded its %dms wall-clock quota; killing guest",
+            self.name,
+            self.wall_time_ms,
+        )
+        # Kill *before* surfacing the error so a caller that catches
+        # WallTimeExceeded and immediately inspects the sandbox sees a stopped
+        # guest rather than one still burning CPU. ``termination_reason`` is set
+        # first so whichever observer gets there reports the quota breach.
+        self.kill(timeout=0.2)
+        self._surface_termination()
 
     def _dispatch(self, frame: dict[str, Any]) -> None:
         ev = frame.get("ev")
@@ -325,7 +445,10 @@ class ProcessSandbox:
             self._outbox.put(frame.get("message"))
         elif ev == "error":
             self._errors += 1
+            self._op_finished()
             self._outbox.put(self._rebuild_exception(frame))
+        elif ev == "done":
+            self._op_finished()
         elif ev == "request":
             # A capability-gated broker request from the guest. Surface it as a
             # BrokerRequest via recv(), matching the sub-interpreter backend, so
@@ -340,8 +463,8 @@ class ProcessSandbox:
         elif ev == "confinement":
             self.confinement = frame
             self._confined.set()
-        # "ready", "done", "log", and "metric" are lifecycle/telemetry frames
-        # that do not feed recv(); logging/metrics routing is added with the
+        # "ready", "log", and "metric" are lifecycle/telemetry frames that do
+        # not feed recv(); logging/metrics routing is added with the
         # observability wiring for this backend.
 
     @staticmethod
@@ -364,11 +487,23 @@ class ProcessSandbox:
 
     def exec(self, src: str) -> None:
         self._ops += 1
-        self._send({"op": "exec", "source": src})
+        self._op_started()
+        try:
+            self._send({"op": "exec", "source": src})
+        except Exception:
+            self._op_finished()
+            raise
 
     def call(self, func: str, *args, timeout: float | None = None, **kwargs) -> Any:
         self._ops += 1
-        self._send({"op": "call", "target": func, "args": list(args), "kwargs": kwargs})
+        self._op_started()
+        try:
+            self._send(
+                {"op": "call", "target": func, "args": list(args), "kwargs": kwargs}
+            )
+        except Exception:
+            self._op_finished()
+            raise
         try:
             return self.recv(timeout)
         except errors.SandboxError:
@@ -438,6 +573,9 @@ class ProcessSandbox:
         return True
 
     def _teardown(self) -> None:
+        with self._timer_lock:
+            self._pending_ops = 0
+            self._cancel_timer_locked()
         with self._lock:
             self._closed = True
             try:
