@@ -8,7 +8,9 @@ normative statement.
 ## Delivered
 
 - **Backends** — `backend="thread"` (execution cell; a dedicated thread of the
-  supervisor process, previously spelled `subinterpreter`) and
+  supervisor process, previously spelled `subinterpreter`),
+  `backend="subinterpreter"` (real CPython sub-interpreter cells on 3.14+, with
+  a pre-warmed pool; an execution cell, not a boundary), and
   `backend="process"` (the boundary mode): a real separate-process boundary with
   `no_new_privs` + a seccomp deny-list, Landlock filesystem rules, Landlock
   TCP-egress rules (ABI ≥ 4), a coarse per-cgroup eBPF/LSM deny-mask, and
@@ -31,14 +33,17 @@ normative statement.
 
 ## Now / next
 
-- **A real `backend="subinterpreter"`** — the name is now free: the thread
-  runtime it used to label is called `backend="thread"`, and `subinterpreter`
-  resolves to it with a `DeprecationWarning` until the real thing lands. Build
-  it on `concurrent.interpreters` (3.14+, rather than the private
-  `_interpreters`, which heap-corrupts on realistic import surfaces — see
-  `scripts/cell_cost.py`). The boundary claim is unchanged: it is an execution
-  cell, not a boundary against hostile Python. What it adds over a thread is a
-  private `sys.modules` and a private set of globals per tenant.
+- **A kill domain for cells** — a running sub-interpreter cannot be reclaimed:
+  `close()` refuses while the guest is executing and there is no `kill`, so a
+  cell that overruns is abandoned and its thread is pinned for the life of the
+  process. The fix is not in-process. Add a layer of pre-forked worker
+  processes between the supervisor and the cells, size them by tenant, and make
+  the worker the unit that gets killed and replaced. This is what turns the cell
+  pool into something that survives a hostile-by-accident tenant.
+- **Per-cell resource accounting** — there is none today.
+  `sys.getallocatedblocks()` is process-global on both free-threaded and GIL
+  builds, so memory has to be capped at the worker/cgroup level rather than per
+  cell. Cells currently enforce a wall-time deadline and nothing else.
 - **Broker request execution** — the `request` op currently surfaces a
   `BrokerRequest` to the host but nothing executes it or returns a result. Add a
   request/response round-trip and a pluggable, capability-scoped handler so the

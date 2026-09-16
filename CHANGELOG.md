@@ -8,6 +8,13 @@ guarantees; **no release should be treated as a hardened security boundary**.
 ## [Unreleased]
 
 ### Added
+- `backend="subinterpreter"`: real CPython sub-interpreter cells on 3.14+, via
+  `concurrent.interpreters`, with a pre-warmed `CellPool`. Each guest gets its
+  own `sys.modules` and its own `builtins`, so the import allow-list is a
+  property of the interpreter rather than thread-local state. Still an
+  execution cell, not a boundary against hostile Python. Fails closed below
+  3.14 rather than degrading to the thread backend.
+
 - `backend="process"` boundary mode: a real separate-process boundary confined
   by `no_new_privs` + a seccomp deny-list, Landlock filesystem rules, Landlock
   TCP-egress rules (Landlock ABI ≥ 4), a coarse per-cgroup eBPF/LSM deny-mask,
@@ -25,17 +32,20 @@ guarantees; **no release should be treated as a hardened security boundary**.
 
 ### Changed
 - `backend="subinterpreter"` is renamed to `backend="thread"`, which is what it
-  has always run. The old spelling still resolves and emits a
-  `DeprecationWarning`; it is reserved for a real CPython sub-interpreter
-  backend rather than kept as a permanent synonym, so callers who want the
-  thread runtime should pass `"thread"`. `DEPRECATED_BACKEND_ALIASES` is
-  exported alongside `SUPPORTED_BACKENDS`.
+  has always run, and the `subinterpreter` name now selects the real
+  sub-interpreter backend. `DEPRECATED_BACKEND_ALIASES` is exported alongside
+  `SUPPORTED_BACKENDS` and is currently empty.
 - Threat model and `SECURITY.md` reconciled with the real, backend-conditional
   boundary (the sub-interpreter backend is an execution cell, not a boundary
   against hostile Python).
 
 ### Known gaps
 - The broker `request` op is surfaced but not yet executed end-to-end.
+- A running sub-interpreter cell cannot be reclaimed: one that overruns its
+  wall-time deadline is abandoned, and its thread stays pinned until the
+  process exits. Cells enforce a wall-time deadline and no other quota;
+  `sys.getallocatedblocks()` is process-global, so per-cell memory
+  accounting needs a worker-process layer that does not exist yet.
 - Process-backed sandboxes are not attached to cgroups or watched by the
   resource watchdog (they get `rlimit` only).
 - `backend="microvm"` fails closed: the guest agent and vsock cell transport are

@@ -227,17 +227,39 @@ an execution cell and *not* a boundary against hostile Python, which is equally
 true of a thread and of a real sub-interpreter. What the old name obscured was
 the mechanism you should assume when reasoning about it:
 
-| | `thread` (today) | `subinterpreter` (reserved) |
+| | `thread` | `subinterpreter` |
 | --- | --- | --- |
 | Address space | shared with supervisor | shared with supervisor |
 | `sys.modules` | shared with supervisor | per-interpreter |
+| Import allow-list | thread-local bookkeeping | a property of the interpreter |
 | Boundary vs hostile Python | none | none |
 | GIL | shared | per-interpreter; irrelevant on free-threaded builds |
+| Requires | any supported Python | CPython 3.14+ |
 
-Landing the real implementation (`concurrent.interpreters` on 3.14) is roadmap
-work; see [ROADMAP.md](ROADMAP.md) and the measured cost of a cell in
-[Performance snapshot](#performance-snapshot). Until then, use
-`backend="process"` for any guest you do not trust.
+`backend="subinterpreter"` runs each guest in its own CPython interpreter via
+`concurrent.interpreters`. It needs CPython 3.14+ and **fails closed** below
+that rather than quietly handing back a thread, which isolates differently.
+It is not the default for that reason.
+
+Neither is a boundary against hostile Python: both share the supervisor's
+address space, `ctypes` imports cleanly inside a cell, and any C extension can
+reach the whole process. Use `backend="process"` for any guest you do not
+trust. What a cell buys over a thread is that one tenant's imports,
+monkey-patches and globals cannot be seen or clobbered by another.
+
+Cells are pooled and pre-warmed, because creating one costs 10-57 ms while
+dispatching onto a warm one costs 0.8 ms — see
+[Performance snapshot](#performance-snapshot). A released cell is *retired*
+rather than returned to the pool: an interpreter cannot be reset, so reusing
+one across tenants would carry the first tenant's globals into the second.
+
+One operational limit is worth knowing before you deploy it: **a running cell
+cannot be reclaimed.** `Interpreter.close()` refuses while the guest is
+executing and there is no `kill`, so a cell that overruns its deadline is
+*abandoned* — the sandbox raises, the pool stops using that cell, and its
+thread stays pinned until the process exits. If you need to survive runaway
+guests, run a pool of worker processes and treat the worker as the kill
+domain.
 
 ---
 
