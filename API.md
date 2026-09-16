@@ -12,7 +12,7 @@ import pyisolate as psi
 
 PyIsolate supports exactly seven cell operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.
 
-Isolation mode is explicit in the public API. Use `backend="subinterpreter"` for the execution-cell backend, `backend="process"` for one sandbox per OS process, and `backend="microvm"` for a process placed behind a microVM boundary. The cell contract is the same in every mode, but only the process and microVM modes are intended to represent hard blast-radius boundaries.
+Isolation mode is explicit in the public API. Use `backend="thread"` for the execution-cell backend, `backend="process"` for one sandbox per OS process, and `backend="microvm"` for a process placed behind a microVM boundary. The cell contract is the same in every mode, but only the process and microVM modes are intended to represent hard blast-radius boundaries.
 
 The canonical contract lives in [docs/execution-model.md](docs/execution-model.md). Keep this surface small; production systems win by refusing extra features.
 
@@ -27,7 +27,7 @@ The canonical contract lives in [docs/execution-model.md](docs/execution-model.m
 ## 2  Executing code
 
 ```python
-sb = psi.spawn("guest42", allowed_imports=["math"], numa_node=0, policy="defaults", backend="subinterpreter")
+sb = psi.spawn("guest42", allowed_imports=["math"], numa_node=0, policy="defaults", backend="thread")
 sb.exec("from math import sqrt; post(sqrt(2))")
 result = sb.recv(timeout=0.1)      # 1.4142135623
 ```
@@ -76,7 +76,7 @@ policy.refresh("/tmp/policy.yml", token="secret")
 The policy names below are routing/configuration labels in the prototype release; they must not silently imply kernel-enforced isolation.
 
 ```python
-@psi.sandbox(policy="ml-inference", timeout="30s", backend="subinterpreter")
+@psi.sandbox(policy="ml-inference", timeout="30s", backend="thread")
 def run_model(data):
     ...
 

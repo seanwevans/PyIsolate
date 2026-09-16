@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import warnings
+
 import pytest
 
 import pyisolate as iso
@@ -181,14 +183,50 @@ def test_spawn_valid_name_regex(name):
         sb.close()
 
 
-def test_spawn_backend_is_explicit_subinterpreter():
-    sb = iso.spawn("backend-sub", backend="subinterpreter")
+def test_spawn_backend_is_explicit_thread():
+    sb = iso.spawn("backend-thread", backend="thread")
     try:
-        assert sb.backend == "subinterpreter"
-        assert iso.SUPPORTED_BACKENDS == ("subinterpreter", "process", "microvm")
-        assert iso.IMPLEMENTED_BACKENDS == ("subinterpreter", "process")
+        assert sb.backend == "thread"
+        assert iso.SUPPORTED_BACKENDS == ("thread", "process", "microvm")
+        assert iso.IMPLEMENTED_BACKENDS == ("thread", "process")
+        assert iso.DEFAULT_BACKEND == "thread"
     finally:
         sb.close()
+
+
+def test_default_backend_does_not_warn():
+    """The default must not push every caller through a deprecation warning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        sb = iso.spawn("backend-default")
+        try:
+            assert sb.backend == "thread"
+        finally:
+            sb.close()
+
+
+def test_subinterpreter_backend_is_a_deprecated_alias_for_thread():
+    """The old spelling keeps working, warns, and selects the same runtime."""
+    with pytest.warns(DeprecationWarning, match="thread"):
+        sb = iso.spawn("backend-alias", backend="subinterpreter")
+    try:
+        assert sb.backend == "thread"
+    finally:
+        sb.close()
+    assert iso.DEPRECATED_BACKEND_ALIASES == {"subinterpreter": "thread"}
+
+
+def test_deprecated_alias_is_not_advertised_as_supported():
+    """It resolves, but it is not one of the names the API offers."""
+    assert "subinterpreter" not in iso.SUPPORTED_BACKENDS
+    assert "subinterpreter" not in iso.IMPLEMENTED_BACKENDS
+
+
+def test_unknown_backend_still_rejects_without_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(ValueError, match="backend must be one of"):
+            iso.spawn("backend-bogus", backend="interpreter")
 
 
 @pytest.mark.parametrize("backend", ["microvm"])
@@ -201,8 +239,10 @@ def test_spawn_unimplemented_boundary_backends_fail_closed(backend):
 
 
 def test_spawn_rejects_unknown_backend():
+    # "thread" used to stand in for an unknown backend here; it is now the
+    # default one, so the check needs a name that is genuinely not a backend.
     with pytest.raises(ValueError, match="backend must be one of"):
-        iso.spawn("backend-bad", backend="thread")
+        iso.spawn("backend-bad", backend="nonexistent")
 
 
 @pytest.mark.parametrize("name", ["bad name", "name!", "foo/bar"])

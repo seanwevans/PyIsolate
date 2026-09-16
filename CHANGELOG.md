@@ -24,6 +24,12 @@ guarantees; **no release should be treated as a hardened security boundary**.
 - `pyisolate[operator]` optional-dependency group for the Kubernetes operator.
 
 ### Changed
+- `backend="subinterpreter"` is renamed to `backend="thread"`, which is what it
+  has always run. The old spelling still resolves and emits a
+  `DeprecationWarning`; it is reserved for a real CPython sub-interpreter
+  backend rather than kept as a permanent synonym, so callers who want the
+  thread runtime should pass `"thread"`. `DEPRECATED_BACKEND_ALIASES` is
+  exported alongside `SUPPORTED_BACKENDS`.
 - Threat model and `SECURITY.md` reconciled with the real, backend-conditional
   boundary (the sub-interpreter backend is an execution cell, not a boundary
   against hostile Python).

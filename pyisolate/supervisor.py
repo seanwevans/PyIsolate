@@ -1,7 +1,7 @@
 """Supervisor agent.
 
 This module manages sandboxes and is the entry point for spawning them. The
-security boundary depends on the backend: ``backend="subinterpreter"`` runs guest
+security boundary depends on the backend: ``backend="thread"`` runs guest
 code in this process and is NOT a boundary against hostile Python, while
 ``backend="process"`` runs it in a separate OS process confined by seccomp,
 Landlock, and a coarse eBPF/LSM deny-mask (see ``docs/threat-model.md``). Kernel
@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import threading
+import warnings
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union, cast
 
@@ -42,17 +43,45 @@ logger = logging.getLogger(__name__)
 DEFAULT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 NAME_PATTERN = DEFAULT_NAME_PATTERN
 
-BackendMode = Literal["subinterpreter", "process", "microvm"]
-DEFAULT_BACKEND: BackendMode = "subinterpreter"
+BackendMode = Literal["thread", "process", "microvm"]
+DEFAULT_BACKEND: BackendMode = "thread"
 SUPPORTED_BACKENDS: tuple[BackendMode, ...] = (
-    "subinterpreter",
+    "thread",
     "process",
     "microvm",
 )
-IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = ("subinterpreter", "process")
+IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = ("thread", "process")
+
+#: ``backend="subinterpreter"`` never selected a CPython sub-interpreter. It
+#: selected -- and for now still selects -- the thread runtime in
+#: :mod:`pyisolate.runtime.thread`, which ``exec``s guest source in a
+#: ``threading.Thread`` of this process against a restricted ``__builtins__``
+#: mapping. Naming a backend for an implementation it does not have makes the
+#: mechanism impossible to reason about from the API: a reader has to know that
+#: ``sys.modules`` is shared, not per-interpreter, to judge what isolation they
+#: are getting.
+#:
+#: So the runtime gets its real name, and the old one keeps working with a
+#: warning. The alias is not a permanent synonym: when the real sub-interpreter
+#: backend lands, ``"subinterpreter"`` is reassigned to *it*, which is why the
+#: warning tells callers who want today's behaviour to say ``"thread"``.
+DEPRECATED_BACKEND_ALIASES: dict[str, BackendMode] = {"subinterpreter": "thread"}
 
 
 def _normalize_backend(backend: str) -> BackendMode:
+    alias = DEPRECATED_BACKEND_ALIASES.get(backend)
+    if alias is not None:
+        warnings.warn(
+            f"backend={backend!r} is deprecated and currently selects "
+            f"backend={alias!r}, which runs the guest in a thread of this "
+            "process rather than in a CPython sub-interpreter. Pass "
+            f"backend={alias!r} to keep this behaviour; the "
+            f"{backend!r} name will be reassigned to a real sub-interpreter "
+            "backend.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return alias
     if backend not in SUPPORTED_BACKENDS:
         options = ", ".join(repr(item) for item in SUPPORTED_BACKENDS)
         raise ValueError(f"backend must be one of: {options}")
@@ -79,7 +108,7 @@ def _reject_unsupported_process_quotas(**quotas: Optional[int]) -> None:
     names = ", ".join(requested)
     raise NotImplementedError(
         f"backend='process' cannot enforce {names}; it would be accepted and "
-        "ignored. Use backend='subinterpreter' for in-process counter quotas, "
+        "ignored. Use backend='thread' for in-process counter quotas, "
         "or express the limit with cpu_ms/mem_bytes/wall_time_ms/open_files_max, "
         "which this backend enforces in the kernel."
     )
@@ -98,7 +127,7 @@ class Sandbox:
     """Handle to a sandbox.
 
     Wraps either a :class:`~pyisolate.runtime.thread.SandboxThread`
-    (``backend="subinterpreter"``) or a
+    (``backend="thread"``) or a
     :class:`~pyisolate.runtime.process_backend.ProcessSandbox`
     (``backend="process"``); both expose the same cell-ABI surface this handle
     delegates to.
@@ -347,7 +376,7 @@ class Supervisor:
     ) -> Sandbox:
         """Create and start a sandbox in the requested isolation backend.
 
-        ``backend="subinterpreter"`` is the execution-cell backend and is not
+        ``backend="thread"`` is the execution-cell backend and is not
         a hard security boundary by itself. ``backend="process"`` and
         ``backend="microvm"`` are explicit boundary modes; they are reserved
         API choices and fail closed until native launchers are available.
