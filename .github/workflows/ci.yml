@@ -102,7 +102,7 @@ jobs:
         run: pytest -q tests/test_matrix_hardening.py -m "race and no_gil"
 
   tests-subinterpreter:
-    name: sub-interpreter cells / py3.14t
+    name: cells + fabric / py3.14t
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -132,6 +132,10 @@ jobs:
           PY
       - name: Run the sub-interpreter backend suite
         run: pytest -q tests/test_subinterpreter_backend.py tests/test_supervisor.py
+      - name: Run the fabric suite
+        # Spawns worker processes and kills them; the runaway cases run inline
+        # here because the fabric reclaims them, unlike the in-process backend.
+        run: pytest -q tests/test_fabric.py
       - name: Validate the no-GIL readiness axis on 3.14t
         run: pytest -q tests/test_nogil.py
 

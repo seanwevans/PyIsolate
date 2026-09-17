@@ -10,7 +10,9 @@ normative statement.
 - **Backends** — `backend="thread"` (execution cell; a dedicated thread of the
   supervisor process, previously spelled `subinterpreter`),
   `backend="subinterpreter"` (real CPython sub-interpreter cells on 3.14+, with
-  a pre-warmed pool; an execution cell, not a boundary), and
+  a pre-warmed pool; an execution cell, not a boundary), `backend="fabric"`
+  (those cells hosted in worker processes, with tenant-aware placement, worker
+  memory caps, and kill-and-replace recovery — the multi-tenant mode), and
   `backend="process"` (the boundary mode): a real separate-process boundary with
   `no_new_privs` + a seccomp deny-list, Landlock filesystem rules, Landlock
   TCP-egress rules (ABI ≥ 4), a coarse per-cgroup eBPF/LSM deny-mask, and
@@ -33,17 +35,21 @@ normative statement.
 
 ## Now / next
 
-- **A kill domain for cells** — a running sub-interpreter cannot be reclaimed:
-  `close()` refuses while the guest is executing and there is no `kill`, so a
-  cell that overruns is abandoned and its thread is pinned for the life of the
-  process. The fix is not in-process. Add a layer of pre-forked worker
-  processes between the supervisor and the cells, size them by tenant, and make
-  the worker the unit that gets killed and replaced. This is what turns the cell
-  pool into something that survives a hostile-by-accident tenant.
-- **Per-cell resource accounting** — there is none today.
-  `sys.getallocatedblocks()` is process-global on both free-threaded and GIL
-  builds, so memory has to be capped at the worker/cgroup level rather than per
-  cell. Cells currently enforce a wall-time deadline and nothing else.
+- **Broker request execution for the fabric** — a fabric cell's `request` op
+  surfaces to the supervisor like the other backends', and still nothing
+  executes it. The fabric is where mediation matters most, because a worker
+  holds many tenants' cells: the handler has to be capability-scoped per cell,
+  not per worker.
+- **Kernel confinement of fabric workers** — a worker is currently an ordinary
+  process with the supervisor's privileges. With `tenant_isolation=True` a
+  worker serves one tenant, so its policy is unambiguous and the process
+  backend's seccomp/Landlock/cgroup layers could be applied to it at spawn.
+  That would make the fabric a defence-in-depth boundary rather than only a
+  fault boundary.
+- **Fabric admission from policy** — routing is explicit today
+  (`backend="fabric"`, `tenant=...`). Deriving placement and backend choice
+  from the policy's import list would let a tenant that needs numpy land on
+  `process` automatically instead of failing at import time.
 - **Broker request execution** — the `request` op currently surfaces a
   `BrokerRequest` to the host but nothing executes it or returns a result. Add a
   request/response round-trip and a pluggable, capability-scoped handler so the

@@ -97,6 +97,26 @@ def require_available() -> None:
     )
 
 
+def require_available_for_fabric() -> None:
+    """Same requirement as a cell, phrased for ``backend="fabric"``.
+
+    The fabric puts cells in worker processes so a runaway one can be killed;
+    it cannot invent cells on a build that has none, and degrading to threads
+    would give the caller a different isolation model under the same name.
+    """
+    if is_available():
+        return
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    needed = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
+    raise errors.SandboxError(
+        f"backend='fabric' needs CPython {needed}+ for concurrent.interpreters; "
+        f"this is {running}. The fabric hosts sub-interpreter cells in worker "
+        "processes, so it needs the same interpreter support a cell does. Use "
+        "backend='process' for one confined process per sandbox, which is a "
+        "real boundary and works on every supported Python."
+    )
+
+
 # --- what a warm cell contains --------------------------------------------
 
 
@@ -928,5 +948,6 @@ __all__ = [
     "default_pool",
     "is_available",
     "require_available",
+    "require_available_for_fabric",
     "reset_default_pool",
 ]
