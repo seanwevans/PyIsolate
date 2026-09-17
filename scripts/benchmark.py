@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Reproducible micro-benchmarks for PyIsolate on the current host.
 
-Reports spawn latency and cell round-trip time for the sub-interpreter backend
-(and, with ``--backend process``, the process backend). The numbers are
+Reports spawn latency and cell round-trip time for the thread backend (and,
+with ``--backend process``, the process backend). The numbers are
 hardware-, kernel-, and build-dependent, so run this on your own machine rather
 than trusting a headline figure copied from someone else's.
 
@@ -68,9 +68,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--backend",
-        default="subinterpreter",
-        choices=["subinterpreter", "process"],
-        help="isolation backend to benchmark (default: subinterpreter)",
+        default="thread",
+        choices=["thread", "process"],
+        help="isolation backend to benchmark (default: thread)",
     )
     parser.add_argument(
         "--iterations",

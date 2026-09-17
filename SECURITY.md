@@ -5,11 +5,12 @@
 **The security boundary depends on the backend you choose.** This is the single
 most important thing to understand before deploying PyIsolate:
 
-- `backend="subinterpreter"` (the default) is an **execution cell**, not a
-  boundary against hostile Python. Run only trusted code in it. It currently
-  runs guests in a dedicated thread of the supervisor process, not a CPython
-  sub-interpreter — see "Sub-interpreter status" in the README. Neither is a
-  boundary, so nothing below changes.
+- `backend="thread"` (the default) is an **execution cell**, not a
+  boundary against hostile Python. Run only trusted code in it. It runs guests
+  in a dedicated thread of the supervisor process. It was previously spelled
+  `backend="subinterpreter"`, which named an implementation it did not have —
+  see "Backend names and what they run" in the README. Neither a thread nor a
+  sub-interpreter is a boundary, so nothing below changes.
 - `backend="process"` is the **boundary mode**: the guest runs in a separate OS
   process confined in depth by the kernel.
 - `backend="microvm"` is reserved and not yet implemented.
@@ -154,7 +155,7 @@ CPython built with `-fstack-protector-strong`/`-fsanitize=cfi`, path-aware
 
 | Item | Rationale / mitigation |
 | ---- | ---------------------- |
-| **Hostile Python under `backend="subinterpreter"`** | Not a boundary; use `backend="process"` or an external VM/container. |
+| **Hostile Python under `backend="thread"`** | Not a boundary; use `backend="process"` or an external VM/container. |
 | **Hostile native extensions** (`ctypes`, `cffi`, `dlopen`, native wheels) | Deny by default; only allow vetted code. Native code can subvert interpreter-level assumptions. |
 | **Kernel exploits / verifier bypass** | Run inside a VM or microVM if the attacker is assumed to have 0-day power. |
 | **Side-channel leakage** (cache, branch predictor, Spectre) | Use one process per tenant on highly sensitive workloads; PyIsolate adds no microarchitectural mitigations. |

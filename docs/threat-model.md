@@ -14,10 +14,11 @@ If a guarantee is not listed here, it is **not** guaranteed.
 PyIsolate's security posture is **not uniform** across backends. Read every
 answer below as conditional on the backend you select.
 
-- **`backend="subinterpreter"`** (the default) is an *execution cell*, **not** a
+- **`backend="thread"`** (the default) is an *execution cell*, **not** a
   security boundary against hostile Python. Guest code runs in a dedicated
-  **thread** of the supervisor's own process — not, despite the backend's name,
-  in a CPython sub-interpreter; see "Sub-interpreter status" in the README. The
+  **thread** of the supervisor's own process. It was previously spelled
+  `backend="subinterpreter"`; see "Backend names and what they run" in the
+  README. The
   restricted builtins and import allow-list are ergonomic guardrails that
   adversarial Python can bypass (for example by walking
   `object.__subclasses__()` to recover an unrestricted `__import__` and reaching
@@ -63,7 +64,7 @@ high-assurance multitenancy, run one sandbox per process inside a VM or microVM.
 
 **Answer: depends on the backend.**
 
-- **`backend="subinterpreter"`: NOT DEFENDED.** The restricted builtins and
+- **`backend="thread"`: NOT DEFENDED.** The restricted builtins and
   import allow-list are guardrails, not a boundary; adversarial Python can
   bypass them and reach the real interpreter, filesystem, and network from
   inside the supervisor's process. Do not run untrusted code in this mode.
@@ -237,5 +238,5 @@ Any semantic change to defended/not-defended status requires:
   real `backend="process"` boundary: separate-process isolation, a seccomp
   deny-list with `no_new_privs`, Landlock filesystem enforcement from policy,
   and end-to-end wiring of the coarse per-cgroup eBPF/LSM deny-mask. Clarified
-  that `backend="subinterpreter"` is not a boundary against hostile Python.
+  that `backend="thread"` is not a boundary against hostile Python.
 - **2026-04-21** — Initial frozen baseline.

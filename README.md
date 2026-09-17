@@ -9,7 +9,7 @@ PyIsolate `0.0.x` is a prototype for API, policy, broker, observability, and tes
 
 ## Features and roadmap
 
-* **Sub-interpreter sandbox API** — the API surface is available for prototype development and conformance testing. The backend currently executes guests in a dedicated thread, not a CPython sub-interpreter; see [Sub-interpreter status](#sub-interpreter-status).
+* **Sub-interpreter sandbox API** — the API surface is available for prototype development and conformance testing. The backend currently executes guests in a dedicated thread, not a CPython sub-interpreter; see [Backend names and what they run](#backend-names-and-what-they-run).
 * **Import allow-listing and user-space quotas** — available as prototype guardrails; not a complete adversarial security boundary.
 * **No-GIL/free-threaded CPython support** — experimental roadmap target for CPython 3.13+ `--disable-gil` builds.
 * **Kernel enforcement** — experimental roadmap target; eBPF-LSM, cgroup, and verifier-backed policy enforcement are not guaranteed by the current release.
@@ -210,29 +210,56 @@ Use `pyisolate.policy.refresh("policy/<name>.yml", token="secret")` to hot‑loa
 
 ---
 
-## Sub-interpreter status
+## Backend names and what they run
 
-`backend="subinterpreter"` does **not** currently use a CPython sub-interpreter.
-`pyisolate/runtime/thread.py` runs each guest in a `threading.Thread` and
-`exec`s guest source against a restricted `__builtins__` mapping. The backend
-carries the name of its intended implementation.
+`backend="thread"` runs each guest in a `threading.Thread` of the supervisor
+process, `exec`ing guest source against a restricted `__builtins__` mapping. It
+is the default.
 
-This does not change any security claim in this repository — that backend is
-documented throughout as an execution cell and *not* a boundary against hostile
-Python, which is equally true of a thread and of a real sub-interpreter. What it
-changes is the mechanism you should assume when reasoning about it:
+This backend used to be spelled `backend="subinterpreter"`, which named an
+implementation it did not have: `pyisolate/runtime/thread.py` has always used a
+thread. That spelling still works and emits a `DeprecationWarning` pointing at
+`"thread"`. It is **not** a permanent synonym — the name is reserved for a real
+CPython sub-interpreter backend, so pass `"thread"` if you want today's runtime.
 
-| | thread (today) | sub-interpreter (intended) |
+The rename changes no security claim. That backend is documented throughout as
+an execution cell and *not* a boundary against hostile Python, which is equally
+true of a thread and of a real sub-interpreter. What the old name obscured was
+the mechanism you should assume when reasoning about it:
+
+| | `thread` | `subinterpreter` |
 | --- | --- | --- |
 | Address space | shared with supervisor | shared with supervisor |
 | `sys.modules` | shared with supervisor | per-interpreter |
+| Import allow-list | thread-local bookkeeping | a property of the interpreter |
 | Boundary vs hostile Python | none | none |
-| GIL | shared | per-interpreter on free-threaded builds |
+| GIL | shared | per-interpreter; irrelevant on free-threaded builds |
+| Requires | any supported Python | CPython 3.14+ |
 
-Landing the real implementation (`concurrent.interpreters` on 3.14, `_interpreters`
-on 3.12+) is roadmap work. Until then, treat "sub-interpreter" as the name of an
-API mode, not a description of the runtime, and use `backend="process"` for any
-guest you do not trust.
+`backend="subinterpreter"` runs each guest in its own CPython interpreter via
+`concurrent.interpreters`. It needs CPython 3.14+ and **fails closed** below
+that rather than quietly handing back a thread, which isolates differently.
+It is not the default for that reason.
+
+Neither is a boundary against hostile Python: both share the supervisor's
+address space, `ctypes` imports cleanly inside a cell, and any C extension can
+reach the whole process. Use `backend="process"` for any guest you do not
+trust. What a cell buys over a thread is that one tenant's imports,
+monkey-patches and globals cannot be seen or clobbered by another.
+
+Cells are pooled and pre-warmed, because creating one costs 10-57 ms while
+dispatching onto a warm one costs 0.8 ms — see
+[Performance snapshot](#performance-snapshot). A released cell is *retired*
+rather than returned to the pool: an interpreter cannot be reset, so reusing
+one across tenants would carry the first tenant's globals into the second.
+
+One operational limit is worth knowing before you deploy it: **a running cell
+cannot be reclaimed.** `Interpreter.close()` refuses while the guest is
+executing and there is no `kill`, so a cell that overruns its deadline is
+*abandoned* — the sandbox raises, the pool stops using that cell, and its
+thread stays pinned until the process exits. If you need to survive runaway
+guests, run a pool of worker processes and treat the worker as the kill
+domain.
 
 ---
 
@@ -240,7 +267,7 @@ guest you do not trust.
 
 A cell is intentionally limited to seven operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.
 
-The API makes the isolation choice explicit: `backend="subinterpreter"` means an execution cell, `backend="process"` means a separate OS process boundary, and `backend="microvm"` means a process behind a microVM boundary. The cell contract stays the same across modes, but the security boundary does not: sub-interpreters are not treated as a hard boundary.
+The API makes the isolation choice explicit: `backend="thread"` means an execution cell, `backend="process"` means a separate OS process boundary, and `backend="microvm"` means a process behind a microVM boundary. The cell contract stays the same across modes, but the security boundary does not: sub-interpreters are not treated as a hard boundary.
 
 See [docs/execution-model.md](docs/execution-model.md). We keep this model small on purpose: production systems are safer when they refuse features outside a single contract.
 
@@ -250,12 +277,12 @@ See [docs/execution-model.md](docs/execution-model.md). We keep this model small
 
 **The boundary is the backend.** Pick the backend to match your trust level:
 
-* **`backend="subinterpreter"`** (default) - an **execution cell**, not a
+* **`backend="thread"`** (default) - an **execution cell**, not a
   boundary against hostile Python. Today the guest runs in a dedicated
   *thread* of the supervisor's own process, with guest code `exec`'d against a
   restricted `__builtins__` mapping — **not** in a CPython sub-interpreter; the
   backend is named for its intended implementation, which is roadmap work (see
-  [Sub-interpreter status](#sub-interpreter-status)). Restricted builtins and
+  [Backend names and what they run](#backend-names-and-what-they-run)). Restricted builtins and
   the import allow-list are bypassable guardrails (adversarial Python can walk
   `object.__subclasses__()` to reach the real `os`/`open`). Use it for
   **trusted** code, or for scheduling and organization.
