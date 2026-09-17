@@ -5,18 +5,19 @@ It is versioned in `pyisolate.runtime.protocol` as `MINIMAL_CELL_ABI` and is
 frozen to seven operation names.
 
 ## Minimal cell ABI v1
-The public API names the isolation backend explicitly: `backend="subinterpreter"` is the execution-cell mode, `backend="process"` is the process-boundary mode, and `backend="microvm"` is the microVM-boundary mode. These modes change the containment boundary, not the seven cell operations below.
+The public API names the isolation backend explicitly: `backend="thread"` is the execution-cell mode, `backend="process"` is the process-boundary mode, and `backend="microvm"` is the microVM-boundary mode. These modes change the containment boundary, not the seven cell operations below.
 
 ### Backend implementation status
 
-`subinterpreter` and `process` are implemented; `microvm` is reserved and fails
-closed until a launcher is available.
+`thread` and `process` are implemented; `microvm` is reserved and fails closed
+until a launcher is available.
 
-The `subinterpreter` backend currently executes guests in a dedicated **thread**
-of the supervisor process rather than a CPython sub-interpreter — the mode is
-named for its intended implementation. The cell ABI below is identical either
-way, and so is the boundary claim (neither is one). See "Sub-interpreter status"
-in the README.
+The `thread` backend executes guests in a dedicated **thread** of the supervisor
+process. It was previously spelled `subinterpreter`, which named an
+implementation it did not have; that spelling still resolves and warns, and is
+reserved for a real CPython sub-interpreter backend. The cell ABI below is
+identical either way, and so is the boundary claim (neither is one). See
+"Backend names and what they run" in the README.
 
 The `process` backend runs guest code in a separate OS process, so in-process
 Python escapes (for example recovering an unrestricted `__import__` by walking

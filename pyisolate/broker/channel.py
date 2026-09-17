@@ -11,8 +11,8 @@ loop for an oversized frame.
 
 This is the transport-facing layer the cross-process and microVM backends need
 in order to carry sandbox traffic over a real byte channel.  The default
-in-thread ``subinterpreter`` backend hands message objects between threads
-through :class:`queue.Queue` and never serialises to bytes, so it does not use
+in-process ``thread`` backend hands message objects between threads through
+:class:`queue.Queue` and never serialises to bytes, so it does not use
 :class:`SecureChannel`; the channel exists for the backends that *do* cross a
 process or machine boundary.
 """

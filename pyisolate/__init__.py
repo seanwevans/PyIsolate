@@ -106,6 +106,7 @@ from .sdk import Pipeline, sandbox  # noqa: F401
 from .subset import OwnershipError, RestrictedExec  # noqa: F401
 from .supervisor import (  # noqa: F401
     DEFAULT_BACKEND,
+    DEPRECATED_BACKEND_ALIASES,
     IMPLEMENTED_BACKENDS,
     SUPPORTED_BACKENDS,
     BackendMode,
@@ -124,6 +125,7 @@ __all__ = [
     "DEFAULT_BACKEND",
     "SUPPORTED_BACKENDS",
     "IMPLEMENTED_BACKENDS",
+    "DEPRECATED_BACKEND_ALIASES",
     "list_active",
     "Sandbox",
     "Supervisor",

@@ -7,8 +7,10 @@ normative statement.
 
 ## Delivered
 
-- **Backends** — `backend="subinterpreter"` (execution cell; currently a
-  dedicated thread rather than a CPython sub-interpreter — see below) and
+- **Backends** — `backend="thread"` (execution cell; a dedicated thread of the
+  supervisor process, previously spelled `subinterpreter`),
+  `backend="subinterpreter"` (real CPython sub-interpreter cells on 3.14+, with
+  a pre-warmed pool; an execution cell, not a boundary), and
   `backend="process"` (the boundary mode): a real separate-process boundary with
   `no_new_privs` + a seccomp deny-list, Landlock filesystem rules, Landlock
   TCP-egress rules (ABI ≥ 4), a coarse per-cgroup eBPF/LSM deny-mask, and
@@ -31,13 +33,17 @@ normative statement.
 
 ## Now / next
 
-- **Real sub-interpreters for `backend="subinterpreter"`** — the backend is
-  named for its intended implementation but runs guests in a `threading.Thread`
-  today, so guests share `sys.modules` and the GIL with the supervisor. Build it
-  on `concurrent.interpreters` (3.14) / `_interpreters` (3.12+), or rename the
-  backend to `thread` and let this item own the real thing. Either way the
-  boundary claim is unchanged: it is an execution cell, not a boundary against
-  hostile Python.
+- **A kill domain for cells** — a running sub-interpreter cannot be reclaimed:
+  `close()` refuses while the guest is executing and there is no `kill`, so a
+  cell that overruns is abandoned and its thread is pinned for the life of the
+  process. The fix is not in-process. Add a layer of pre-forked worker
+  processes between the supervisor and the cells, size them by tenant, and make
+  the worker the unit that gets killed and replaced. This is what turns the cell
+  pool into something that survives a hostile-by-accident tenant.
+- **Per-cell resource accounting** — there is none today.
+  `sys.getallocatedblocks()` is process-global on both free-threaded and GIL
+  builds, so memory has to be capped at the worker/cgroup level rather than per
+  cell. Cells currently enforce a wall-time deadline and nothing else.
 - **Broker request execution** — the `request` op currently surfaces a
   `BrokerRequest` to the host but nothing executes it or returns a result. Add a
   request/response round-trip and a pluggable, capability-scoped handler so the
