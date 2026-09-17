@@ -319,18 +319,66 @@ boundary statement.
 
 ## Performance snapshot
 
-These are indicative figures from one reference machine *(Ryzen 7950X, Linux
-6.9, sub-interpreter backend)* — hardware-, kernel-, and build-dependent, and
-**not** a benchmark to copy into a comparison. Reproduce them on your own host
-with `python scripts/benchmark.py` (add `--backend process` for the process
-boundary); the encrypted-throughput and RSS rows are not yet covered by it.
+All figures are hardware-, kernel-, and build-dependent, and **not** benchmarks
+to copy into a comparison. Reproduce them on your own host.
 
-| Metric                  | Value   |
-| ----------------------- | ------- |
-| Spawn latency           | 0.7 ms  |
-| Round‑trip (1 kB)       | 70 µs   |
-| Max encrypted msgs/core | 1.9 M/s |
-| Baseline RSS            | 0.5 MiB |
+### Shipped backends
+
+From one reference machine *(Ryzen 7950X, Linux 6.9)*. Reproduce with
+`python scripts/benchmark.py` (add `--backend process` for the process
+boundary):
+
+| Metric            | Value  |
+| ----------------- | ------ |
+| Spawn latency     | 0.7 ms |
+| Round-trip (1 kB) | 70 us  |
+
+These are numbers for the **thread** backend -- the runtime that
+`backend="subinterpreter"` selects today (see
+[Sub-interpreter status](#sub-interpreter-status)). They are not what a real
+CPython sub-interpreter costs, and the roadmap item that lands real
+sub-interpreters will make them substantially worse; the next section measures
+what it will cost.
+
+### What a real sub-interpreter costs
+
+`python scripts/cell_cost.py` measures the CPython primitives the planned
+sub-interpreter backend would be built on, so the roadmap can be argued from
+numbers taken on a real machine rather than from the assumption that a
+sub-interpreter is cheap. From one run on free-threaded CPython 3.14 (4-core
+container, `--iterations 30`):
+
+| Import surface in the cell                | create+exec (p50) | close (p50) | RSS/cell |
+| ----------------------------------------- | ----------------- | ----------- | -------- |
+| bare (`x = 1`)                            | 10.9 ms           | 3.9 ms      | 3.5 MiB  |
+| `json, re, dataclasses`                   | 29.2 ms           | 7.8 ms      | 7.7 MiB  |
+| `+ email, http.client, logging, argparse` | 56.8 ms           | 13.3 ms     | 13.3 MiB |
+
+| Reference point                         | p50     |
+| --------------------------------------- | ------- |
+| dispatch onto an already-warm pool cell | 0.82 ms |
+| `fork()` of a warm parent               | 1.62 ms |
+
+Three things follow, and they shape the roadmap:
+
+* **Creating a cell is not cheap.** A sub-interpreter re-imports every module it
+  uses with no copy-on-write sharing, so the import surface -- not the
+  interpreter object -- dominates. A `fork()`, which *is* a real boundary, costs
+  less than the cheapest possible cell.
+* **Cells are only cheap when pooled.** 0.82 ms to dispatch onto a warm
+  interpreter is the number worth designing around, which means a pool of cells
+  with pre-warmed import surfaces, not an interpreter per request.
+* **Parallelism comes from the build, not from the interpreters.** On the same
+  4-core box four cells scaled 3.9x -- but four *plain threads* on that
+  free-threaded build scaled 3.3x too. On a GIL build (3.13) those threads
+  scaled 0.96x while cells scaled 3.3x. So sub-interpreters buy parallelism on a
+  GIL build, and buy a private `sys.modules` and a private set of globals per
+  tenant on a free-threaded one.
+
+The encrypted-throughput and baseline-RSS rows previously quoted here are not
+produced by either script, and have been dropped rather than left as figures
+nobody can reproduce.
+
 
 ---
 
