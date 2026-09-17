@@ -26,6 +26,7 @@ from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .policy import resolve_policy
 from .runtime import microvm as _microvm
+from .runtime import subinterpreter
 from .runtime.process_backend import ProcessSandbox
 from .runtime.protocol import CapabilityHandle, ControlRequest
 from .runtime.thread import SandboxThread
@@ -43,41 +44,39 @@ logger = logging.getLogger(__name__)
 DEFAULT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 NAME_PATTERN = DEFAULT_NAME_PATTERN
 
-BackendMode = Literal["thread", "process", "microvm"]
+BackendMode = Literal["thread", "subinterpreter", "process", "microvm"]
 DEFAULT_BACKEND: BackendMode = "thread"
 SUPPORTED_BACKENDS: tuple[BackendMode, ...] = (
     "thread",
+    "subinterpreter",
     "process",
     "microvm",
 )
-IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = ("thread", "process")
+IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = (
+    "thread",
+    "subinterpreter",
+    "process",
+)
 
-#: ``backend="subinterpreter"`` never selected a CPython sub-interpreter. It
-#: selected -- and for now still selects -- the thread runtime in
-#: :mod:`pyisolate.runtime.thread`, which ``exec``s guest source in a
-#: ``threading.Thread`` of this process against a restricted ``__builtins__``
-#: mapping. Naming a backend for an implementation it does not have makes the
-#: mechanism impossible to reason about from the API: a reader has to know that
-#: ``sys.modules`` is shared, not per-interpreter, to judge what isolation they
-#: are getting.
-#:
-#: So the runtime gets its real name, and the old one keeps working with a
-#: warning. The alias is not a permanent synonym: when the real sub-interpreter
-#: backend lands, ``"subinterpreter"`` is reassigned to *it*, which is why the
-#: warning tells callers who want today's behaviour to say ``"thread"``.
-DEPRECATED_BACKEND_ALIASES: dict[str, BackendMode] = {"subinterpreter": "thread"}
+#: ``"subinterpreter"`` used to be an alias for the thread runtime, which is
+#: what it actually ran. It now names :mod:`pyisolate.runtime.subinterpreter`,
+#: the real thing, so the alias is gone: the previous release warned that this
+#: reassignment was coming and told callers who wanted the thread runtime to say
+#: ``"thread"``.
+DEPRECATED_BACKEND_ALIASES: dict[str, BackendMode] = {}
+
+#: ``"subinterpreter"`` stays the default only where it can actually run. It
+#: needs CPython 3.14+, so making it the default would break every 3.11-3.13
+#: caller; the backend fails closed with a diagnostic instead of degrading to a
+#: thread, and callers opt in.
+SUBINTERPRETER_MIN_PYTHON = subinterpreter.MIN_PYTHON
 
 
 def _normalize_backend(backend: str) -> BackendMode:
     alias = DEPRECATED_BACKEND_ALIASES.get(backend)
-    if alias is not None:
+    if alias is not None:  # pragma: no cover - no aliases at present
         warnings.warn(
-            f"backend={backend!r} is deprecated and currently selects "
-            f"backend={alias!r}, which runs the guest in a thread of this "
-            "process rather than in a CPython sub-interpreter. Pass "
-            f"backend={alias!r} to keep this behaviour; the "
-            f"{backend!r} name will be reassigned to a real sub-interpreter "
-            "backend.",
+            f"backend={backend!r} is deprecated; use backend={alias!r}.",
             DeprecationWarning,
             stacklevel=3,
         )
@@ -123,19 +122,29 @@ def _require_implemented_backend(backend: BackendMode) -> None:
     )
 
 
+#: Any of the three runtimes a :class:`Sandbox` can wrap. They are unrelated
+#: classes that implement the same cell ABI rather than a shared base, so the
+#: union is the type.
+BackendSandbox = Union[
+    "SandboxThread", "ProcessSandbox", "subinterpreter.SubinterpreterSandbox"
+]
+
+
 class Sandbox:
     """Handle to a sandbox.
 
-    Wraps either a :class:`~pyisolate.runtime.thread.SandboxThread`
-    (``backend="thread"``) or a
+    Wraps a :class:`~pyisolate.runtime.thread.SandboxThread`
+    (``backend="thread"``), a
+    :class:`~pyisolate.runtime.subinterpreter.SubinterpreterSandbox`
+    (``backend="subinterpreter"``), or a
     :class:`~pyisolate.runtime.process_backend.ProcessSandbox`
-    (``backend="process"``); both expose the same cell-ABI surface this handle
-    delegates to.
+    (``backend="process"``); all three expose the same cell-ABI surface this
+    handle delegates to.
     """
 
     def __init__(
         self,
-        thread: "Union[SandboxThread, ProcessSandbox]",
+        thread: "BackendSandbox",
         supervisor: "Supervisor",
     ):
         self._thread = thread
@@ -258,6 +267,13 @@ class Supervisor:
         # SandboxThread instances, so the watchdog/warm-pool/cgroup machinery
         # that iterates ``_sandboxes`` must not see them.
         self._process_sandboxes: Dict[str, ProcessSandbox] = {}
+        # Sub-interpreter cells get their own registry for the same reason: they
+        # are not SandboxThread instances, so the watchdog and warm-pool
+        # machinery that walks ``_sandboxes`` must not see them either.
+        self._cell_sandboxes: Dict[str, "subinterpreter.SubinterpreterSandbox"] = {}
+        # Created on first use so that importing pyisolate on a build without
+        # concurrent.interpreters costs nothing.
+        self._pool: Optional["subinterpreter.CellPool"] = None
         self._lock = threading.Lock()
         self._alerts = AlertManager()
         self._tracer = Tracer()
@@ -404,6 +420,13 @@ class Supervisor:
             if allowed_imports is not None:
                 imports.update(allowed_imports)
             allowed_imports = list(imports)
+
+        if backend == "subinterpreter":
+            return self._spawn_subinterpreter(
+                name,
+                allowed_imports=allowed_imports,
+                wall_time_ms=wall_time_ms,
+            )
 
         if backend == "process":
             return self._spawn_process(
@@ -557,6 +580,42 @@ class Supervisor:
             if strict:
                 raise
             logger.debug("sandbox_policy map update skipped for %s", cg_path)
+
+    def _spawn_subinterpreter(
+        self,
+        name: str,
+        *,
+        allowed_imports: Optional[list[str]] = None,
+        wall_time_ms: Optional[int] = None,
+    ) -> Sandbox:
+        """Spawn a guest in a real CPython sub-interpreter cell.
+
+        Fails closed on builds without ``concurrent.interpreters`` rather than
+        degrading to the thread backend: the two have different isolation, and
+        silently substituting one for the other is what the backend rename was
+        meant to stop.
+        """
+        subinterpreter.require_available()
+        spec = subinterpreter.CellSpec.build(allowed_imports)
+        cell_sandbox = subinterpreter.SubinterpreterSandbox(
+            name,
+            pool=self._cell_pool(),
+            spec=spec,
+            wall_time_ms=wall_time_ms,
+        )
+        with self._lock:
+            existing = self._cell_sandboxes.get(name)
+            if existing is not None and existing.is_alive():
+                cell_sandbox.close()
+                raise RuntimeError(f"sandbox '{name}' already exists")
+            self._cell_sandboxes[name] = cell_sandbox
+        return Sandbox(cell_sandbox, self)
+
+    def _cell_pool(self) -> "subinterpreter.CellPool":
+        with self._lock:
+            if self._pool is None:
+                self._pool = subinterpreter.CellPool()
+            return self._pool
 
     def _spawn_microvm(self, name: str) -> Sandbox:
         """Admit a microVM sandbox, failing closed until the launcher lands.
@@ -737,10 +796,17 @@ class Supervisor:
             warm = list(self._warm_pool)
             self._warm_pool.clear()
             procs = list(self._process_sandboxes.values())
+            cells = list(self._cell_sandboxes.values())
+            self._cell_sandboxes.clear()
+            pool, self._pool = self._pool, None
         for sb in sandboxes + warm:
             sb.stop()
         for proc in procs:
             proc.stop()
+        for cell in cells:
+            cell.stop()
+        if pool is not None:
+            pool.close()
         self._cleanup()
 
     def quarantine(self, name: str, reason: str) -> None:
@@ -815,6 +881,11 @@ class Supervisor:
                 proc.reap()
                 self._release_tenant_reservation(proc)
                 del self._process_sandboxes[n]
+            dead_cells = [
+                n for n, c in self._cell_sandboxes.items() if not c.is_alive()
+            ]
+            for n in dead_cells:
+                del self._cell_sandboxes[n]
 
 
 _supervisor: Supervisor | None = None

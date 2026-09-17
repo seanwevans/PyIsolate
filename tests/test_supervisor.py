@@ -10,6 +10,7 @@ import pytest
 
 import pyisolate as iso
 from pyisolate.bpf.manager import BPFManager
+from pyisolate.runtime import subinterpreter
 
 
 def test_module_import_is_lazy(monkeypatch):
@@ -187,8 +188,13 @@ def test_spawn_backend_is_explicit_thread():
     sb = iso.spawn("backend-thread", backend="thread")
     try:
         assert sb.backend == "thread"
-        assert iso.SUPPORTED_BACKENDS == ("thread", "process", "microvm")
-        assert iso.IMPLEMENTED_BACKENDS == ("thread", "process")
+        assert iso.SUPPORTED_BACKENDS == (
+            "thread",
+            "subinterpreter",
+            "process",
+            "microvm",
+        )
+        assert iso.IMPLEMENTED_BACKENDS == ("thread", "subinterpreter", "process")
         assert iso.DEFAULT_BACKEND == "thread"
     finally:
         sb.close()
@@ -205,21 +211,35 @@ def test_default_backend_does_not_warn():
             sb.close()
 
 
-def test_subinterpreter_backend_is_a_deprecated_alias_for_thread():
-    """The old spelling keeps working, warns, and selects the same runtime."""
-    with pytest.warns(DeprecationWarning, match="thread"):
-        sb = iso.spawn("backend-alias", backend="subinterpreter")
+def test_subinterpreter_is_now_a_backend_in_its_own_right():
+    """The alias is gone; the name selects the real sub-interpreter runtime."""
+    assert iso.DEPRECATED_BACKEND_ALIASES == {}
+    assert "subinterpreter" in iso.SUPPORTED_BACKENDS
+    assert "subinterpreter" in iso.IMPLEMENTED_BACKENDS
+
+
+@pytest.mark.skipif(
+    not subinterpreter.is_available(),
+    reason="needs CPython 3.14+ for concurrent.interpreters",
+)
+def test_subinterpreter_backend_runs_a_real_cell():
+    sb = iso.spawn("backend-cell", backend="subinterpreter", allowed_imports=["math"])
     try:
-        assert sb.backend == "thread"
+        assert sb.backend == "subinterpreter"
+        sb.exec("from math import sqrt; post(sqrt(4))")
+        assert sb.recv(timeout=5) == 2.0
     finally:
         sb.close()
-    assert iso.DEPRECATED_BACKEND_ALIASES == {"subinterpreter": "thread"}
 
 
-def test_deprecated_alias_is_not_advertised_as_supported():
-    """It resolves, but it is not one of the names the API offers."""
-    assert "subinterpreter" not in iso.SUPPORTED_BACKENDS
-    assert "subinterpreter" not in iso.IMPLEMENTED_BACKENDS
+@pytest.mark.skipif(
+    subinterpreter.is_available(),
+    reason="this build has sub-interpreters",
+)
+def test_subinterpreter_backend_fails_closed_below_314():
+    """It must not quietly hand back a thread, which isolates differently."""
+    with pytest.raises(iso.SandboxError, match="3.14"):
+        iso.spawn("backend-cell", backend="subinterpreter")
 
 
 def test_unknown_backend_still_rejects_without_warning():
