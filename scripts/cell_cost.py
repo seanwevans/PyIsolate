@@ -46,7 +46,7 @@ import statistics
 import sys
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 # --- interpreter API shim -------------------------------------------------
 #
@@ -149,9 +149,9 @@ def time_ms(fn: Callable[[], None]) -> float:
 # --- measurements ---------------------------------------------------------
 
 
-def measure_lifecycle(iterations: int) -> list[dict[str, object]]:
+def measure_lifecycle(iterations: int) -> list[dict[str, Any]]:
     """create+exec, close, and held RSS for each import surface."""
-    rows: list[dict[str, object]] = []
+    rows: list[dict[str, Any]] = []
     for label, body in SURFACES:
         cells: list[Cell] = []
         create: list[float] = []
@@ -166,7 +166,9 @@ def measure_lifecycle(iterations: int) -> list[dict[str, object]]:
         close: list[float] = []
         for cell in cells:
             close.append(time_ms(cell.close))
-        rss_per_cell = (held - before) / iterations if before >= 0 and held >= 0 else -1.0
+        rss_per_cell = (
+            (held - before) / iterations if before >= 0 and held >= 0 else -1.0
+        )
         rows.append(
             {
                 "surface": label,
@@ -222,7 +224,12 @@ def measure_parallel(workers: int) -> dict[str, float]:
     already scale, so sub-interpreters are not what buys parallelism. They buy a
     separate ``sys.modules`` and a separate set of globals per tenant.
     """
-    sequential = time_ms(lambda: [exec(CPU_WORK, {}) for _ in range(workers)])
+
+    def run_sequentially() -> None:
+        for _ in range(workers):
+            exec(CPU_WORK, {})  # noqa: S102 - the measured workload
+
+    sequential = time_ms(run_sequentially)
 
     def run_threads() -> None:
         threads = [
@@ -276,7 +283,7 @@ def lifecycle_is_safe() -> bool:
 
 def build_report(
     iterations: int, workers: int, *, allow_unstable: bool = False
-) -> dict[str, object]:
+) -> dict[str, Any]:
     # Order matters: fork() is measured first, on a parent that has not yet
     # created any interpreter, so it reports the primitive rather than the
     # address-space growth the later rows cause. See measure_fork.
@@ -294,7 +301,7 @@ def build_report(
     }
 
 
-def print_report(report: dict[str, object]) -> None:
+def print_report(report: dict[str, Any]) -> None:
     gil = "free-threaded" if report["free_threaded"] else "GIL enabled"
     print(
         f"PyIsolate cell cost   python={report['python']} ({gil})  "
@@ -312,10 +319,10 @@ def print_report(report: dict[str, object]) -> None:
     else:
         print(f"{'import surface':<22}{'create+exec':>14}{'close':>10}{'RSS/cell':>12}")
         print(f"{'':<22}{'p50 ms':>14}{'p50 ms':>10}{'KiB':>12}")
-        for row in lifecycle:  # type: ignore[union-attr]
-            create = row["create_exec_ms"]["median"]  # type: ignore[index]
-            close = row["close_ms"]["median"]  # type: ignore[index]
-            rss = row["rss_kib_per_cell"]  # type: ignore[index]
+        for row in lifecycle:
+            create = row["create_exec_ms"]["median"]
+            close = row["close_ms"]["median"]
+            rss = row["rss_kib_per_cell"]
             print(f"{row['surface']:<22}{create:>14.2f}{close:>10.2f}{rss:>12.0f}")
 
     pool = report["pool_dispatch_ms"]
@@ -345,7 +352,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=min(4, os.cpu_count() or 1),
         help="concurrent workers for the scaling rows (default: min(4, cpus))",
     )
-    parser.add_argument("--json", action="store_true", help="emit JSON instead of a table")
+    parser.add_argument(
+        "--json", action="store_true", help="emit JSON instead of a table"
+    )
     parser.add_argument(
         "--allow-unstable-api",
         action="store_true",
