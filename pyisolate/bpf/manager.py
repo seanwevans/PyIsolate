@@ -124,6 +124,21 @@ class BPFManager:
                 ) from exc
         return False
 
+    #: ``-g`` is not optional. All three programs use BTF-defined maps (the
+    #: ``struct { ... } name SEC(".maps")`` idiom), which are described entirely
+    #: by their BTF type -- libbpf cannot parse the ``.maps`` section of an
+    #: object built without it -- and LSM programs additionally need BTF to
+    #: resolve their attach target. An object compiled without ``-g`` fails to
+    #: load on every kernel, so the flag belongs in one place rather than in
+    #: three copies of the command.
+    COMPILE_FLAGS: tuple[str, ...] = ("-target", "bpf", "-g", "-O2")
+
+    @classmethod
+    def _compile_command(cls, source: Path, obj: Path) -> list[str]:
+        """Return the ``clang`` invocation that builds *source* into *obj*."""
+
+        return ["clang", *cls.COMPILE_FLAGS, "-c", str(source), "-o", str(obj)]
+
     def load(
         self,
         *,
@@ -152,36 +167,9 @@ class BPFManager:
 
         strict_mode = mode == "hardened"
 
-        dummy_compile = [
-            "clang",
-            "-target",
-            "bpf",
-            "-O2",
-            "-c",
-            str(self._src),
-            "-o",
-            str(self._obj),
-        ]
-        filter_compile = [
-            "clang",
-            "-target",
-            "bpf",
-            "-O2",
-            "-c",
-            str(self._filter_src),
-            "-o",
-            str(self._filter_obj),
-        ]
-        guard_compile = [
-            "clang",
-            "-target",
-            "bpf",
-            "-O2",
-            "-c",
-            str(self._guard_src),
-            "-o",
-            str(self._guard_obj),
-        ]
+        dummy_compile = self._compile_command(self._src, self._obj)
+        filter_compile = self._compile_command(self._filter_src, self._filter_obj)
+        guard_compile = self._compile_command(self._guard_src, self._guard_obj)
         ok = True
         compile_cmd = dummy_compile
         if self._src not in self._skel_cache or (

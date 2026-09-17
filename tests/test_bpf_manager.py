@@ -75,16 +75,7 @@ def test_load_runs_toolchain(monkeypatch):
     mgr = BPFManager()
     mgr.load()
 
-    clang_dummy = [
-        "clang",
-        "-target",
-        "bpf",
-        "-O2",
-        "-c",
-        str(mgr._src),
-        "-o",
-        str(mgr._obj),
-    ]
+    clang_dummy = BPFManager._compile_command(mgr._src, mgr._obj)
 
     assert clang_dummy in calls
     skel_cmd = [
@@ -94,26 +85,8 @@ def test_load_runs_toolchain(monkeypatch):
     ]
     assert skel_cmd in calls
 
-    clang_filter = [
-        "clang",
-        "-target",
-        "bpf",
-        "-O2",
-        "-c",
-        str(mgr._filter_src),
-        "-o",
-        str(mgr._filter_obj),
-    ]
-    clang_guard = [
-        "clang",
-        "-target",
-        "bpf",
-        "-O2",
-        "-c",
-        str(mgr._guard_src),
-        "-o",
-        str(mgr._guard_obj),
-    ]
+    clang_filter = BPFManager._compile_command(mgr._filter_src, mgr._filter_obj)
+    clang_guard = BPFManager._compile_command(mgr._guard_src, mgr._guard_obj)
     assert clang_dummy in calls
     assert clang_filter in calls
     assert clang_guard in calls
