@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -100,6 +100,40 @@ jobs:
         # stays authoritative.
         continue-on-error: true
         run: pytest -q tests/test_matrix_hardening.py -m "race and no_gil"
+
+  tests-subinterpreter:
+    name: sub-interpreter cells / py3.14t
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14t"
+      - name: Install dependencies
+        # Same shape as the 3.13t job: install without the runtime deps that
+        # may not have free-threaded wheels yet, then re-add the pure-Python
+        # ones the import path needs. The suite's crypto stub (tests/conftest.py)
+        # covers the rest, and nothing in this job's scope needs real crypto.
+        run: |
+          python -m pip install -e . --no-deps
+          python -m pip install pytest pyyaml platformdirs
+      - name: Verify this build actually has sub-interpreters
+        # Every sub-interpreter test skips itself when the build cannot run it.
+        # That is right for the 3.11-3.13 matrix, but it means this job would
+        # report green on a runner that silently resolved to an older Python
+        # while testing nothing. Fail loudly instead.
+        run: |
+          python - <<'PY'
+          import sys
+          from pyisolate.runtime import subinterpreter as s
+          assert s.is_available(), f"no concurrent.interpreters on {sys.version}"
+          assert not sys._is_gil_enabled(), "expected a free-threaded build"
+          print("ok:", sys.version)
+          PY
+      - name: Run the sub-interpreter backend suite
+        run: pytest -q tests/test_subinterpreter_backend.py tests/test_supervisor.py
+      - name: Validate the no-GIL readiness axis on 3.14t
+        run: pytest -q tests/test_nogil.py
 
   tests-soak:
     name: soak / 2k spawn-kill cycles

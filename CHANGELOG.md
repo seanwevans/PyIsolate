@@ -31,6 +31,13 @@ guarantees; **no release should be treated as a hardened security boundary**.
 - `pyisolate[operator]` optional-dependency group for the Kubernetes operator.
 
 ### Changed
+- CI covers CPython 3.14: the unit matrix gains `3.14`, and a new
+  `sub-interpreter cells / py3.14t` job runs the sub-interpreter backend on a
+  free-threaded build. That job asserts the interpreter really is a
+  free-threaded 3.14 before running anything, because every sub-interpreter
+  test skips itself when the build cannot run it -- correct for the 3.11-3.13
+  matrix, but it would otherwise let the job report green having tested
+  nothing.
 - `backend="subinterpreter"` is renamed to `backend="thread"`, which is what it
   has always run, and the `subinterpreter` name now selects the real
   sub-interpreter backend. `DEPRECATED_BACKEND_ALIASES` is exported alongside
