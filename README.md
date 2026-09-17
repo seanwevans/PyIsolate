@@ -263,6 +263,95 @@ domain.
 
 ---
 
+## The fabric
+
+`backend="fabric"` is the multi-tenant mode: sub-interpreter cells hosted in
+**worker processes the supervisor can kill**.
+
+```
+ Supervisor
+   |
+   +-- Worker process   <- the kill domain
+   |     +-- cell  cell  cell      (one CellPool, many cells)
+   |
+   +-- Worker process
+         +-- cell  cell
+```
+
+It exists because of one limitation the in-process cell backend cannot fix: a
+running sub-interpreter **cannot be reclaimed**. `close()` refuses while the
+guest executes, there is no `kill`, and an async exception aimed at the thread
+does not reach the interpreter running in it. In-process, a runaway guest is
+permanent. Putting cells in a worker makes the process the unit of reclaim:
+
+```python
+import pyisolate as iso
+
+sb = iso.spawn("report", backend="fabric", tenant="acme", wall_time_ms=500)
+sb.exec("while True: pass")
+# WallTimeExceeded: cell c1 exceeded 0.5s and did not return. A running
+# sub-interpreter cannot be reclaimed, so the worker process hosting it was
+# killed; cells sharing that worker were lost with it.
+```
+
+Each of the three levels is a different kind of boundary:
+
+| Level | Isolates | Reclaimable |
+| --- | --- | --- |
+| cell | `sys.modules`, `builtins`, globals | no |
+| worker | the kill domain, and where a memory cap applies | **yes — SIGKILL** |
+| fabric | decides which worker a tenant lands in | n/a |
+
+**Placement is the blast-radius decision.** With `tenant_isolation=True` (the
+default) a worker only ever hosts one tenant's cells, so killing it for a
+runaway costs that tenant and nobody else. Turning it off packs tenants
+together for density and makes them share a fate. The fabric makes callers
+state which they want rather than picking silently.
+
+```python
+from pyisolate.runtime.fabric import WorkerPool
+
+pool = WorkerPool(
+    max_workers=8,
+    cells_per_worker=16,
+    tenant_isolation=True,     # one tenant per worker
+    worker_mem_bytes=2 << 30,  # RLIMIT_AS per worker
+)
+pool.prewarm("acme", 2)        # pay the ~160 ms spawn before traffic arrives
+```
+
+`worker_mem_bytes` is where a memory limit can actually be enforced:
+`sys.getallocatedblocks()` is process-global rather than per-interpreter on
+both free-threaded and GIL builds, so there is no per-cell figure to cap.
+Worker sizing is the control.
+
+### What it costs
+
+Measured on the same 4-core container as the figures above, free-threaded
+CPython 3.14:
+
+| Operation | p50 |
+| --- | --- |
+| worker spawn (fresh interpreter + pyisolate import + pool) | 160.8 ms |
+| first cell for a tenant (spawns its worker) | 190.3 ms |
+| further cells in that worker | 29.8 ms |
+| `exec` + `recv` round trip | 1.20 ms |
+
+So the kill domain costs about **0.4 ms per round trip** over an in-process
+cell (1.20 ms against 0.82 ms) plus one worker spawn per tenant, which
+`prewarm` moves off the request path.
+
+### What it is still not
+
+A guest that escapes its cell owns its worker, and a worker is an ordinary
+process holding the supervisor's privileges. The fabric is **not** a boundary
+against hostile Python. For untrusted code use `backend="process"` — one
+confined process per sandbox — or a microVM. What the fabric buys is that
+trusted-but-independent tenants cannot wedge each other, and that a tenant
+which wedges itself is recoverable.
+
+---
+
 ## Canonical execution model
 
 A cell is intentionally limited to seven operations: `exec`, `call`, `post`, `recv`, `log`, `metric`, and `request`.

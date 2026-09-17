@@ -25,6 +25,7 @@ from .errors import PolicyAuthError, TenantQuotaExceeded
 from .observability.alerts import AlertManager
 from .observability.trace import Tracer
 from .policy import resolve_policy
+from .runtime import fabric as _fabric
 from .runtime import microvm as _microvm
 from .runtime import subinterpreter
 from .runtime.process_backend import ProcessSandbox
@@ -44,17 +45,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 NAME_PATTERN = DEFAULT_NAME_PATTERN
 
-BackendMode = Literal["thread", "subinterpreter", "process", "microvm"]
+BackendMode = Literal["thread", "subinterpreter", "fabric", "process", "microvm"]
 DEFAULT_BACKEND: BackendMode = "thread"
 SUPPORTED_BACKENDS: tuple[BackendMode, ...] = (
     "thread",
     "subinterpreter",
+    "fabric",
     "process",
     "microvm",
 )
 IMPLEMENTED_BACKENDS: tuple[BackendMode, ...] = (
     "thread",
     "subinterpreter",
+    "fabric",
     "process",
 )
 
@@ -126,7 +129,10 @@ def _require_implemented_backend(backend: BackendMode) -> None:
 #: classes that implement the same cell ABI rather than a shared base, so the
 #: union is the type.
 BackendSandbox = Union[
-    "SandboxThread", "ProcessSandbox", "subinterpreter.SubinterpreterSandbox"
+    "SandboxThread",
+    "ProcessSandbox",
+    "subinterpreter.SubinterpreterSandbox",
+    "_fabric.FabricSandbox",
 ]
 
 
@@ -274,6 +280,10 @@ class Supervisor:
         # Created on first use so that importing pyisolate on a build without
         # concurrent.interpreters costs nothing.
         self._pool: Optional["subinterpreter.CellPool"] = None
+        # Fabric cells live in worker processes and get their own registry for
+        # the same reason: they are neither threads nor ProcessSandbox.
+        self._fabric_sandboxes: Dict[str, "_fabric.FabricSandbox"] = {}
+        self._worker_pool: Optional["_fabric.WorkerPool"] = None
         self._lock = threading.Lock()
         self._alerts = AlertManager()
         self._tracer = Tracer()
@@ -426,6 +436,15 @@ class Supervisor:
                 name,
                 allowed_imports=allowed_imports,
                 wall_time_ms=wall_time_ms,
+            )
+
+        if backend == "fabric":
+            return self._spawn_fabric(
+                name,
+                allowed_imports=allowed_imports,
+                wall_time_ms=wall_time_ms,
+                tenant=tenant,
+                mem_bytes=mem_bytes,
             )
 
         if backend == "process":
@@ -610,6 +629,51 @@ class Supervisor:
                 raise RuntimeError(f"sandbox '{name}' already exists")
             self._cell_sandboxes[name] = cell_sandbox
         return Sandbox(cell_sandbox, self)
+
+    def _spawn_fabric(
+        self,
+        name: str,
+        *,
+        allowed_imports: Optional[list[str]] = None,
+        wall_time_ms: Optional[int] = None,
+        tenant: Optional[str] = None,
+        mem_bytes: Optional[int] = None,
+    ) -> Sandbox:
+        """Spawn a cell inside a worker process that the supervisor can kill.
+
+        This is the boundary-less-but-recoverable mode: the cell isolates
+        namespaces and the worker is the kill domain, so a guest that will not
+        stop costs its worker rather than being unreclaimable.
+        """
+        subinterpreter.require_available_for_fabric()
+        sandbox = _fabric.FabricSandbox(
+            name,
+            pool=self._fabric_pool(mem_bytes),
+            allowed_imports=allowed_imports,
+            tenant=tenant,
+            wall_time_ms=wall_time_ms,
+        )
+        with self._lock:
+            existing = self._fabric_sandboxes.get(name)
+            if existing is not None and existing.is_alive():
+                sandbox.close()
+                raise RuntimeError(f"sandbox '{name}' already exists")
+            self._fabric_sandboxes[name] = sandbox
+        return Sandbox(sandbox, self)
+
+    def _fabric_pool(self, mem_bytes: Optional[int] = None) -> "_fabric.WorkerPool":
+        with self._lock:
+            if self._worker_pool is None:
+                self._worker_pool = _fabric.WorkerPool(worker_mem_bytes=mem_bytes)
+            return self._worker_pool
+
+    def fabric_report(self) -> dict[str, Any]:
+        """Placement and recycling view of the fabric, for dashboards."""
+        with self._lock:
+            pool = self._worker_pool
+        if pool is None:
+            return {"workers": [], "stats": {}}
+        return {"workers": pool.worker_report(), "stats": pool.stats()}
 
     def _cell_pool(self) -> "subinterpreter.CellPool":
         with self._lock:
@@ -798,15 +862,22 @@ class Supervisor:
             procs = list(self._process_sandboxes.values())
             cells = list(self._cell_sandboxes.values())
             self._cell_sandboxes.clear()
+            fabric_cells = list(self._fabric_sandboxes.values())
+            self._fabric_sandboxes.clear()
             pool, self._pool = self._pool, None
+            worker_pool, self._worker_pool = self._worker_pool, None
         for sb in sandboxes + warm:
             sb.stop()
         for proc in procs:
             proc.stop()
         for cell in cells:
             cell.stop()
+        for fabric_cell in fabric_cells:
+            fabric_cell.stop()
         if pool is not None:
             pool.close()
+        if worker_pool is not None:
+            worker_pool.close()
         self._cleanup()
 
     def quarantine(self, name: str, reason: str) -> None:
@@ -886,6 +957,11 @@ class Supervisor:
             ]
             for n in dead_cells:
                 del self._cell_sandboxes[n]
+            dead_fabric = [
+                n for n, c in self._fabric_sandboxes.items() if not c.is_alive()
+            ]
+            for n in dead_fabric:
+                del self._fabric_sandboxes[n]
 
 
 _supervisor: Supervisor | None = None

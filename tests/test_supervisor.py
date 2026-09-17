@@ -4,11 +4,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import os
 import warnings
 
 import pytest
 
 import pyisolate as iso
+from pyisolate import supervisor as supervisor_mod
 from pyisolate.bpf.manager import BPFManager
 from pyisolate.runtime import subinterpreter
 
@@ -191,10 +193,16 @@ def test_spawn_backend_is_explicit_thread():
         assert iso.SUPPORTED_BACKENDS == (
             "thread",
             "subinterpreter",
+            "fabric",
             "process",
             "microvm",
         )
-        assert iso.IMPLEMENTED_BACKENDS == ("thread", "subinterpreter", "process")
+        assert iso.IMPLEMENTED_BACKENDS == (
+            "thread",
+            "subinterpreter",
+            "fabric",
+            "process",
+        )
         assert iso.DEFAULT_BACKEND == "thread"
     finally:
         sb.close()
@@ -240,6 +248,57 @@ def test_subinterpreter_backend_fails_closed_below_314():
     """It must not quietly hand back a thread, which isolates differently."""
     with pytest.raises(iso.SandboxError, match="3.14"):
         iso.spawn("backend-cell", backend="subinterpreter")
+
+
+def test_fabric_is_an_implemented_backend():
+    assert "fabric" in iso.SUPPORTED_BACKENDS
+    assert "fabric" in iso.IMPLEMENTED_BACKENDS
+
+
+@pytest.mark.skipif(
+    not subinterpreter.is_available(),
+    reason="needs CPython 3.14+ for cells",
+)
+def test_fabric_backend_runs_a_cell_in_a_worker_process():
+    sb = iso.spawn(
+        "backend-fabric",
+        backend="fabric",
+        allowed_imports=["math"],
+        tenant="acme",
+    )
+    try:
+        assert sb.backend == "fabric"
+        sb.exec("from math import sqrt; post(sqrt(4))")
+        assert sb.recv(timeout=10) == 2.0
+        stats = sb.profile()
+        # The cell runs in another process, which is what makes it reclaimable.
+        assert stats["worker_pid"] != os.getpid()
+        assert stats["tenant"] == "acme"
+    finally:
+        sb.close()
+
+
+@pytest.mark.skipif(
+    not subinterpreter.is_available(),
+    reason="needs CPython 3.14+ for cells",
+)
+def test_supervisor_reports_fabric_placement():
+    sb = iso.spawn("backend-fabric-report", backend="fabric", tenant="acme")
+    try:
+        report = supervisor_mod._get_supervisor().fabric_report()
+        assert report["stats"]["workers_live"] >= 1
+        assert any(row["tenant"] == "acme" for row in report["workers"])
+    finally:
+        sb.close()
+
+
+@pytest.mark.skipif(
+    subinterpreter.is_available(),
+    reason="this build has sub-interpreters",
+)
+def test_fabric_backend_fails_closed_below_314():
+    with pytest.raises(iso.SandboxError, match="backend='fabric'"):
+        iso.spawn("backend-fabric", backend="fabric")
 
 
 def test_unknown_backend_still_rejects_without_warning():

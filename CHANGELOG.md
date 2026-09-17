@@ -8,6 +8,16 @@ guarantees; **no release should be treated as a hardened security boundary**.
 ## [Unreleased]
 
 ### Added
+- `backend="fabric"`: the multi-tenant mode. Sub-interpreter cells hosted in
+  worker processes the supervisor can kill, which is the only reclaim that
+  works on a running cell. A deadline that expires kills the worker and the
+  tenant keeps running on a fresh one; other tenants are untouched. Includes
+  tenant-aware placement (`tenant_isolation=True` by default, so a kill costs
+  one tenant), per-worker `RLIMIT_AS` caps, `prewarm` to move the ~160 ms
+  worker spawn off the request path, worker recycling with counters, and
+  `Supervisor.fabric_report()` for placement visibility. Needs CPython 3.14+
+  and fails closed below it.
+
 - `backend="subinterpreter"`: real CPython sub-interpreter cells on 3.14+, via
   `concurrent.interpreters`, with a pre-warmed `CellPool`. Each guest gets its
   own `sys.modules` and its own `builtins`, so the import allow-list is a
@@ -63,11 +73,17 @@ guarantees; **no release should be treated as a hardened security boundary**.
 - The eBPF programs compile to loadable objects and are covered by ELF-level
   tests, but load/attach against a live verifier is still only exercised by
   the root-gated `PYISOLATE_LIVE_BPF_TESTS=1` tests, not by CI.
-- A running sub-interpreter cell cannot be reclaimed: one that overruns its
-  wall-time deadline is abandoned, and its thread stays pinned until the
-  process exits. Cells enforce a wall-time deadline and no other quota;
-  `sys.getallocatedblocks()` is process-global, so per-cell memory
-  accounting needs a worker-process layer that does not exist yet.
+- In `backend="subinterpreter"` a running cell still cannot be reclaimed: one
+  that overruns is abandoned and its thread stays pinned until the process
+  exits. Use `backend="fabric"`, where the worker is the kill domain.
+- A fabric worker is an ordinary process with the supervisor's privileges: the
+  fabric bounds faults, not hostile Python. Kernel confinement of workers is
+  not implemented.
+- The broker `request` op is surfaced by the fabric but, as with the other
+  backends, nothing executes it.
+- Memory is capped per worker (`RLIMIT_AS`), not per cell:
+  `sys.getallocatedblocks()` is process-global on both free-threaded and GIL
+  builds, so there is no per-cell figure to limit.
 - Process-backed sandboxes are not attached to cgroups or watched by the
   resource watchdog (they get `rlimit` only).
 - `backend="microvm"` fails closed: the guest agent and vsock cell transport are
